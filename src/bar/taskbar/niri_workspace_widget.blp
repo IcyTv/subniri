@@ -9,14 +9,33 @@ template $NiriWorkspaceWidget: Gtk.Button {
   height-request: 24;
 
   styles [
-    "niri-window",
+    "niri-workspace",
   ]
 
-  child: Gtk.Image {
-    pixel-size: 24;
-    halign: center;
-    valign: center;
+  child:  Gtk.Stack {
+    visible-child-name: bind template.display-mode;
 
-    gicon: bind template.icon;
+    Gtk.StackPage {
+      name: "workspace-icon";
+
+      child: Gtk.Image {
+        pixel-size: 24;
+        halign: center;
+        valign: center;
+
+        icon-name: bind template.icon;
+      };
+    }
+
+    Gtk.StackPage {
+        name: "workspace-index";
+
+        child: Gtk.Label {
+            halign: center;
+            valign: center;
+            label: bind template.workspace-index;
+            css-classes: ["niri-workspace-number"];
+        };
+      }
   };
 }

@@ -1,17 +1,17 @@
-mod niri;
 mod widgets;
 
-use std::collections::btree_map::Entry;
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Ordering as StdOrdering;
+use std::collections::{HashMap, HashSet};
 
-use async_channel::Sender;
 use futures::{Stream, StreamExt};
 use glib::clone;
 use glib::object::Cast;
 use gtk4::prelude::*;
-use gtk4::{gdk, gio};
+use gtk4::{CustomSorter, Ordering as GtkOrdering, gdk, gio};
+use niri_ipc::socket::Socket;
+use niri_ipc::{Event, Output, Request, Response, Window, WindowLayout, Workspace};
 
-use crate::bar::taskbar::widgets::{NiriWindowWidget, NiriWorkspaceWidget};
+use widgets::{TaskbarItem, TaskbarItemKind};
 
 pub struct Taskbar {
 	widget: gtk4::ListView,
@@ -19,15 +19,12 @@ pub struct Taskbar {
 
 impl Taskbar {
 	pub fn new(monitor_index: i32) -> Self {
-		let window_factory = create_window_factory();
-		let header_factory = create_workspace_index_factory();
+		let item_factory = create_item_factory();
+		let sorter = create_sorter();
 
-		let (full_sorter, workspace_index_sorter) = create_sorters();
+		let store = gio::ListStore::new::<TaskbarItem>();
 
-		let store = gio::ListStore::new::<NiriWindowWidget>();
-
-		let sort_model = gtk4::SortListModel::new(Some(store.clone()), Some(full_sorter));
-		sort_model.set_section_sorter(Some(&workspace_index_sorter));
+		let sort_model = gtk4::SortListModel::new(Some(store.clone()), Some(sorter));
 
 		let selection_model = gtk4::NoSelection::new(Some(sort_model));
 
@@ -35,19 +32,14 @@ impl Taskbar {
 			.name("taskbar")
 			.orientation(gtk4::Orientation::Horizontal)
 			.model(&selection_model)
-			.factory(&window_factory)
-			.header_factory(&header_factory)
+			.factory(&item_factory)
 			.css_classes(vec!["taskbar"])
 			.build();
-
-		let niri = niri::Niri::new();
 
 		glib::spawn_future_local(clone!(
 			#[weak]
 			store,
 			async move {
-				let mut window_widgets = BTreeMap::<u64, NiriWindowWidget>::new();
-
 				let monitor = gdk::Display::default()
 					.expect("to have a default display")
 					.monitors()
@@ -59,51 +51,52 @@ impl Taskbar {
 					.downcast::<gdk::Monitor>()
 					.unwrap();
 
-				let output_filter = Self::build_output_filter(niri, &monitor).await;
-				let mut event_stream = Box::pin(event_stream(niri));
+				let mut workspace_tracker = WorkspaceTracker::new(&monitor).await;
+				sync_workspace_items(&store, &workspace_tracker);
+				update_workspace_focus(&store, workspace_tracker.focused_workspace_id());
+
+				let mut event_stream = Box::pin(event_stream());
 
 				while let Some(event) = event_stream.next().await {
+					use niri_ipc::Event::*;
 					match event {
-						Event::Snapshot(windows) => {
-							let mut omitted = window_widgets.keys().copied().collect::<BTreeSet<_>>();
-
-							// TODO: Filter
-							let window_iter = windows.iter().filter(|w| output_filter(w));
-
-							for window in window_iter {
-								let widget = match window_widgets.entry(window.id) {
-									Entry::Occupied(entry) => entry.into_mut(),
-									Entry::Vacant(entry) => {
-										// TODO: Just pass window instead
-										let widget = NiriWindowWidget::from_window(
-											window.workspace_idx(),
-											window.workspace_id(),
-											window,
-										);
-										store.append(&widget);
-										entry.insert(widget)
-									}
-								};
-
-								if window.is_focused && !widget.has_css_class("focused") {
-									widget.add_css_class("focused");
-								} else if !window.is_focused && widget.has_css_class("focused") {
-									widget.remove_css_class("focused");
-								}
-
-								omitted.remove(&window.id);
-							}
-
-							for id in omitted {
-								if let Some(button) = window_widgets.remove(&id)
-									&& let Some(index) = store.find(&button)
-								{
-									store.remove(index);
-								}
+						WorkspacesChanged { workspaces } => {
+							workspace_tracker.update(workspaces);
+							sync_workspace_items(&store, &workspace_tracker);
+							update_workspace_focus(&store, workspace_tracker.focused_workspace_id());
+						}
+						WindowsChanged { windows } => {
+							rebuild_window_items(&store, &workspace_tracker, &windows);
+						}
+						WindowOpenedOrChanged { window } => {
+							handle_window_update(&store, &workspace_tracker, &window);
+						}
+						WindowClosed { id } => {
+							remove_window_item(&store, id);
+						}
+						WindowFocusChanged { id } => {
+							update_window_focus(&store, id);
+						}
+						WindowLayoutsChanged { changes } => {
+							for (id, layout) in changes {
+								update_window_layout(&store, id, layout);
 							}
 						}
+						WorkspaceActivated { id, .. } => {
+							update_workspace_focus(&store, Some(id));
+						}
+						WorkspaceActiveWindowChanged {
+							workspace_id,
+							active_window_id,
+						} => {
+							update_workspace_focus(&store, Some(workspace_id));
+							update_window_focus(&store, active_window_id);
+						}
+						_ => {}
 					}
 				}
+
+				panic!("Niri IPC event stream ended unexpectedly");
 			}
 		));
 
@@ -113,134 +106,313 @@ impl Taskbar {
 	pub fn widget(&self) -> &gtk4::Widget {
 		self.widget.upcast_ref()
 	}
+}
 
-	async fn build_output_filter(niri: niri::Niri, monitor: &gtk4::gdk::Monitor) -> Box<dyn Fn(&niri::Window) -> bool> {
-		let outputs = match gio::spawn_blocking(move || niri.outputs()).await {
-			Ok(outputs) => outputs,
-			Err(_e) => {
-				eprintln!("Failed to get outputs from Niri");
-				return Box::new(|_| true);
-			}
+struct WorkspaceTracker {
+	allowed_outputs: HashSet<String>,
+	workspaces: HashMap<u64, Workspace>,
+	base_index: u8,
+}
+
+impl WorkspaceTracker {
+	async fn new(monitor: &gdk::Monitor) -> Self {
+		let allowed_outputs = resolve_outputs_for_monitor(monitor).await;
+		let initial_workspaces = fetch_workspaces().await;
+		let mut tracker = Self {
+			allowed_outputs,
+			workspaces: HashMap::new(),
+			base_index: 0,
 		};
+		tracker.update(initial_workspaces);
+		tracker
+	}
 
-		if outputs.is_empty() {
-			return Box::new(|_| true);
+	fn update(&mut self, workspaces: Vec<Workspace>) {
+		self.workspaces = workspaces.into_iter().map(|ws| (ws.id, ws)).collect();
+		self.recompute_base_index();
+	}
+
+	fn recompute_base_index(&mut self) {
+		let min_idx = self
+			.workspaces
+			.values()
+			.filter(|ws| self.workspace_is_visible(ws.id))
+			.map(|ws| ws.idx)
+			.min()
+			.unwrap_or(0);
+		self.base_index = min_idx;
+	}
+
+	fn workspace_details(&self, window: &Window) -> Option<(u64, u8)> {
+		let workspace_id = window.workspace_id?;
+		let idx = self.display_index(workspace_id)?;
+		Some((workspace_id, idx))
+	}
+
+	fn visible_workspace_ids(&self) -> Vec<u64> {
+		let mut ids: Vec<u64> = self
+			.workspaces
+			.values()
+			.filter(|ws| self.workspace_is_visible(ws.id))
+			.map(|ws| ws.id)
+			.collect();
+		ids.sort_by_key(|id| self.workspaces.get(id).map(|ws| ws.idx).unwrap_or(0));
+		ids
+	}
+
+	fn display_index(&self, workspace_id: u64) -> Option<u8> {
+		let ws = self.workspaces.get(&workspace_id)?;
+		if !self.workspace_is_visible(workspace_id) {
+			return None;
+		}
+		Some(ws.idx.saturating_sub(self.base_index))
+	}
+
+	fn workspace_is_visible(&self, workspace_id: u64) -> bool {
+		if self.allowed_outputs.is_empty() {
+			return true;
 		}
 
-		for (name, output) in outputs {
-			if monitor
-				.connector()
-				.is_some_and(|connector| connector.as_str() == name.as_str())
+		self.workspaces
+			.get(&workspace_id)
+			.and_then(|ws| ws.output.as_ref())
+			.map(|output| self.allowed_outputs.contains(output))
+			.unwrap_or(false)
+	}
+
+	fn workspace(&self, workspace_id: u64) -> Option<&Workspace> {
+		self.workspaces.get(&workspace_id)
+	}
+
+	fn focused_workspace_id(&self) -> Option<u64> {
+		self.visible_workspace_ids()
+			.into_iter()
+			.find(|id| self.workspaces.get(id).is_some_and(|ws| ws.is_focused))
+	}
+
+	fn display_index_for_workspace(&self, workspace_id: u64) -> u8 {
+		self.display_index(workspace_id).unwrap_or(0)
+	}
+}
+
+async fn fetch_workspaces() -> Vec<Workspace> {
+	match gio::spawn_blocking(move || {
+		let mut socket = Socket::connect().ok()?;
+		let reply = socket.send(Request::Workspaces).ok()?;
+		match reply {
+			Ok(Response::Workspaces(workspaces)) => Some(workspaces),
+			_ => None,
+		}
+	})
+	.await
+	{
+		Ok(Some(workspaces)) => workspaces,
+		_ => Vec::new(),
+	}
+}
+
+async fn resolve_outputs_for_monitor(monitor: &gdk::Monitor) -> HashSet<String> {
+	let mut allowed = HashSet::new();
+
+	if let Some(connector) = monitor.connector() {
+		let connector = connector.to_string();
+		allowed.insert(connector.clone());
+		let outputs = fetch_outputs().await;
+		if let Some(output) = outputs.get(&connector) {
+			allowed.insert(output.name.clone());
+		}
+	}
+
+	allowed
+}
+
+async fn fetch_outputs() -> HashMap<String, Output> {
+	match gio::spawn_blocking(move || {
+		let mut socket = Socket::connect().ok()?;
+		let reply = socket.send(Request::Outputs).ok()?;
+		match reply {
+			Ok(Response::Outputs(outputs)) => Some(outputs),
+			_ => None,
+		}
+	})
+	.await
+	{
+		Ok(Some(outputs)) => outputs,
+		_ => HashMap::new(),
+	}
+}
+
+fn sync_workspace_items(store: &gio::ListStore, tracker: &WorkspaceTracker) {
+	let mut keep: HashSet<u64> = HashSet::new();
+
+	for workspace_id in tracker.visible_workspace_ids() {
+		if let Some(workspace) = tracker.workspace(workspace_id) {
+			let display_index = tracker.display_index_for_workspace(workspace_id);
+			if let Some((index, item)) =
+				find_taskbar_item(store, |item| item.is_workspace() && item.workspace_id() == workspace_id)
 			{
-				return Box::new(move |window: &niri::Window| {
-					window
-						.output()
-						.as_ref()
-						.is_some_and(|win_output| win_output == &output.name)
-				});
+				item.update_workspace(workspace, display_index);
+				store.items_changed(index, 1, 1);
+			} else {
+				let item = TaskbarItem::new_workspace(workspace, display_index);
+				store.append(&item);
+			}
+			keep.insert(workspace_id);
+		}
+	}
+
+	store.retain(|obj| {
+		if let Some(item) = obj.downcast_ref::<TaskbarItem>() {
+			if item.is_workspace() {
+				keep.contains(&item.workspace_id())
+			} else {
+				true
+			}
+		} else {
+			false
+		}
+	});
+}
+
+fn rebuild_window_items(store: &gio::ListStore, tracker: &WorkspaceTracker, windows: &[Window]) {
+	remove_window_items(store);
+
+	for window in windows {
+		if let Some((workspace_id, display_index)) = tracker.workspace_details(window) {
+			let item = TaskbarItem::new_window(window, workspace_id, display_index);
+			store.append(&item);
+		}
+	}
+}
+
+fn handle_window_update(store: &gio::ListStore, tracker: &WorkspaceTracker, window: &Window) {
+	let placement = tracker.workspace_details(window);
+
+	if let Some((index, item)) = find_taskbar_item(store, |item| item.is_window() && item.window_id() == window.id) {
+		if let Some((workspace_id, display_index)) = placement {
+			item.update_window(window, workspace_id, display_index);
+			store.items_changed(index, 1, 1);
+		} else {
+			store.remove(index);
+		}
+	} else if let Some((workspace_id, display_index)) = placement {
+		let item = TaskbarItem::new_window(window, workspace_id, display_index);
+		store.append(&item);
+	}
+}
+
+fn remove_window_item(store: &gio::ListStore, window_id: u64) {
+	if let Some((index, _)) = find_taskbar_item(store, |item| item.is_window() && item.window_id() == window_id) {
+		store.remove(index);
+	}
+}
+
+fn update_window_focus(store: &gio::ListStore, focused_window_id: Option<u64>) {
+	for index in 0..store.n_items() {
+		if let Some(obj) = store.item(index)
+			&& let Ok(item) = obj.downcast::<TaskbarItem>()
+			&& item.is_window()
+		{
+			if let Some(widget) = item.window() {
+				widget.set_focused(focused_window_id == Some(widget.window_id()));
 			}
 		}
-
-		Box::new(|_| true)
 	}
 }
 
-enum Event {
-	Snapshot(Vec<niri::Window>),
-	// Workspace(Vec<Workspace>),
-}
-
-async fn window_stream(tx: Sender<Event>, window_stream: niri::WindowStream) {
-	while let Some(snap) = window_stream.next().await {
-		if let Err(e) = tx.send(Event::Snapshot(snap)).await {
-			eprintln!("Failed to send window snapshot: {e}");
+fn update_workspace_focus(store: &gio::ListStore, focused_workspace_id: Option<u64>) {
+	for index in 0..store.n_items() {
+		if let Some(obj) = store.item(index)
+			&& let Ok(item) = obj.downcast::<TaskbarItem>()
+			&& item.is_workspace()
+		{
+			if let Some(widget) = item.workspace() {
+				widget.set_focused(focused_workspace_id == Some(widget.workspace_id()));
+			}
 		}
 	}
 }
 
-// async fn workspace_stream(tx: Sender<Event>, stream: impl Stream<Item = Vec<Workspace>>) {
-// 	let mut workspace_stream = Box::pin(stream);
-// 	while let Some(workspaces) = workspace_stream.next().await {
-// 		if let Err(e) = tx.send(Event::Workspace(workspaces)).await {
-// 			eprintln!("Failed to send workspace update: {e}");
-// 		}
-// 	}
-// }
+fn update_window_layout(store: &gio::ListStore, window_id: u64, layout: WindowLayout) {
+	if let Some((index, item)) = find_taskbar_item(store, |item| item.is_window() && item.window_id() == window_id) {
+		if let Some(widget) = item.window() {
+			widget.refresh_from_layout(layout);
+			store.items_changed(index, 1, 1);
+		}
+	}
+}
 
-fn event_stream(niri: niri::Niri) -> impl Stream<Item = Event> + use<> {
+fn remove_window_items(store: &gio::ListStore) {
+	store.retain(|obj| {
+		if let Some(item) = obj.downcast_ref::<TaskbarItem>() {
+			item.is_workspace()
+		} else {
+			false
+		}
+	});
+}
+
+fn find_taskbar_item<F>(store: &gio::ListStore, mut predicate: F) -> Option<(u32, TaskbarItem)>
+where
+	F: FnMut(&TaskbarItem) -> bool,
+{
+	for index in 0..store.n_items() {
+		if let Some(obj) = store.item(index)
+			&& let Ok(item) = obj.downcast::<TaskbarItem>()
+		{
+			if predicate(&item) {
+				return Some((index, item));
+			}
+		}
+	}
+	None
+}
+
+fn to_gtk_ordering(ordering: StdOrdering) -> GtkOrdering {
+	match ordering {
+		StdOrdering::Less => GtkOrdering::Smaller,
+		StdOrdering::Equal => GtkOrdering::Equal,
+		StdOrdering::Greater => GtkOrdering::Larger,
+	}
+}
+
+fn event_stream() -> impl Stream<Item = Event> + use<> {
 	let (tx, rx) = async_channel::unbounded();
 
-	glib::spawn_future_local(window_stream(tx.clone(), niri.window_stream()));
+	gio::spawn_blocking(move || {
+		let mut socket = niri_ipc::socket::Socket::connect().unwrap();
 
-	// let mut delay = Some((tx, niri.workspace_stream()));
+		let Ok(Response::Handled) = socket.send(Request::EventStream).unwrap() else {
+			panic!("Failed to request event stream");
+		};
+
+		let mut event_stream = socket.read_events();
+		while let Ok(event) = event_stream() {
+			tx.send_blocking(event).unwrap();
+		}
+
+		panic!("Niri IPC event stream ended unexpectedly");
+	});
 
 	async_stream::stream! {
 		while let Ok(event) = rx.recv().await {
-			// if let Some((tx, stream)) = delay.take() {
-			// 	if let &Event::Workspace(_) = &event {
-			// 		glib::spawn_future_local(workspace_stream(tx, stream));
-			// 	}
-			// }
-
 			yield event;
 		}
 	}
 }
 
-fn create_workspace_index_factory() -> gtk4::SignalListItemFactory {
-	let factory = gtk4::SignalListItemFactory::new();
-
-	factory.connect_setup(|_, item| {
-		let header = item.downcast_ref::<gtk4::ListHeader>().unwrap();
-
-		let workspace_widget = NiriWorkspaceWidget::new_null();
-
-		header.set_child(Some(&workspace_widget));
-	});
-
-	factory.connect_bind(|_, item| {
-		let header = item.downcast_ref::<gtk4::ListHeader>().unwrap();
-		let workspace_widget = header.child().unwrap().downcast::<NiriWorkspaceWidget>().unwrap();
-
-		if let Some(obj) = header.item().and_then(|o| o.downcast::<NiriWindowWidget>().ok()) {
-			let workspace_id = obj.workspace_id();
-			let workspace_idx = obj.workspace_index();
-			workspace_widget.set_workspace_id(workspace_id);
-			workspace_widget.set_workspace_index(workspace_idx);
-		}
-	});
-
-	factory.connect_unbind(|_, item| {
-		if let Some(header) = item.downcast_ref::<gtk4::ListHeader>()
-			&& let Some(workspace_widget) = header.child().and_then(|c| c.downcast::<NiriWorkspaceWidget>().ok())
-		{
-			workspace_widget.set_workspace_id(0);
-			workspace_widget.set_workspace_index(0);
-		}
-	});
-
-	factory.connect_teardown(|_, item| {
-		if let Some(header) = item.downcast_ref::<gtk4::ListHeader>() {
-			header.set_child(None::<&gtk4::Widget>);
-		}
-	});
-
-	factory
-}
-
-fn create_window_factory() -> gtk4::SignalListItemFactory {
+fn create_item_factory() -> gtk4::SignalListItemFactory {
 	let factory = gtk4::SignalListItemFactory::new();
 
 	factory.connect_setup(|_, li| {
 		let li = li.downcast_ref::<gtk4::ListItem>().expect("to be a ListItem");
-
 		li.set_child(Some(&gtk4::Box::new(gtk4::Orientation::Horizontal, 0)));
 	});
 	factory.connect_bind(|_, li| {
 		let list_item = li.downcast_ref::<gtk4::ListItem>().expect("Needs to be a ListItem");
-
-		let item = list_item.item().and_downcast::<NiriWindowWidget>().unwrap();
-		list_item.set_child(Some(&item));
+		if let Some(item) = list_item.item().and_downcast::<TaskbarItem>() {
+			list_item.set_child(item.widget().as_ref());
+		}
 	});
 	factory.connect_unbind(|_, li| {
 		let list_item = li.downcast_ref::<gtk4::ListItem>().expect("Needs to be a ListItem");
@@ -249,26 +421,37 @@ fn create_window_factory() -> gtk4::SignalListItemFactory {
 	factory
 }
 
-fn create_sorters() -> (gtk4::MultiSorter, gtk4::NumericSorter) {
-	let workspace_index_sorter = gtk4::NumericSorter::builder()
-		.expression(gtk4::PropertyExpression::new(
-			NiriWindowWidget::static_type(),
-			gtk4::Expression::NONE,
-			"workspace-index",
-		))
-		.build();
+fn create_sorter() -> CustomSorter {
+	CustomSorter::new(|obj_a, obj_b| {
+		let item_a = obj_a.downcast_ref::<TaskbarItem>().expect("TaskbarItem");
+		let item_b = obj_b.downcast_ref::<TaskbarItem>().expect("TaskbarItem");
 
-	let positional_sorter = gtk4::NumericSorter::builder()
-		.expression(gtk4::PropertyExpression::new(
-			NiriWindowWidget::static_type(),
-			gtk4::Expression::NONE,
-			"sort-key",
-		))
-		.build();
+		let mut cmp = item_a.workspace_index().cmp(&item_b.workspace_index());
+		if cmp != StdOrdering::Equal {
+			return to_gtk_ordering(cmp);
+		}
 
-	let full_sorter = gtk4::MultiSorter::new();
-	full_sorter.append(workspace_index_sorter.clone());
-	full_sorter.append(positional_sorter);
+		cmp = item_a.kind().sort_value().cmp(&item_b.kind().sort_value());
+		if cmp != StdOrdering::Equal {
+			return to_gtk_ordering(cmp);
+		}
 
-	(full_sorter, workspace_index_sorter)
+		if item_a.kind() == TaskbarItemKind::Window && item_b.kind() == TaskbarItemKind::Window {
+			cmp = item_a.column_index().cmp(&item_b.column_index());
+			if cmp != StdOrdering::Equal {
+				return to_gtk_ordering(cmp);
+			}
+			cmp = item_a.tile_index().cmp(&item_b.tile_index());
+			if cmp != StdOrdering::Equal {
+				return to_gtk_ordering(cmp);
+			}
+			cmp = item_a.window_id().cmp(&item_b.window_id());
+			if cmp != StdOrdering::Equal {
+				return to_gtk_ordering(cmp);
+			}
+		}
+
+		cmp = item_a.workspace_id().cmp(&item_b.workspace_id());
+		to_gtk_ordering(cmp)
+	})
 }

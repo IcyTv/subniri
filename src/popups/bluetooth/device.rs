@@ -180,9 +180,10 @@ mod imp {
 	}
 
 	struct ContextData {
-		tx:     Sender<ConnectionResult>,
+		tx:      Sender<ConnectionResult>,
 		finish:
 			unsafe extern "C" fn(*mut astal_bluetooth_sys::AstalBluetoothDevice, *mut GAsyncResult, *mut *mut GError),
+		_device: Device,
 	}
 
 	enum ConnectionResult {
@@ -192,26 +193,21 @@ mod imp {
 
 	impl BtDeviceExt for Device {
 		async fn connect_device(&self) -> Result<(), Box<dyn std::error::Error>> {
-			let device_ptr = self.to_glib_none().0;
-
 			let callback = GAsyncReadyCallback::Some(callback);
 
 			let (tx, rx) = async_channel::bounded(1);
 			let user_data = Box::new(ContextData {
 				tx,
 				finish: astal_bluetooth_sys::astal_bluetooth_device_connect_device_finish,
+				_device: self.clone(),
 			});
 			let user_data_ptr = Box::into_raw(user_data);
 
-			// SAFETY:
-			// - device_ptr is valid as it comes from to_glib_none() on a live Device reference
-			// - callback is a valid function pointer matching GAsyncReadyCallback signature
-			// - user_data_ptr is a valid heap-allocated pointer that will be freed in the callback
-			// - GIO guarantees the callback will be invoked exactly once (on success or failure),
-			//   preventing memory leaks (see g_async_result_* and GAsyncReadyCallback in gio(3))
+			// SAFETY: the strong ref stored in ContextData keeps the device alive until the callback
+			// runs; the borrowed pointer returned by to_glib_none() is valid for this call.
 			unsafe {
 				astal_bluetooth_sys::astal_bluetooth_device_connect_device(
-					device_ptr,
+					self.to_glib_none().0,
 					callback,
 					user_data_ptr as *mut c_void,
 				);
@@ -225,25 +221,19 @@ mod imp {
 		}
 
 		async fn disconnect_device(&self) -> Result<(), Box<dyn std::error::Error>> {
-			let device_ptr = self.to_glib_none().0;
 			let callback = GAsyncReadyCallback::Some(callback);
 
 			let (tx, rx) = async_channel::bounded(1);
 			let user_data = Box::new(ContextData {
 				tx,
 				finish: astal_bluetooth_sys::astal_bluetooth_device_disconnect_device_finish,
+				_device: self.clone(),
 			});
 			let user_data_ptr = Box::into_raw(user_data);
 
-			// SAFETY:
-			// - device_ptr is valid as it comes from to_glib_none() on a live Device reference
-			// - callback is a valid function pointer matching GAsyncReadyCallback signature
-			// - user_data_ptr is a valid heap-allocated pointer that will be freed in the callback
-			// - GIO guarantees the callback will be invoked exactly once (on success or failure),
-			//   preventing memory leaks (see g_async_result_* and GAsyncReadyCallback in gio(3))
 			unsafe {
 				astal_bluetooth_sys::astal_bluetooth_device_disconnect_device(
-					device_ptr,
+					self.to_glib_none().0,
 					callback,
 					user_data_ptr as *mut c_void,
 				);

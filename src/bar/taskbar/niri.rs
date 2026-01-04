@@ -197,14 +197,14 @@ enum Inner {
 }
 
 struct NiriState {
-	windows:    BTreeMap<u64, NiriWindow>,
+	windows: BTreeMap<u64, NiriWindow>,
 	workspaces: BTreeMap<u64, Workspace>,
 }
 
 impl NiriState {
 	fn new(windows: Vec<NiriWindow>, workspaces: Vec<Workspace>) -> Self {
 		let mut niri = NiriState {
-			windows:    BTreeMap::new(),
+			windows: BTreeMap::new(),
 			workspaces: BTreeMap::new(),
 		};
 
@@ -242,6 +242,7 @@ impl NiriState {
 	}
 
 	fn upsert_window(&mut self, window: NiriWindow) {
+		println!("Upserting window id {}", window.id);
 		// Ensure that we update other windows if the new window is focused.
 		if window.is_focused {
 			self.windows.values_mut().for_each(|window| {
@@ -260,7 +261,7 @@ impl NiriState {
 					&& let Some(workspace) = self.workspaces.get(&ws_id)
 				{
 					return Some(Window {
-						window:    window.clone(),
+						window: window.clone(),
 						workspace: workspace.clone(),
 					});
 				}
@@ -272,7 +273,7 @@ impl NiriState {
 }
 
 pub struct Window {
-	window:    NiriWindow,
+	window: NiriWindow,
 	workspace: Workspace,
 }
 

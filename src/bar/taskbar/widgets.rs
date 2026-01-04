@@ -1,14 +1,153 @@
 use std::cell::RefCell;
 
 use glib::Properties;
+use glib::subclass::InitializingObject;
 use gtk4::CompositeTemplate;
+use gtk4::Widget;
+use gtk4::gio;
 use gtk4::gio::prelude::AppInfoExt;
-use gtk4::gio::{self};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use niri_ipc::Window as NiriWindow;
+use niri_ipc::{Action, Request, Workspace, WorkspaceReferenceArg, socket::Socket};
+use niri_ipc::{Window as NiriWindow, WindowLayout};
 
 use crate::icons;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TaskbarItemKind {
+	Workspace,
+	Window,
+}
+
+impl TaskbarItemKind {
+	pub fn sort_value(self) -> i32 {
+		match self {
+			TaskbarItemKind::Workspace => 0,
+			TaskbarItemKind::Window => 1,
+		}
+	}
+}
+
+glib::wrapper! {
+	pub struct TaskbarItem(ObjectSubclass<taskbar_item_imp::TaskbarItem>);
+}
+
+impl TaskbarItem {
+	pub fn new_workspace(workspace: &Workspace, display_index: u8) -> Self {
+		let widget = NiriWorkspaceWidget::from_workspace(workspace, display_index);
+		Self::from_widget(widget.upcast::<Widget>(), TaskbarItemKind::Workspace)
+	}
+
+	pub fn new_window(window: &NiriWindow, workspace_id: u64, display_index: u8) -> Self {
+		let widget = NiriWindowWidget::from_window(display_index, workspace_id, window);
+		Self::from_widget(widget.upcast::<Widget>(), TaskbarItemKind::Window)
+	}
+
+	fn from_widget(widget: Widget, kind: TaskbarItemKind) -> Self {
+		glib::Object::builder()
+			.property("object", widget)
+			.property("item-kind", kind.sort_value())
+			.build()
+	}
+
+	pub fn is_window(&self) -> bool {
+		self.kind() == TaskbarItemKind::Window
+	}
+
+	pub fn is_workspace(&self) -> bool {
+		self.kind() == TaskbarItemKind::Workspace
+	}
+
+	pub fn kind(&self) -> TaskbarItemKind {
+		match self.item_kind() {
+			0 => TaskbarItemKind::Workspace,
+			_ => TaskbarItemKind::Window,
+		}
+	}
+
+	pub fn window(&self) -> Option<NiriWindowWidget> {
+		self.object().and_then(|obj| obj.downcast::<NiriWindowWidget>().ok())
+	}
+
+	pub fn workspace(&self) -> Option<NiriWorkspaceWidget> {
+		self.object().and_then(|obj| obj.downcast::<NiriWorkspaceWidget>().ok())
+	}
+
+	pub fn widget(&self) -> Option<Widget> {
+		self.object()
+	}
+
+	pub fn workspace_id(&self) -> u64 {
+		if let Some(window) = self.window() {
+			window.workspace_id()
+		} else if let Some(workspace) = self.workspace() {
+			workspace.workspace_id()
+		} else {
+			0
+		}
+	}
+
+	pub fn workspace_index(&self) -> i32 {
+		if let Some(window) = self.window() {
+			window.workspace_index() as i32
+		} else if let Some(workspace) = self.workspace() {
+			workspace.workspace_index() as i32
+		} else {
+			0
+		}
+	}
+
+	pub fn column_index(&self) -> i32 {
+		self.window().map(|w| w.column_index()).unwrap_or(-1)
+	}
+
+	pub fn tile_index(&self) -> i32 {
+		self.window().map(|w| w.tile_index()).unwrap_or(-1)
+	}
+
+	pub fn window_id(&self) -> u64 {
+		self.window().map(|w| w.window_id()).unwrap_or(0)
+	}
+
+	pub fn update_workspace(&self, workspace: &Workspace, display_index: u8) {
+		if let Some(widget) = self.workspace() {
+			widget.refresh_from_workspace(workspace, display_index);
+		}
+	}
+
+	pub fn update_window(&self, window: &NiriWindow, workspace_id: u64, display_index: u8) {
+		if let Some(widget) = self.window() {
+			widget.refresh_from_window(display_index, workspace_id, window);
+		}
+	}
+}
+
+mod taskbar_item_imp {
+	use super::*;
+
+	#[derive(Properties, Default)]
+	#[properties(wrapper_type = super::TaskbarItem)]
+	pub struct TaskbarItem {
+		#[property(get, set)]
+		object: RefCell<Option<gtk4::Widget>>,
+		#[property(name = "item-kind", get, set, default = 0)]
+		item_kind: RefCell<i32>,
+	}
+
+	#[glib::object_subclass]
+	impl ObjectSubclass for TaskbarItem {
+		type ParentType = glib::Object;
+		type Type = super::TaskbarItem;
+		const NAME: &'static str = "TaskbarItem";
+	}
+
+	#[glib::derived_properties]
+	impl ObjectImpl for TaskbarItem {
+		fn constructed(&self) {
+			self.parent_constructed();
+		}
+	}
+}
 
 glib::wrapper! {
 	pub struct NiriWindowWidget(ObjectSubclass<niri_window_imp::NiriWindowWidget>)
@@ -18,27 +157,66 @@ glib::wrapper! {
 
 impl NiriWindowWidget {
 	pub fn from_window(workspace_index: u8, workspace_id: u64, window: &NiriWindow) -> Self {
-		let icon = window
-			.app_id
-			.as_ref()
-			.and_then(Self::get_icon_for_app_id)
-			.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap());
-
-		let tile_pos = window.layout.pos_in_scrolling_layout.unwrap_or_default();
-		let tile_pos = (tile_pos.0 as u32, tile_pos.1 as u32);
-
-		let sort_key = ((tile_pos.0 as u64) << 32) | (tile_pos.1 as u64);
+		let icon = Self::icon_for_window(window);
+		let (column, tile) = Self::position_for_window(window);
 
 		let widget: Self = glib::Object::builder()
 			.property("icon", Some(icon))
-			.property("sort-key", sort_key)
-			.property("title", window.title.clone())
+			.property("title", window.title.clone().unwrap_or_default())
 			.property("workspace-index", workspace_index)
 			.property("workspace-id", workspace_id)
 			.property("window-id", window.id)
+			.property("column-index", column)
+			.property("tile-index", tile)
 			.build();
 
+		if window.is_focused {
+			widget.add_css_class("focused");
+		}
+
 		widget
+	}
+
+	pub fn refresh_from_layout(&self, layout: WindowLayout) {
+		let (column, tile) = layout.pos_in_scrolling_layout.unwrap_or_default();
+		self.set_column_index(column as i32);
+		self.set_tile_index(tile as i32);
+	}
+
+	pub fn refresh_from_window(&self, workspace_index: u8, workspace_id: u64, window: &NiriWindow) {
+		self.set_workspace_index(workspace_index);
+		self.set_workspace_id(workspace_id);
+
+		let (column, tile) = Self::position_for_window(window);
+		self.set_column_index(column);
+		self.set_tile_index(tile);
+
+		let title = window.title.as_deref().unwrap_or_default();
+		self.set_title(title);
+
+		let icon = Self::icon_for_window(window);
+		self.set_icon(icon);
+	}
+
+	pub fn set_focused(&self, focused: bool) {
+		if focused {
+			self.add_css_class("focused");
+		} else {
+			self.remove_css_class("focused");
+		}
+	}
+
+	fn icon_for_window(window: &NiriWindow) -> gio::Icon {
+		window
+			.app_id
+			.as_ref()
+			.and_then(Self::get_icon_for_app_id)
+			.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap())
+	}
+
+	pub fn position_for_window(window: &NiriWindow) -> (i32, i32) {
+		let pos = window.layout.pos_in_scrolling_layout.unwrap_or_default();
+		(pos.0 as i32, pos.1 as i32)
 	}
 
 	fn get_icon_for_app_id(app_id: impl AsRef<str>) -> Option<gio::Icon> {
@@ -49,6 +227,7 @@ impl NiriWindowWidget {
 }
 
 mod niri_window_imp {
+
 	use super::*;
 
 	#[derive(Properties, Default, CompositeTemplate)]
@@ -59,14 +238,16 @@ mod niri_window_imp {
 		window_id: RefCell<u64>,
 		#[property(get, set)]
 		pub icon: RefCell<Option<gio::Icon>>,
-		#[property(get, construct_only)]
-		sort_key: RefCell<u64>,
 		#[property(get, set)]
 		title: RefCell<String>,
 		#[property(get, set)]
 		workspace_index: RefCell<u8>,
 		#[property(get, set)]
 		workspace_id: RefCell<u64>,
+		#[property(get, set)]
+		column_index: RefCell<i32>,
+		#[property(get, set)]
+		tile_index: RefCell<i32>,
 	}
 
 	#[glib::object_subclass]
@@ -92,16 +273,17 @@ mod niri_window_imp {
 		}
 	}
 
-	// Trait shared by all widgets
 	impl WidgetImpl for NiriWindowWidget {}
 
-	// Trait shared by all buttons
 	impl ButtonImpl for NiriWindowWidget {
 		fn clicked(&self) {
-			// TODO: get() instead of new. Or pass it somewhere...
-			let niri = super::super::niri::Niri::new();
-
-			niri.activate_window(*self.window_id.borrow());
+			let mut socket = Socket::connect().unwrap();
+			socket
+				.send(Request::Action(Action::FocusWindow {
+					id: *self.window_id.borrow(),
+				}))
+				.unwrap()
+				.unwrap();
 		}
 	}
 }
@@ -117,15 +299,60 @@ impl NiriWorkspaceWidget {
 		glib::Object::builder()
 			.property("icon", None::<String>)
 			.property("workspace-id", 0u64)
+			.property("display-mode", "workspace-index")
 			.build()
+	}
+
+	pub fn from_workspace(workspace: &Workspace, display_index: u8) -> Self {
+		let widget: Self = glib::Object::builder()
+			.property("icon", workspace.name.clone())
+			.property("workspace-id", workspace.id)
+			.property("workspace-index", display_index)
+			.property(
+				"display-mode",
+				if workspace.name.is_some() {
+					"workspace-icon"
+				} else {
+					"workspace-index"
+				},
+			)
+			.build();
+		widget.set_focused(workspace.is_focused);
+		widget
+	}
+
+	pub fn refresh_from_workspace(&self, workspace: &Workspace, display_index: u8) {
+		self.set_workspace_id(workspace.id);
+		self.set_workspace_index(display_index);
+		if let Some(name) = &workspace.name {
+			self.set_icon(name.clone());
+		} else {
+			self.set_property("icon", None::<String>);
+		}
+		self.set_display_mode(if workspace.name.is_some() {
+			"workspace-icon"
+		} else {
+			"workspace-index"
+		});
+		self.set_focused(workspace.is_focused);
+	}
+
+	pub fn set_focused(&self, focused: bool) {
+		if focused {
+			self.add_css_class("focused");
+		} else {
+			self.remove_css_class("focused");
+		}
 	}
 }
 
 mod niri_workspace_imp {
+
 	use super::*;
 
-	#[derive(Properties, Default)]
+	#[derive(Properties, Default, CompositeTemplate)]
 	#[properties(wrapper_type = super::NiriWorkspaceWidget)]
+	#[template(file = "src/bar/taskbar/niri_workspace_widget.blp")]
 	pub struct NiriWorkspaceWidget {
 		#[property(get, set)]
 		pub icon: RefCell<Option<String>>,
@@ -133,6 +360,8 @@ mod niri_workspace_imp {
 		workspace_id: RefCell<u64>,
 		#[property(get, set)]
 		workspace_index: RefCell<u8>,
+		#[property(get, set)]
+		display_mode: RefCell<String>,
 	}
 
 	#[glib::object_subclass]
@@ -141,41 +370,20 @@ mod niri_workspace_imp {
 		type Type = super::NiriWorkspaceWidget;
 
 		const NAME: &'static str = "NiriWorkspaceWidget";
+
+		fn class_init(klass: &mut Self::Class) {
+			klass.bind_template();
+		}
+
+		fn instance_init(obj: &InitializingObject<Self>) {
+			obj.init_template();
+		}
 	}
 
 	#[glib::derived_properties]
 	impl ObjectImpl for NiriWorkspaceWidget {
 		fn constructed(&self) {
 			self.parent_constructed();
-
-			let obj = self.obj();
-			obj.set_css_classes(&["niri-workspace"]);
-
-			let stack = gtk4::Stack::builder().hhomogeneous(true).vhomogeneous(true).build();
-
-			let image = gtk4::Image::new();
-			image.set_pixel_size(24);
-
-			let label = gtk4::Label::new(None);
-
-			stack.add_named(&image, Some("icon"));
-			stack.add_named(&label, Some("label"));
-
-			obj.set_child(Some(&stack));
-
-			obj.bind_property("icon", &image, "icon-name").sync_create().build();
-			obj.bind_property("workspace-index", &label, "label")
-				.sync_create()
-				.transform_to(|_, id: u8| Some(format!("{}", id + 1)))
-				.build();
-
-			obj.bind_property("icon", &stack, "visible-child-name")
-				.sync_create()
-				.transform_to(|_, v: Option<String>| {
-					let name = if v.is_some() { "icon" } else { "label" };
-					Some(name)
-				})
-				.build();
 		}
 	}
 
@@ -183,8 +391,13 @@ mod niri_workspace_imp {
 
 	impl ButtonImpl for NiriWorkspaceWidget {
 		fn clicked(&self) {
-			let niri = super::super::niri::Niri::new();
-			niri.activate_workspace(*self.workspace_id.borrow());
+			let mut socket = Socket::connect().unwrap();
+			socket
+				.send(Request::Action(Action::FocusWorkspace {
+					reference: WorkspaceReferenceArg::Id(*self.workspace_id.borrow()),
+				}))
+				.unwrap()
+				.unwrap();
 		}
 	}
 }

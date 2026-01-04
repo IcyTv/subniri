@@ -36,10 +36,22 @@
 	transition: background-color 0.3s, color 0.3s;
 }
 
+.taskbar header {
+	margin: 0;
+	padding: 0;
+}
+
 .niri-window {
 	min-width: 24px;
 	min-height: 24px;
-	padding: 0;
+	padding: 4px;
+	margin: 0;
+}
+
+.niri-workspace {
+	min-width: 24px;
+	min-height: 24px;
+	padding: 4px;
 	margin: 0;
 }
 

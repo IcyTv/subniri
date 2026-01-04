@@ -64,12 +64,6 @@ mod imp {
 			};
 			let obj = self.obj();
 
-			println!(
-				"DeviceWidget created for: {:?} (is-default: {})",
-				endpoint.description(),
-				endpoint.is_default()
-			);
-
 			endpoint
 				.bind_property("is-default", &*obj, "active")
 				.bidirectional()
