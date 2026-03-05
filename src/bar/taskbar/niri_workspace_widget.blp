@@ -12,7 +12,7 @@ template $NiriWorkspaceWidget: Gtk.Button {
     "niri-workspace",
   ]
 
-  child:  Gtk.Stack {
+  child: Gtk.Stack {
     visible-child-name: bind template.display-mode;
 
     Gtk.StackPage {
@@ -22,20 +22,22 @@ template $NiriWorkspaceWidget: Gtk.Button {
         pixel-size: 24;
         halign: center;
         valign: center;
-
         icon-name: bind template.icon;
       };
     }
 
     Gtk.StackPage {
-        name: "workspace-index";
+      name: "workspace-index";
 
-        child: Gtk.Label {
-            halign: center;
-            valign: center;
-            label: bind template.workspace-index;
-            css-classes: ["niri-workspace-number"];
-        };
-      }
+      child: Gtk.Label {
+        halign: center;
+        valign: center;
+        label: bind template.workspace-index;
+
+        css-classes: [
+          "niri-workspace-number",
+        ];
+      };
+    }
   };
 }

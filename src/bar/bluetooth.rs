@@ -29,7 +29,7 @@ impl Bluetooth {
 
 		let button = gtk4::Button::builder()
 			.child(&button_box)
-			.css_classes(["bar-button"])
+			.css_classes(["bar-button", "bluetooth-button"])
 			.build();
 
 		let is_powered_expr = PropertyExpression::new(Bt::static_type(), gtk4::Expression::NONE, "is-powered");

@@ -1,3 +1,10 @@
+button {
+	background-color: @window_bg_color;
+	color: @window_fg_color;
+	margin: 0;
+	padding: 4px;
+}
+
 .bar {
 	background-color: transparent;
 	color: @window_fg_color;
@@ -44,15 +51,11 @@
 .niri-window {
 	min-width: 24px;
 	min-height: 24px;
-	padding: 4px;
-	margin: 0;
 }
 
 .niri-workspace {
 	min-width: 24px;
 	min-height: 24px;
-	padding: 4px;
-	margin: 0;
 }
 
 .niri-window.focused {
@@ -64,11 +67,30 @@
 	margin: 10px;
 }
 
-.bar .volume {
+.bar .bar-button {
 	background-color: @card_bg_color;
-	color: @red_1;
 	padding: 0px 6px;	
 	border-radius: 6px;
+
+}
+
+.bar .volume {
+	color: @red_1;
+}
+
+.bar .network-button {
+	color: @green_1;
+}
+
+.bar .bluetooth-button {
+	color: @blue_1;
+}
+
+.bar .clock {
+	color: @purple_1;
+}
+
+.bar .notifications {
 }
 
 popover {
@@ -86,6 +108,7 @@ popover > contents {
 	margin-top: -12px;
 	margin-left: -12px;
 }
+
 
 .power-button {
 	background-color: @destructive_bg_color;
@@ -167,6 +190,13 @@ popover > contents {
 	color: @blue_1;
 }
 
+.media-player-widget {
+	background-color: @window_bg_color;
+	color: @window_fg_color;
+	border-radius: 12px;
+	padding: 12px;
+}
+
 .media-player-shuffle:checked {
 	background-color: @success_bg_color;
 	color: @success_fg_color;
@@ -199,6 +229,10 @@ popover > contents {
 
 .media-player-controls {
 	margin-top: 12px;
+}
+
+.media-player-controls > button:hover {
+	filter: brightness(0.8);
 }
 
 scale.media-player-seekbar {

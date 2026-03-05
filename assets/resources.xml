@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/de/icytv/niribar/assets/gifs">
-	<file>ice_cream.gif</file>
+	<file>plant.gif</file>
   </gresource>
 </gresources>

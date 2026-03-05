@@ -1,22 +1,17 @@
-use std::sync::{Arc, Mutex};
-
-use astal4::prelude::*;
 use gtk4::gdk;
 use gtk4::prelude::{BoxExt as _, *};
-use sysinfo::System;
 
 mod bluetooth;
 mod clock;
 mod mediaplayer;
 mod network;
+mod notifications;
 mod overview;
 mod taskbar;
 mod volume;
 
 pub struct Bar {
 	pub window: astal4::Window,
-	center_box: gtk4::CenterBox,
-	system:     Arc<Mutex<System>>,
 }
 
 impl Bar {
@@ -40,6 +35,7 @@ impl Bar {
 		let network = network::Network::new();
 		let bluetooth = bluetooth::Bluetooth::new();
 		let clock = clock::Clock::new();
+		let notifications = notifications::Notifications::new();
 
 		let end_box = gtk4::Box::builder()
 			.hexpand(true)
@@ -52,6 +48,7 @@ impl Bar {
 		end_box.append(network.widget());
 		end_box.append(bluetooth.widget());
 		end_box.append(clock.widget());
+		end_box.append(&notifications);
 
 		let center_box = gtk4::CenterBox::builder()
 			.start_widget(&start_child)
@@ -72,11 +69,7 @@ impl Bar {
 			.width_request(monitor_width)
 			.build();
 
-		Self {
-			window,
-			center_box,
-			system: Arc::new(Mutex::new(System::new_all())),
-		}
+		Self { window }
 	}
 
 	pub fn for_all_monitors(display: &gtk4::gdk::Display, args: &super::Args) -> Vec<Self> {

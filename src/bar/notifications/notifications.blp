@@ -1,0 +1,10 @@
+using Gtk 4.0;
+
+template $Notifications: Gtk.Button {
+  styles [
+    "notifications",
+    "bar-button",
+  ]
+
+  icon-name: bind template.bell-icon-name;
+}

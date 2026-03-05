@@ -8,6 +8,7 @@ use gtk4::{gdk, gio, glib};
 use rand::seq::IndexedRandom;
 
 static RESOURCE_PATH: &str = "/de/icytv/niribar/assets/gifs";
+const MAX_GIF_SIZE: i32 = 300;
 
 glib::wrapper! {
 	pub struct LauncherImage(ObjectSubclass<self::LauncherImagePrivate>)
@@ -37,7 +38,7 @@ impl LauncherImage {
 #[properties(wrapper_type = LauncherImage)]
 pub struct LauncherImagePrivate {
 	#[property(get, set)]
-	image:     RefCell<String>,
+	image: RefCell<String>,
 	anim_task: RefCell<Option<glib::JoinHandle<()>>>,
 }
 
@@ -60,20 +61,21 @@ impl ObjectImpl for LauncherImagePrivate {
 		obj.set_halign(gtk4::Align::Start);
 		obj.set_valign(gtk4::Align::Start);
 
-		let picture = gtk4::Picture::builder()
-			.width_request(283)
-			.height_request(154)
-			.content_fit(gtk4::ContentFit::Cover)
-			.halign(gtk4::Align::Fill)
-			.valign(gtk4::Align::Fill)
+		let image = gtk4::Image::builder()
+			.pixel_size(MAX_GIF_SIZE)
+			.halign(gtk4::Align::Start)
+			.valign(gtk4::Align::Start)
 			.build();
-		obj.append(&picture);
+		image.set_size_request(MAX_GIF_SIZE, MAX_GIF_SIZE);
+		image.set_overflow(gtk4::Overflow::Hidden);
+
+		obj.append(&image);
 
 		let update = glib::clone!(
 			#[weak]
 			obj,
 			#[weak]
-			picture,
+			image,
 			#[upgrade_or_default]
 			move || {
 				let imp = obj.imp();
@@ -86,7 +88,7 @@ impl ObjectImpl for LauncherImagePrivate {
 				let uri = format!("resource:///{}", resource_path.trim_start_matches('/'));
 
 				let file = gio::File::for_uri(&uri);
-				let picture_weak = picture.downgrade();
+				let image_weak = image.downgrade();
 
 				let handle = glib::MainContext::default().spawn_local(async move {
 					let image = match glycin::Loader::new(file).load().await {
@@ -125,12 +127,13 @@ impl ObjectImpl for LauncherImagePrivate {
 					let mut dir: isize = 1;
 
 					loop {
-						let Some(picture) = picture_weak.upgrade() else {
+						let Some(image) = image_weak.upgrade() else {
 							return;
 						};
 
 						let (tex, delay) = &frames[i as usize];
-						picture.set_paintable(Some(tex));
+						image.set_paintable(Some(tex));
+						image.set_size_request(MAX_GIF_SIZE, MAX_GIF_SIZE);
 						glib::timeout_future(*delay).await;
 
 						if frames.len() > 1 {

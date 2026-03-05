@@ -1,0 +1,39 @@
+using Gtk 4.0;
+using Astal 4.0;
+
+template $Bar: Astal.Window {
+  layer: top;
+  anchor: top;
+  exclusivity: exclusive;
+  name: "bar";
+  keymode: none;
+  monitor: bind template.monitor-index;
+  width-request: bind template.monitor-width;
+
+  styles [
+    "bar",
+  ]
+
+  child: Gtk.CenterBox {
+    orientation: horizontal;
+
+    start-widget: Gtk.Box start_box {
+      hexpand: true;
+      spacing: 8;
+      orientation: horizontal;
+    };
+
+    center-widget: Gtk.Box center_box {
+      hexpand: false;
+      spacing: 8;
+      orientation: horizontal;
+    };
+
+    end-widget: Gtk.Box end_box {
+      hexpand: true;
+      spacing: 8;
+      orientation: horizontal;
+      halign: end;
+    };
+  };
+}

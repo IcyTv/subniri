@@ -1,21 +1,22 @@
 use astal_io::Time;
 use astal_io::prelude::TimeExt;
 use gtk4::glib::object::Cast;
-use gtk4::glib::{DateTime, SignalHandlerId, clone};
+use gtk4::glib::{DateTime, clone};
 use gtk4::prelude::*;
 
 use crate::icons;
 use crate::popups::clock::ClockPopup;
 
 pub struct Clock {
-	container:      gtk4::Widget,
-	timer:          Time,
-	signal_handler: Option<SignalHandlerId>,
+	container: gtk4::Widget,
 }
 
 impl Clock {
 	pub fn new() -> Self {
-		let button = gtk4::Button::builder().name("clock").css_classes(["clock"]).build();
+		let button = gtk4::Button::builder()
+			.name("clock")
+			.css_classes(["clock", "bar-button"])
+			.build();
 		let container = gtk4::Box::builder()
 			.name("clock")
 			.spacing(6)
@@ -46,7 +47,7 @@ impl Clock {
 			}
 		));
 
-		let handler = timer.connect_now(clone!(
+		timer.connect_now(clone!(
 			#[weak]
 			date_label,
 			move |_| {
@@ -55,15 +56,13 @@ impl Clock {
 
 				date_label.set_markup(&date);
 
-				let Ok(time) = time.format("%T") else { return };
+				let Ok(time) = time.format("%H:%M") else { return };
 				time_label.set_markup(&time);
 			}
 		));
 
 		Self {
 			container: button.upcast(),
-			timer,
-			signal_handler: Some(handler),
 		}
 	}
 

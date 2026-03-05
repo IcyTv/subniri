@@ -1,5 +1,3 @@
-use std::time::{Duration, SystemTime};
-
 use clap::Parser;
 use gtk4::gdk::Display;
 use gtk4::prelude::*;

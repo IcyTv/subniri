@@ -33,7 +33,7 @@ impl Taskbar {
 			.orientation(gtk4::Orientation::Horizontal)
 			.model(&selection_model)
 			.factory(&item_factory)
-			.css_classes(vec!["taskbar"])
+			.css_classes(["taskbar"])
 			.build();
 
 		glib::spawn_future_local(clone!(

@@ -14,9 +14,13 @@ template $LauncherPopup: Gtk.Popover {
       hexpand: true;
 
       Gtk.Box gif_box {
+        styles [
+          "gif-box",
+        ]
+
+        valign: start;
         hexpand: true;
         halign: fill;
-        valign: start;
       }
 
       Gtk.Box power_icons {

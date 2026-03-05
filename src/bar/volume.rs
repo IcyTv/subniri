@@ -17,7 +17,6 @@ impl Volume {
 	pub fn new() -> Self {
 		let button_box = gtk4::Box::builder()
 			.name("wireplumber")
-			.css_classes(["volume"])
 			.orientation(gtk4::Orientation::Horizontal)
 			.spacing(4)
 			.build();
@@ -29,7 +28,10 @@ impl Volume {
 		button_box.append(&volume_icon);
 		button_box.append(&label);
 
-		let widget = gtk4::Button::builder().child(&button_box).build();
+		let widget = gtk4::Button::builder()
+			.css_classes(["volume", "bar-button"])
+			.child(&button_box)
+			.build();
 
 		let wp = Wp::default();
 		let audio = wp.audio();

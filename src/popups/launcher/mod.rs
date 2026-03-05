@@ -75,17 +75,17 @@ mod imp {
 	#[template(file = "./src/popups/launcher/launcher.blp")]
 	pub struct LauncherPopup {
 		#[template_child]
-		gif_box:         TemplateChild<gtk4::Box>,
+		gif_box: TemplateChild<gtk4::Box>,
 		#[template_child]
-		power_icons:     TemplateChild<gtk4::Box>,
+		power_icons: TemplateChild<gtk4::Box>,
 		#[template_child]
 		quick_apps_grid: TemplateChild<gtk4::Grid>,
 		#[template_child]
-		tool_grid:       TemplateChild<gtk4::Grid>,
+		tool_grid: TemplateChild<gtk4::Grid>,
 		#[template_child]
-		status_buttons:  TemplateChild<gtk4::Box>,
+		status_buttons: TemplateChild<gtk4::Box>,
 		#[template_child]
-		folder_grid:     TemplateChild<gtk4::Grid>,
+		folder_grid: TemplateChild<gtk4::Grid>,
 	}
 
 	#[glib::object_subclass]
@@ -138,6 +138,7 @@ mod imp {
 					.css_classes(vec![class_name.to_string()])
 					.icon_name(icon.name())
 					.vexpand(true)
+					.hexpand(true)
 					.build();
 
 				button.connect_clicked(move |_| {
@@ -198,19 +199,63 @@ mod imp {
 }
 
 fn power_off() {
-	let _ = gio::AppInfo::launch_default_for_uri("system-shutdown:", None::<&gio::AppLaunchContext>);
+	match system_shutdown::shutdown() {
+		Ok(_) => (),
+		Err(error) => {
+			// Open a message dialog with the error
+			let dialog = gtk4::AlertDialog::builder()
+				.buttons(["OK"])
+				.message("Failed to power off")
+				.detail(&error.to_string())
+				.build();
+			dialog.show(None::<&gtk4::Window>);
+		}
+	}
 }
 
 fn restart() {
-	let _ = gio::AppInfo::launch_default_for_uri("system-reboot:", None::<&gio::AppLaunchContext>);
+	match system_shutdown::reboot() {
+		Ok(_) => (),
+		Err(error) => {
+			// Open a message dialog with the error
+			let dialog = gtk4::AlertDialog::builder()
+				.buttons(["OK"])
+				.message("Failed to restart")
+				.detail(&error.to_string())
+				.build();
+			dialog.show(None::<&gtk4::Window>);
+		}
+	}
 }
 
 fn logout() {
-	let _ = gio::AppInfo::launch_default_for_uri("system-log-out:", None::<&gio::AppLaunchContext>);
+	match system_shutdown::logout() {
+		Ok(_) => (),
+		Err(error) => {
+			// Open a message dialog with the error
+			let dialog = gtk4::AlertDialog::builder()
+				.buttons(["OK"])
+				.message("Failed to log out")
+				.detail(&error.to_string())
+				.build();
+			dialog.show(None::<&gtk4::Window>);
+		}
+	}
 }
 
 fn suspend() {
-	let _ = gio::AppInfo::launch_default_for_uri("system-suspend:", None::<&gio::AppLaunchContext>);
+	match system_shutdown::sleep() {
+		Ok(_) => (),
+		Err(error) => {
+			// Open a message dialog with the error
+			let dialog = gtk4::AlertDialog::builder()
+				.buttons(["OK"])
+				.message("Failed to suspend")
+				.detail(&error.to_string())
+				.build();
+			dialog.show(None::<&gtk4::Window>);
+		}
+	}
 }
 
 fn launch(name: &str) {
@@ -284,7 +329,7 @@ fn screenshot() {
 
 	let reply = socket.send(Request::Action(Action::Screenshot {
 		show_pointer: false,
-		path:         None,
+		path: None,
 	}));
 	match reply {
 		Ok(Ok(Response::Handled)) => (),

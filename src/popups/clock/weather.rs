@@ -1,10 +1,8 @@
 use std::cell::RefCell;
 
-use astal_io::Time;
 use astal_io::prelude::*;
 use glib::{Properties, clone};
 use gtk4::CompositeTemplate;
-use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use libgweather::{Info, Location, Provider, TemperatureUnit};
 
@@ -39,25 +37,25 @@ mod imp {
 		weather_info: RefCell<Info>,
 
 		#[property(get, set)]
-		weather_icon:         RefCell<String>,
+		weather_icon: RefCell<String>,
 		#[property(get, set)]
-		temperature:          RefCell<String>,
+		temperature: RefCell<String>,
 		#[property(get, set)]
-		conditions:           RefCell<String>,
+		conditions: RefCell<String>,
 		#[property(get, set)]
-		wind_speed:           RefCell<String>,
+		wind_speed: RefCell<String>,
 		#[property(get, set)]
-		humidity:             RefCell<String>,
+		humidity: RefCell<String>,
 		#[property(get, set)]
 		apparent_temperature: RefCell<String>,
 
 		// "Static" Icons
 		#[property(get, set)]
-		weather_wind_icon:     RefCell<String>,
+		weather_wind_icon: RefCell<String>,
 		#[property(get, set)]
 		weather_humidity_icon: RefCell<String>,
 		#[property(get, set)]
-		temperature_icon:      RefCell<String>,
+		temperature_icon: RefCell<String>,
 	}
 
 	#[glib::object_subclass]

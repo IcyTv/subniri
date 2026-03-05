@@ -32,6 +32,8 @@ which = "8.0.0"
 glycin = { version = "3.0.7", features = ["gdk4"] }
 astal-bluetooth-sys = "0.1.0"
 libgweather = "4.6.0"
+astal-notifd = "0.1.0"
+system_shutdown = "4.1.0"
 
 [build-dependencies]
 glib-build-tools = "0.21.0"
