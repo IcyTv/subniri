@@ -41,20 +41,20 @@ mod imp {
 		#[property(get, set)]
 		shuffle_icon: RefCell<String>,
 		#[property(get, set)]
-		back_icon:    RefCell<String>,
+		back_icon: RefCell<String>,
 		#[property(get, set)]
-		play_icon:    RefCell<String>,
+		play_icon: RefCell<String>,
 		#[property(get, set)]
 		forward_icon: RefCell<String>,
 		#[property(get, set)]
-		repeat_icon:  RefCell<String>,
+		repeat_icon: RefCell<String>,
 
 		#[property(get, set)]
-		title_text:  RefCell<String>,
+		title_text: RefCell<String>,
 		#[property(get, set)]
 		artist_text: RefCell<String>,
 		#[property(get, set)]
-		album_text:  RefCell<String>,
+		album_text: RefCell<String>,
 
 		#[property(get, set)]
 		playback_duration: RefCell<f64>,
@@ -66,15 +66,15 @@ mod imp {
 		#[property(get, set)]
 		is_shuffle_active: RefCell<bool>,
 		#[property(get, set)]
-		loop_supported:    RefCell<bool>,
+		loop_supported: RefCell<bool>,
 		#[property(get, set)]
-		is_repeat_active:  RefCell<bool>,
+		is_repeat_active: RefCell<bool>,
 
 		#[property(get, set)]
 		cover_image: RefCell<Option<gtk4::gdk::Paintable>>,
 
 		#[template_child]
-		overlay:     TemplateChild<gtk4::Overlay>,
+		overlay: TemplateChild<gtk4::Overlay>,
 		#[template_child]
 		content_box: TemplateChild<gtk4::Box>,
 	}
@@ -169,7 +169,7 @@ mod imp {
 			// to avoid YouTube position jumping bug
 			player
 				.bind_property("position", &*obj, "playback-progress")
-				.bidirectional()
+				// .bidirectional()
 				.sync_create()
 				.build();
 

@@ -41,7 +41,7 @@ impl Bluetooth {
 				|_: Option<glib::Object>, is_powered: bool, is_connected: bool| -> glib::GString {
 					if is_connected {
 						// TODO get proper connected icon
-						icons::Icon::Bluetooth.name().into()
+						icons::Icon::BluetoothConnected.name().into()
 					} else if is_powered {
 						icons::Icon::Bluetooth.name().into()
 					} else {

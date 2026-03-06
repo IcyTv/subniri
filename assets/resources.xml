@@ -1,11 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
   <gresource prefix="/de/icytv/niribar/assets/gifs">
-	<file>ice_cream.gif</file>
-	<file>plant.gif</file>
-	<file>sleepy.gif</file>
-	<file>snowy.gif</file>
-	<file>travel.gif</file>
-	<file>wave.gif</file>
+		<file>chibi.gif</file>
   </gresource>
 </gresources>

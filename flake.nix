@@ -223,6 +223,9 @@
               libgweather
             ];
 
+          LUCIDE_ICONS_PATH = "${lucideIcons}";
+          SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
+
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages = [
             # pkgs.ripgrep
