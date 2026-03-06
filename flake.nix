@@ -157,6 +157,16 @@
 
             LUCIDE_ICONS_PATH = "${lucideIcons}";
             SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
+
+            # Ensure glycin finds its loaders in the wrapped binary (wrapGAppsHook4)
+            # and that bubblewrap is on PATH for glycin-image-rs sandboxing.
+            preFixup = ''
+              gappsWrapperArgs+=(
+                --set GLYCIN_LOADERS_PATH ${pkgs.glycin-loaders}/libexec/glycin-loaders/2+
+                --prefix XDG_DATA_DIRS : ${pkgs.glycin-loaders}/share
+                --prefix PATH : ${pkgs.bubblewrap}/bin
+              )
+            '';
           }
         );
       in {

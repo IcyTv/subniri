@@ -78,6 +78,8 @@ const BRAND_ICONS: &[&str] = &["discord", "spotify", "firefox", "nixos"];
 fn main() {
 	println!("cargo:rerun-if-env-changed=LUCIDE_ICONS_PATH");
 	println!("cargo:rerun-if-env-changed=SIMPLE_ICONS_PATH");
+	println!("cargo:rerun-if-changed=assets/resources.xml");
+	println!("cargo:rerun-if-changed=assets");
 
 	let out_dir = std::env::var("OUT_DIR").unwrap();
 	let dest_path = Path::new(&out_dir);
