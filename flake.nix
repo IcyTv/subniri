@@ -37,10 +37,23 @@
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
+        inherit (pkgs) lib;
+        unfilteredSrc = ./.;
+        src = lib.fileset.toSource {
+          root = unfilteredSrc;
+          fileset = lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources unfilteredSrc)
+            (lib.fileset.fileFilter (file: file.hasExt "blp") unfilteredSrc)
+            (lib.fileset.maybeMissing ./assets)
+            ./src/style.css
+          ];
+        };
+
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
         commonArgs = {
-          src = craneLib.cleanCargoSource ./.;
+          # Keep Cargo sources while also including assets/*.gif and resources.xml
+          inherit src;
           strictDeps = true;
 
           buildInputs = with pkgs;
@@ -76,16 +89,21 @@
               pkgs.libiconv
             ];
 
-           nativeBuildInputs = with pkgs; [
+          nativeBuildInputs = with pkgs; [
             pkg-config
             pre-commit
             ags
             blueprint-compiler
             glib
             wrapGAppsHook4
-           ];
-
-           doCheck = false;
+          ];
+          # Disable all checks; otherwise pytestCheckHook from dependencies runs
+          # and fails because there are no Python tests here.
+          doCheck = false;
+          doInstallCheck = false;
+          checkPhase = "true";
+          installCheckPhase = "true";
+          nativeCheckInputs = [];
         };
 
         lucideIcons = pkgs.stdenv.mkDerivation {
@@ -124,7 +142,14 @@
         niribar = craneLib.buildPackage (
           commonArgs
           // {
-            cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+            cargoArtifacts = craneLib.buildDepsOnly (commonArgs
+              // {
+                doCheck = false;
+                doInstallCheck = false;
+                checkPhase = "true";
+                installCheckPhase = "true";
+                nativeCheckInputs = [];
+              });
 
             # Additional environment variables or build phases/hooks can be set
             # here *without* rebuilding all dependency crates
