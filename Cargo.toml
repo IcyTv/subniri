@@ -34,6 +34,7 @@ astal-bluetooth-sys = "0.1.0"
 libgweather = "4.6.0"
 astal-notifd = "0.1.0"
 system_shutdown = "4.1.0"
+astal-tray = "0.1.0"
 
 [build-dependencies]
 glib-build-tools = "0.21.0"

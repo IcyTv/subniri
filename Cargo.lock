@@ -214,6 +214,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "astal-tray"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f9fa605c158b285b32ec31de55c9fd6ea0258ca57d1da59f313a21a6a327889"
+dependencies = [
+ "astal-tray-sys",
+ "gdk-pixbuf",
+ "gio",
+ "glib",
+]
+
+[[package]]
+name = "astal-tray-sys"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4005be71aa8df20ca5fe4cfd3c369000ed768161e66967fc4dcea8eb80629043"
+dependencies = [
+ "gdk-pixbuf-sys",
+ "gio-sys",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "system-deps",
+]
+
+[[package]]
 name = "astal-wp"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1414,7 +1440,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.61.2",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -1684,6 +1710,7 @@ dependencies = [
  "astal-mpris",
  "astal-network",
  "astal-notifd",
+ "astal-tray",
  "astal-wp",
  "astal4",
  "async-channel",

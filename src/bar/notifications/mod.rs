@@ -1,13 +1,14 @@
-use astal_notifd::Notifd;
 use astal_notifd::prelude::*;
-use glib::{Properties, clone};
-use gtk4::CompositeTemplate;
+use astal_notifd::Notifd;
+use glib::{clone, Properties};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
+use gtk4::CompositeTemplate;
 
 use std::cell::RefCell;
 
 use crate::icons::Icon;
+use crate::popups::notifications::NotificationsPopup;
 
 glib::wrapper! {
 	pub struct Notifications(ObjectSubclass<imp::Notifications>)
@@ -59,6 +60,18 @@ mod imp {
 			let notifd = Notifd::default();
 
 			let obj = self.obj();
+			let popup = NotificationsPopup::new();
+			popup.set_parent(&*obj);
+
+			obj.connect_clicked(clone!(
+				#[weak]
+				popup,
+				move |_| {
+					popup.popup();
+				}
+			));
+
+			obj.set_has_unread(!notifd.notifications().is_empty());
 			notifd.connect_notify_local(
 				None,
 				clone!(
@@ -83,10 +96,5 @@ mod imp {
 	}
 
 	impl WidgetImpl for Notifications {}
-	impl ButtonImpl for Notifications {
-		fn clicked(&self) {
-			// Handle button click
-			println!("Notifications button clicked!");
-		}
-	}
+	impl ButtonImpl for Notifications {}
 }

@@ -93,6 +93,101 @@ button {
 .bar .notifications {
 }
 
+.notifications-popup {
+	padding: 10px;
+	min-width: 320px;
+}
+
+.notifications-section-title {
+	font-weight: bold;
+	font-size: 0.9rem;
+	color: @accent_color;
+}
+
+.tray-flow {
+	padding: 2px 0;
+}
+
+.tray-inline-menu {
+	background-color: @card_bg_color;
+	border-radius: 8px;
+	padding: 4px;
+	margin-top: 0;
+	box-shadow: 0 6px 16px alpha(black, 0.24);
+}
+
+.tray-inline-menu menu,
+.tray-inline-menu menubar {
+	background-color: transparent;
+}
+
+.tray-item {
+	background-color: transparent;
+	border-radius: 0;
+	padding: 0;
+	min-width: 0;
+	min-height: 0;
+}
+
+.tray-item:hover {
+	background-color: transparent;
+	filter: brightness(1.1);
+}
+
+.notifications-clear-all {
+	background-color: transparent;
+	color: @blue_1;
+	padding: 0;
+	min-height: 0;
+	font-weight: 600;
+}
+
+.notifications-clear-all:hover {
+	background-color: transparent;
+	text-decoration: underline;
+}
+
+.notifications-list {
+	background-color: transparent;
+}
+
+.notification-item {
+	background-color: @card_bg_color;
+	border-radius: 8px;
+	padding: 8px;
+	margin: 2px 0;
+}
+
+.notification-app-icon {
+	color: @window_fg_color;
+}
+
+.notification-title {
+	font-weight: 700;
+	color: @window_fg_color;
+}
+
+.notification-body {
+	color: alpha(@window_fg_color, 0.68);
+	font-size: 0.92rem;
+}
+
+.notification-dismiss {
+	background-color: transparent;
+	padding: 2px;
+}
+
+.notification-actions > button {
+	background-color: shade(@card_bg_color, 1.1);
+	font-size: 0.85rem;
+	padding: 2px 8px;
+}
+
+.notifications-empty {
+	color: alpha(@window_fg_color, 0.7);
+	padding: 10px;
+}
+
 popover {
 	background-color: transparent;
 }

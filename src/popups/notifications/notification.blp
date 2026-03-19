@@ -1,8 +1,109 @@
 using Gtk 4.0;
-using Astal 4.0;
 
 template $NotificationsPopup: Gtk.Popover {
   autohide: true;
+  cascade-popdown: false;
   has_arrow: false;
   position: top;
+
+  child: Gtk.Overlay root_overlay {
+    child: Gtk.Box {
+      orientation: vertical;
+      spacing: 10;
+
+      styles [
+        "notifications-popup",
+      ]
+
+      Gtk.Label {
+        label: "Tray";
+        halign: start;
+
+        styles [
+          "notifications-section-title",
+        ]
+      }
+
+      Gtk.FlowBox tray_flow {
+        selection-mode: none;
+        column-spacing: 6;
+        row-spacing: 6;
+        min-children-per-line: 1;
+        max-children-per-line: 8;
+
+        styles [
+          "tray-flow",
+        ]
+      }
+
+      Gtk.Separator {
+        orientation: horizontal;
+      }
+
+      Gtk.Box {
+        orientation: horizontal;
+        spacing: 8;
+
+        Gtk.Label {
+          label: "Notifications";
+          halign: start;
+          hexpand: true;
+
+          styles [
+            "notifications-section-title",
+          ]
+        }
+
+        Gtk.Button {
+          label: "Clear All";
+          halign: end;
+          valign: center;
+
+          styles [
+            "notifications-clear-all",
+          ]
+
+          clicked => $on_clear_all() swapped;
+        }
+      }
+
+      Gtk.Box empty_state {
+        orientation: horizontal;
+        halign: center;
+        visible: false;
+
+        Gtk.Label {
+          label: "No notifications";
+          styles ["notifications-empty"]
+        }
+      }
+
+      Gtk.ScrolledWindow {
+        max-content-height: 340;
+        hscrollbar-policy: never;
+
+        Gtk.ListView notifications_list_view {
+          orientation: vertical;
+
+          styles [
+            "notifications-list",
+          ]
+        }
+      }
+    };
+
+    [overlay]
+    Gtk.Box tray_menu_box {
+      orientation: vertical;
+      spacing: 4;
+      visible: false;
+      halign: start;
+      valign: start;
+      margin-top: 28;
+
+      styles [
+        "tray-inline-menu",
+      ]
+    }
+  };
 }

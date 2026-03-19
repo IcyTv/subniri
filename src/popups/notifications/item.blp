@@ -1,0 +1,78 @@
+using Gtk 4.0;
+using AstalNotifd 0.1;
+
+template $NotificationItem: Gtk.Box {
+  orientation: vertical;
+  spacing: 8;
+
+  styles [
+    "notification-item",
+  ]
+
+  Gtk.Box {
+    orientation: horizontal;
+    spacing: 10;
+
+    Gtk.Image app_icon {
+      pixel-size: 18;
+
+      styles [
+        "notification-app-icon",
+      ]
+    }
+
+    Gtk.Box {
+      orientation: vertical;
+      spacing: 3;
+      hexpand: true;
+
+      Gtk.Label {
+        halign: start;
+        xalign: 0;
+        wrap: true;
+        wrap-mode: word_char;
+        max-width-chars: 42;
+        label: bind (template.notification as <AstalNotifd.Notification>).summary;
+
+        styles [
+          "notification-title",
+        ]
+      }
+
+      Gtk.Label {
+        halign: start;
+        xalign: 0;
+        wrap: true;
+        wrap-mode: word_char;
+        max-width-chars: 42;
+        lines: 3;
+        label: bind (template.notification as <AstalNotifd.Notification>).body;
+
+        styles [
+          "notification-body",
+        ]
+      }
+    }
+
+    Gtk.Button {
+      icon-name: "window-close-symbolic";
+      valign: start;
+
+      styles [
+        "notification-dismiss",
+      ]
+
+      clicked => $on_dismiss() swapped;
+    }
+  }
+
+  Gtk.Box action_buttons {
+    orientation: horizontal;
+    spacing: 6;
+    hexpand: true;
+
+    styles [
+      "notification-actions",
+    ]
+  }
+}

@@ -83,6 +83,7 @@
               cacert
               gnutls
               gsettings-desktop-schemas
+              appmenu-glib-translator
             ]
             ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               # Additional darwin specific inputs can be set here
@@ -221,6 +222,7 @@
               gnutls
               gsettings-desktop-schemas
               libgweather
+              appmenu-glib-translator
             ];
 
           LUCIDE_ICONS_PATH = "${lucideIcons}";
