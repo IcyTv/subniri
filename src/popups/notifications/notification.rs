@@ -7,7 +7,7 @@ use astal_tray::{Tray, TrayItem};
 use glib::{clone, Properties};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use gtk4::{gio, CompositeTemplate};
+use gtk4::{gdk, gio, CompositeTemplate};
 
 use super::item::NotificationItem;
 
@@ -180,7 +180,49 @@ mod imp {
 				}
 			}
 
+			self.queue_notifications_height_update();
+
 			self.empty_state.set_visible(notifd.notifications().is_empty());
+		}
+
+		fn queue_notifications_height_update(&self) {
+			let weak_imp = self.downgrade();
+			glib::idle_add_local_once(move || {
+				if let Some(imp) = weak_imp.upgrade() {
+					imp.update_notifications_height();
+				}
+			});
+		}
+
+		fn update_notifications_height(&self) {
+			let Some(scroller) = self
+				.notifications_list_view
+				.get()
+				.parent()
+				.and_downcast::<gtk4::ScrolledWindow>()
+			else {
+				return;
+			};
+
+			scroller.set_propagate_natural_height(true);
+
+			let default_height = 340;
+			let max_content_height = self
+				.obj()
+				.native()
+				.and_then(|native| native.surface())
+				.and_then(|surface| gdk::Display::default().and_then(|display| display.monitor_at_surface(&surface)))
+				.map(|monitor| (monitor.geometry().height() / 2).max(1))
+				.unwrap_or(default_height);
+
+			let (_, natural_height, _, _) = self
+				.notifications_list_view
+				.get()
+				.measure(gtk4::Orientation::Vertical, -1);
+			let target_height = natural_height.max(1).min(max_content_height);
+
+			scroller.set_min_content_height(target_height);
+			scroller.set_max_content_height(max_content_height);
 		}
 
 		fn rebuild_tray_items(&self, tray: &Tray) {
