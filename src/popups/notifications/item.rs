@@ -7,6 +7,8 @@ use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::CompositeTemplate;
 
+use crate::icons;
+
 glib::wrapper! {
 	pub struct NotificationItem(ObjectSubclass<imp::NotificationItem>)
 		@extends gtk4::Box, gtk4::Widget,
@@ -103,64 +105,11 @@ mod imp {
 	#[gtk4::template_callbacks]
 	impl NotificationItem {
 		fn set_best_app_icon(&self, notification: &Notification) {
-			let icon_theme = gtk4::IconTheme::for_display(
-				&gtk4::gdk::Display::default().expect("default display should be available"),
-			);
-
-			let app_icon = notification.app_icon();
-			if !app_icon.is_empty() {
-				if app_icon.contains('/') {
-					self.app_icon.set_from_file(Some(app_icon.as_str()));
-					return;
-				}
-
-				if icon_theme.has_icon(app_icon.as_str()) {
-					self.app_icon.set_icon_name(Some(app_icon.as_str()));
-					return;
-				}
+			if let Some(icon) = icons::resolve_notification_icon(notification) {
+				self.app_icon.set_from_gicon(&icon);
+			} else {
+				self.app_icon.set_icon_name(Some("dialog-information-symbolic"));
 			}
-
-			let image = notification.image();
-			if !image.is_empty() {
-				if image.contains('/') {
-					self.app_icon.set_from_file(Some(image.as_str()));
-				} else if icon_theme.has_icon(image.as_str()) {
-					self.app_icon.set_icon_name(Some(image.as_str()));
-				} else {
-					self.try_desktop_entry_icon(notification, &icon_theme);
-				}
-				return;
-			}
-
-			self.try_desktop_entry_icon(notification, &icon_theme);
-		}
-
-		fn try_desktop_entry_icon(&self, notification: &Notification, icon_theme: &gtk4::IconTheme) {
-			let desktop_entry = notification.desktop_entry();
-			if !desktop_entry.is_empty() {
-				let desktop_file = format!("{desktop_entry}.desktop");
-				if let Some(app_info) = gtk4::gio::DesktopAppInfo::new(&desktop_file)
-					&& let Some(icon) = app_info.icon()
-				{
-					self.app_icon.set_from_gicon(&icon);
-					return;
-				}
-				if icon_theme.has_icon(desktop_entry.as_str()) {
-					self.app_icon.set_icon_name(Some(desktop_entry.as_str()));
-					return;
-				}
-			}
-
-			let app_name = notification.app_name();
-			if !app_name.is_empty() {
-				let normalized = app_name.to_ascii_lowercase().replace(' ', "-");
-				if icon_theme.has_icon(&normalized) {
-					self.app_icon.set_icon_name(Some(&normalized));
-					return;
-				}
-			}
-
-			self.app_icon.set_icon_name(Some("dialog-information-symbolic"));
 		}
 
 		#[template_callback]

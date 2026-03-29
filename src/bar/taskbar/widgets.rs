@@ -1,14 +1,13 @@
 use std::cell::RefCell;
 
-use glib::Properties;
 use glib::subclass::InitializingObject;
-use gtk4::CompositeTemplate;
-use gtk4::Widget;
+use glib::Properties;
 use gtk4::gio;
-use gtk4::gio::prelude::AppInfoExt;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use niri_ipc::{Action, Request, Workspace, WorkspaceReferenceArg, socket::Socket};
+use gtk4::CompositeTemplate;
+use gtk4::Widget;
+use niri_ipc::{socket::Socket, Action, Request, Workspace, WorkspaceReferenceArg};
 use niri_ipc::{Window as NiriWindow, WindowLayout};
 
 use crate::icons;
@@ -220,9 +219,7 @@ impl NiriWindowWidget {
 	}
 
 	fn get_icon_for_app_id(app_id: impl AsRef<str>) -> Option<gio::Icon> {
-		let app_info = gio::DesktopAppInfo::new(&format!("{}.desktop", app_id.as_ref()))?;
-
-		app_info.icon()
+		crate::icons::resolve_app_icon_from_app_id(app_id.as_ref())
 	}
 }
 
