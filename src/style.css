@@ -158,6 +158,38 @@ button {
 	margin: 2px 0;
 }
 
+.notification-toast-window {
+	background-color: transparent;
+}
+
+.notification-toast-stack {
+	padding: 2px;
+}
+
+.notification-toast {
+	min-width: 320px;
+}
+
+.notification-item.notification-level-normal {
+	border: 1px solid @blue_1;
+	box-shadow: 0 6px 18px alpha(@blue_1, 0.22);
+}
+
+.notification-item.notification-level-critical {
+	border: 1px solid @red_1;
+	box-shadow: 0 6px 18px alpha(@red_1, 0.28);
+}
+
+.notification-item.notification-level-low {
+	border: 1px solid alpha(@window_fg_color, 0.35);
+	box-shadow: 0 6px 18px alpha(@window_fg_color, 0.12);
+}
+
+.notification-item.notification-level-toast {
+	border-width: 1px;
+	border-style: solid;
+}
+
 .notification-app-icon {
 	color: @window_fg_color;
 }

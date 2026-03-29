@@ -10,6 +10,7 @@ use std::time::Duration;
 mod bar;
 mod icons;
 mod popups;
+mod shell;
 
 #[derive(Clone, Parser)]
 pub struct Args {
@@ -107,10 +108,20 @@ fn load_css() {
 fn build_ui(args: Args) -> impl Fn(&gtk4::Application) {
 	move |app| {
 		let display = Display::default().expect("Could not get a display");
+		let notifications_overlay = shell::notifications::NotificationsOverlay::new_primary(&display);
 		let bars = bar::Bar::for_all_monitors(&display, &args);
 		for bar in bars {
 			app.add_window(&bar.window);
 			bar.window.present();
+		}
+
+		if let Some(overlay) = notifications_overlay {
+			// SAFETY: `gtk4::Application` is a GObject and stores the overlay
+			// for the full application lifetime.
+			unsafe {
+				app.set_data("niribar.notifications-overlay", overlay.clone());
+			}
+			app.add_window(&overlay.window);
 		}
 	}
 }
