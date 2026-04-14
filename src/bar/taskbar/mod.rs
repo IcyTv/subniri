@@ -63,6 +63,7 @@ impl Taskbar {
 						WorkspacesChanged { workspaces } => {
 							workspace_tracker.update(workspaces);
 							sync_workspace_items(&store, &workspace_tracker);
+							reconcile_window_items_with_workspaces(&store, &workspace_tracker);
 							update_workspace_focus(&store, workspace_tracker.focused_workspace_id());
 						}
 						WindowsChanged { windows } => {
@@ -274,6 +275,26 @@ fn sync_workspace_items(store: &gio::ListStore, tracker: &WorkspaceTracker) {
 	});
 }
 
+fn reconcile_window_items_with_workspaces(store: &gio::ListStore, tracker: &WorkspaceTracker) {
+	for index in (0..store.n_items()).rev() {
+		if let Some(obj) = store.item(index)
+			&& let Ok(item) = obj.downcast::<TaskbarItem>()
+			&& item.is_window()
+		{
+			let workspace_id = item.workspace_id();
+			if let Some(display_index) = tracker.display_index(workspace_id) {
+				if let Some(widget) = item.window() {
+					widget.set_workspace_index(display_index);
+					widget.set_workspace_id(workspace_id);
+					store.items_changed(index, 1, 1);
+				}
+			} else {
+				store.remove(index);
+			}
+		}
+	}
+}
+
 fn rebuild_window_items(store: &gio::ListStore, tracker: &WorkspaceTracker, windows: &[Window]) {
 	remove_window_items(store);
 
@@ -380,18 +401,40 @@ fn event_stream() -> impl Stream<Item = Event> + use<> {
 	let (tx, rx) = async_channel::unbounded();
 
 	gio::spawn_blocking(move || {
-		let mut socket = niri_ipc::socket::Socket::connect().unwrap();
+		loop {
+			let mut socket = match niri_ipc::socket::Socket::connect() {
+				Ok(socket) => socket,
+				Err(err) => {
+					eprintln!("Failed to connect to niri IPC socket: {err}");
+					std::thread::sleep(std::time::Duration::from_secs(1));
+					continue;
+				}
+			};
 
-		let Ok(Response::Handled) = socket.send(Request::EventStream).unwrap() else {
-			panic!("Failed to request event stream");
-		};
+			match socket.send(Request::EventStream) {
+				Ok(Ok(Response::Handled)) => {}
+				Ok(reply) => {
+					eprintln!("Failed to request event stream: {reply:?}");
+					std::thread::sleep(std::time::Duration::from_secs(1));
+					continue;
+				}
+				Err(err) => {
+					eprintln!("Failed to request event stream: {err}");
+					std::thread::sleep(std::time::Duration::from_secs(1));
+					continue;
+				}
+			}
 
-		let mut event_stream = socket.read_events();
-		while let Ok(event) = event_stream() {
-			tx.send_blocking(event).unwrap();
+			let mut next_event = socket.read_events();
+			while let Ok(event) = next_event() {
+				if tx.send_blocking(event).is_err() {
+					return;
+				}
+			}
+
+			eprintln!("Niri IPC event stream disconnected, reconnecting...");
+			std::thread::sleep(std::time::Duration::from_secs(1));
 		}
-
-		panic!("Niri IPC event stream ended unexpectedly");
 	});
 
 	async_stream::stream! {
