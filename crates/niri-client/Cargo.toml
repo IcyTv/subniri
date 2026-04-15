@@ -1,0 +1,10 @@
+[package]
+name = "niri-client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+async-channel.workspace = true
+async-stream.workspace = true
+futures.workspace = true
+niri-ipc = "25.11.0"

@@ -7,11 +7,6 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-mod bar;
-mod icons;
-mod popups;
-mod shell;
-
 #[derive(Clone, Parser)]
 pub struct Args {
 	/// Run with gtk inspector enabled
@@ -36,8 +31,8 @@ fn main() {
 	app.connect_startup(|_| {
 		println!("=== STARTUP CALLED ===");
 		load_css();
+		bar::init_resources();
 		icons::register_bundled_icons();
-		gtk4::gio::resources_register_include!("assets.gresource").expect("Failed to load assets");
 	});
 	app.connect_activate(build_ui(args.clone()));
 
@@ -105,11 +100,11 @@ fn load_css() {
 	);
 }
 
-fn build_ui(args: Args) -> impl Fn(&gtk4::Application) {
+fn build_ui(_args: Args) -> impl Fn(&gtk4::Application) {
 	move |app| {
 		let display = Display::default().expect("Could not get a display");
-		let notifications_overlay = shell::notifications::NotificationsOverlay::new_primary(&display);
-		let bars = bar::Bar::for_all_monitors(&display, &args);
+		let notifications_overlay = bar::NotificationsOverlay::new_primary(&display);
+		let bars = bar::Bar::for_all_monitors(&display);
 		for bar in bars {
 			app.add_window(&bar.window);
 			bar.window.present();

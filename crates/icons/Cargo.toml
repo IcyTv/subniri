@@ -1,0 +1,11 @@
+[package]
+name = "icons"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+gtk4.workspace = true
+
+[build-dependencies]
+glib-build-tools.workspace = true
+heck.workspace = true
