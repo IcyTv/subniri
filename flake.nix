@@ -1,5 +1,5 @@
 {
-  description = "Build a cargo project without extra checks";
+  description = "Build a cargo workspace";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -45,6 +45,7 @@
             (craneLib.fileset.commonCargoSources unfilteredSrc)
             (lib.fileset.fileFilter (file: file.hasExt "blp") unfilteredSrc)
             (lib.fileset.maybeMissing ./assets)
+            (lib.fileset.maybeMissing ./crates/bar/assets)
             ./src/style.css
           ];
         };
@@ -140,21 +141,21 @@
           hash = "sha256-bDOiWqonxrcuc5fLvm6p+Y0KpcKlrZibaLROkpfA+PU=";
         };
 
-        niribar = craneLib.buildPackage (
+        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+        individualCrateArgs =
           commonArgs
           // {
-            cargoArtifacts = craneLib.buildDepsOnly (commonArgs
-              // {
-                doCheck = false;
-                doInstallCheck = false;
-                checkPhase = "true";
-                installCheckPhase = "true";
-                nativeCheckInputs = [];
-              });
+            inherit cargoArtifacts;
+            inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
+            doCheck = false;
+          };
 
-            # Additional environment variables or build phases/hooks can be set
-            # here *without* rebuilding all dependency crates
-            # MY_CUSTOM_VAR = "some value";
+        subniri = craneLib.buildPackage (
+          individualCrateArgs
+          // {
+            pname = "subniri";
+            cargoExtraArgs = "-p subniri --bin subniri";
 
             LUCIDE_ICONS_PATH = "${lucideIcons}";
             SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
@@ -170,16 +171,67 @@
             '';
           }
         );
+
+        polarbar = craneLib.buildPackage (
+          individualCrateArgs
+          // {
+            pname = "polarbar";
+            cargoExtraArgs = "-p bar --bin polarbar";
+
+            LUCIDE_ICONS_PATH = "${lucideIcons}";
+            SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
+
+            preFixup = ''
+              gappsWrapperArgs+=(
+                --set GLYCIN_LOADERS_PATH ${pkgs.glycin-loaders}/libexec/glycin-loaders/2+
+                --prefix XDG_DATA_DIRS : ${pkgs.glycin-loaders}/share
+                --prefix PATH : ${pkgs.bubblewrap}/bin
+              )
+            '';
+          }
+        );
       in {
         checks = {
-          inherit niribar;
+          inherit subniri polarbar;
+
+          subniri-workspace-hakari = craneLib.mkCargoDerivation {
+            inherit src;
+            pname = "subniri-workspace-hakari";
+            cargoArtifacts = null;
+            doInstallCargoArtifacts = false;
+
+            buildPhaseCargoCommand = ''
+              cargo hakari generate --diff
+              cargo hakari manage-deps --dry-run
+              cargo hakari verify
+            '';
+
+            nativeBuildInputs = [
+              pkgs.cargo-hakari
+            ];
+          };
         };
 
-        packages.default = niribar;
+        packages = {
+          inherit subniri polarbar;
+          default = subniri;
+        };
 
-        apps.default = flake-utils.lib.mkApp {
-          drv = niribar;
-          name = "niribar";
+        apps = {
+          default = flake-utils.lib.mkApp {
+            drv = subniri;
+            name = "subniri";
+          };
+
+          subniri = flake-utils.lib.mkApp {
+            drv = subniri;
+            name = "subniri";
+          };
+
+          polarbar = flake-utils.lib.mkApp {
+            drv = polarbar;
+            name = "polarbar";
+          };
         };
 
         devShells.default = craneLib.devShell {
@@ -230,7 +282,7 @@
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages = [
-            # pkgs.ripgrep
+            pkgs.cargo-hakari
             (nvim.lib.${system}.makeNeovimWithLanguages {
               inherit pkgs;
               languages.rust = {

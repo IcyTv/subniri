@@ -504,6 +504,7 @@ dependencies = [
  "sysinfo",
  "system_shutdown",
  "urlencoding",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1410,6 +1411,7 @@ dependencies = [
  "glib-build-tools",
  "gtk4",
  "heck",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1657,6 +1659,7 @@ dependencies = [
  "async-stream",
  "futures",
  "niri-ipc",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -1667,19 +1670,6 @@ checksum = "12bd9eb4e437f5282ce853cf66837658379cb537b4b6bae687da59246005329a"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "niribar"
-version = "0.1.0"
-dependencies = [
- "astal-notifd",
- "astal4",
- "bar",
- "clap",
- "gtk4",
- "icons",
- "process-guard",
 ]
 
 [[package]]
@@ -1907,6 +1897,9 @@ dependencies = [
 [[package]]
 name = "process-guard"
 version = "0.1.0"
+dependencies = [
+ "workspace-hack",
+]
 
 [[package]]
 name = "quote"
@@ -2195,6 +2188,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "subniri"
+version = "0.1.0"
+dependencies = [
+ "astal-notifd",
+ "astal4",
+ "bar",
+ "clap",
+ "gtk4",
+ "icons",
+ "process-guard",
+ "workspace-hack",
 ]
 
 [[package]]
@@ -2719,6 +2726,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f17a85883d4e6d00e8a97c586de764dabcc06133f7f1d55dce5cdc070ad7fe59"
 
 [[package]]
+name = "workspace-hack"
+version = "0.1.0"
+dependencies = [
+ "bitflags",
+ "concurrent-queue",
+ "crossbeam-utils",
+ "event-listener",
+ "event-listener-strategy",
+ "futures-channel",
+ "futures-core",
+ "futures-executor",
+ "futures-io",
+ "futures-sink",
+ "futures-util",
+ "gio",
+ "gio-sys",
+ "glib",
+ "glib-sys",
+ "gobject-sys",
+ "libc",
+ "smallvec",
+ "syn",
+ "uuid",
+ "zvariant",
+]
+
+[[package]]
 name = "yeslogic-fontconfig-sys"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2819,6 +2853,7 @@ dependencies = [
  "endi",
  "enumflags2",
  "serde",
+ "uuid",
  "winnow",
  "zvariant_derive",
  "zvariant_utils",

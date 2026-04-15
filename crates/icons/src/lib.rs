@@ -12,7 +12,7 @@ pub fn register_bundled_icons() {
 	let display = gtk4::gdk::Display::default().unwrap();
 	let theme = gtk4::IconTheme::for_display(&display);
 
-	theme.add_resource_path("/de/icytv/niribar/icons");
+	theme.add_resource_path("/de/icytv/subniri/icons");
 }
 
 pub fn resolve_app_icon_from_app_id(app_id: &str) -> Option<gio::Icon> {

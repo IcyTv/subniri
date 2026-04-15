@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/de/icytv/niribar/assets/gifs">
+  <gresource prefix="/de/icytv/subniri/assets/gifs">
 		<file>chibi.gif</file>
   </gresource>
 </gresources>

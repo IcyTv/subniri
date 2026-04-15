@@ -1,0 +1,20 @@
+repos:
+  - repo: local
+    hooks:
+      - id: hakari-check
+        name: Verify cargo-hakari workspace state
+        entry: >-
+          bash -lc 'if command -v cargo-hakari >/dev/null 2>&1;
+          then
+            cargo hakari generate --diff &&
+            cargo hakari manage-deps --dry-run &&
+            cargo hakari verify;
+          else
+            nix run nixpkgs#cargo-hakari -- generate --diff &&
+            nix run nixpkgs#cargo-hakari -- manage-deps --dry-run &&
+            nix run nixpkgs#cargo-hakari -- verify;
+          fi'
+        language: system
+        pass_filenames: false
+        files: >-
+          (^Cargo\.toml$|^Cargo\.lock$|^crates/.*/Cargo\.toml$|^\.config/hakari\.toml$|^crates/workspace-hack/)

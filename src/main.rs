@@ -15,7 +15,7 @@ pub struct Args {
 
 fn main() {
 	if let EnsureOutcome::AlreadyRunning =
-		process_guard::ensure_single_instance("niribar-shell", ExistingInstancePolicy::ReplaceExisting)
+		process_guard::ensure_single_instance("subniri-shell", ExistingInstancePolicy::ReplaceExisting)
 	{
 		return;
 	}
@@ -24,7 +24,7 @@ fn main() {
 
 	gtk4::init().expect("Failed to initialize GTK4");
 
-	let app = gtk4::Application::builder().application_id("com.icytv.niribar").build();
+	let app = gtk4::Application::builder().application_id("com.icytv.subniri").build();
 
 	gtk4::Window::set_interactive_debugging(args.inspect);
 
@@ -63,7 +63,7 @@ fn build_ui(_args: Args) -> impl Fn(&gtk4::Application) {
 			// SAFETY: `gtk4::Application` is a GObject and stores the overlay
 			// for the full application lifetime.
 			unsafe {
-				app.set_data("niribar.notifications-overlay", overlay.clone());
+				app.set_data("subniri.notifications-overlay", overlay.clone());
 			}
 			app.add_window(&overlay.window);
 		}

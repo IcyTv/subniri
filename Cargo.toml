@@ -1,7 +1,12 @@
 [package]
-name = "niribar"
+name = "subniri"
 version = "0.1.0"
 edition = "2024"
+autobins = false
+
+[[bin]]
+name = "subniri"
+path = "src/main.rs"
 
 [dependencies]
 astal-notifd.workspace = true
@@ -11,9 +16,10 @@ clap.workspace = true
 gtk4.workspace = true
 icons.workspace = true
 process-guard.workspace = true
+workspace-hack = { version = "0.1", path = "crates/workspace-hack" }
 
 [workspace]
-members = ["crates/*"]
+members = ["crates/*","crates/workspace-hack"]
 
 [workspace.dependencies]
 astal-apps = "0.1.0"

@@ -89,7 +89,7 @@ fn main() {
 	}
 
 	let mut xml = String::from(
-		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gresources>\n  <gresource prefix=\"/de/icytv/niribar/icons\">\n",
+		"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<gresources>\n  <gresource prefix=\"/de/icytv/subniri/icons\">\n",
 	);
 
 	let mut variants = String::new();

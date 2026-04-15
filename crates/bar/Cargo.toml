@@ -2,6 +2,11 @@
 name = "bar"
 version = "0.1.0"
 edition = "2024"
+autobins = false
+
+[[bin]]
+name = "polarbar"
+path = "src/main.rs"
 
 [dependencies]
 astal-apps.workspace = true
@@ -32,6 +37,7 @@ strum.workspace = true
 sysinfo.workspace = true
 system_shutdown.workspace = true
 urlencoding.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }
 
 [build-dependencies]
 glib-build-tools.workspace = true

@@ -7,7 +7,7 @@ use gtk4::subclass::prelude::*;
 use gtk4::{gdk, gio, glib};
 use rand::seq::IndexedRandom;
 
-static RESOURCE_PATH: &str = "/de/icytv/niribar/assets/gifs";
+static RESOURCE_PATH: &str = "/de/icytv/subniri/assets/gifs";
 const MAX_GIF_SIZE: i32 = 200;
 
 glib::wrapper! {

@@ -8,3 +8,4 @@ async-channel.workspace = true
 async-stream.workspace = true
 futures.workspace = true
 niri-ipc = "25.11.0"
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

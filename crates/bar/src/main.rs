@@ -4,7 +4,7 @@ use process_guard::{EnsureOutcome, ExistingInstancePolicy};
 
 fn main() {
 	if let EnsureOutcome::AlreadyRunning =
-		process_guard::ensure_single_instance("niribar-bar", ExistingInstancePolicy::ReplaceExisting)
+		process_guard::ensure_single_instance("subniri-bar", ExistingInstancePolicy::ReplaceExisting)
 	{
 		return;
 	}
@@ -12,7 +12,7 @@ fn main() {
 	gtk4::init().expect("Failed to initialize GTK4");
 
 	let app = gtk4::Application::builder()
-		.application_id("com.icytv.niribar.bar")
+		.application_id("com.icytv.subniri.bar")
 		.build();
 
 	app.connect_startup(|_| {
