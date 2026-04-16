@@ -3,13 +3,13 @@ mod image;
 
 use std::path::PathBuf;
 
-use astal_apps::prelude::*;
 use astal_apps::Apps;
+use astal_apps::prelude::*;
+use gtk4::CompositeTemplate;
 use gtk4::gio::{self};
 use gtk4::prelude::{BoxExt, *};
 use gtk4::subclass::prelude::*;
-use gtk4::CompositeTemplate;
-use niri_client::{focus_first_window_matching_app_ids, Niri};
+use niri_client::{Niri, focus_first_window_matching_app_ids};
 
 use icons::Icon;
 
@@ -308,7 +308,7 @@ fn screenshot() {
 
 fn launch_terminal() {
 	launch("kitty"); // TODO: support other terminals... Maybe use xdg to figure out what terminals
-	              // exist? Maybe .desktop categories?
+	// exist? Maybe .desktop categories?
 }
 
 fn noop() {}

@@ -15,6 +15,7 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+async-executor = { version = "1", default-features = false, features = ["static"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 concurrent-queue = { version = "2" }
 crossbeam-utils = { version = "0.8" }
@@ -32,9 +33,11 @@ glib = { version = "0.21", features = ["v2_86"] }
 glib-sys = { version = "0.21", default-features = false, features = ["v2_86"] }
 gobject-sys = { version = "0.21", default-features = false, features = ["v2_76", "v2_86"] }
 libc = { version = "0.2", features = ["extra_traits"] }
+rustix = { version = "1", features = ["fs", "net"] }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit-mut"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+zbus = { version = "5", features = ["p2p"] }
 zvariant = { version = "5", features = ["enumflags2", "uuid"] }
 
 [build-dependencies]

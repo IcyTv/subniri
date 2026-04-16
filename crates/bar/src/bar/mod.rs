@@ -1,6 +1,9 @@
 use gtk4::gdk;
 use gtk4::prelude::{BoxExt as _, *};
 
+use crate::dbus::PlayerCommand;
+use crate::player::PlayerModel;
+
 mod bluetooth;
 mod clock;
 mod mediaplayer;
@@ -15,7 +18,10 @@ pub struct Bar {
 }
 
 impl Bar {
-	fn new(monitor_index: i32, monitor_width: i32) -> Self {
+	fn new(
+		monitor_index: i32, monitor_width: i32, player_model: PlayerModel,
+		command_send: async_channel::Sender<PlayerCommand>,
+	) -> Self {
 		let overview = overview::Overview::new();
 		let taskbar = taskbar::Taskbar::new(monitor_index);
 		let start_child = gtk4::Box::builder()
@@ -29,7 +35,7 @@ impl Bar {
 
 		// let clock = clock::Clock::new();
 
-		let mediaplayer = mediaplayer::MediaPlayerWidget::new();
+		let mediaplayer = mediaplayer::MediaPlayerWidget::new(player_model, command_send);
 
 		let volume = volume::Volume::new();
 		let network = network::Network::new();
@@ -72,7 +78,9 @@ impl Bar {
 		Self { window }
 	}
 
-	pub fn for_all_monitors(display: &gtk4::gdk::Display) -> Vec<Self> {
+	pub fn for_all_monitors(
+		display: &gtk4::gdk::Display, player_model: PlayerModel, command_send: async_channel::Sender<PlayerCommand>,
+	) -> Vec<Self> {
 		display
 			.monitors()
 			.iter::<gdk::Monitor>()
@@ -80,7 +88,7 @@ impl Bar {
 			.enumerate()
 			.map(|(idx, monitor)| {
 				let width = monitor.geometry().width();
-				Bar::new(idx as i32, width)
+				Bar::new(idx as i32, width, player_model.clone(), command_send.clone())
 			})
 			.collect()
 	}

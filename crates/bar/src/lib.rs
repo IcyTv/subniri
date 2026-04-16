@@ -1,6 +1,8 @@
 use std::sync::Once;
 
 pub mod bar;
+pub mod dbus;
+pub mod player;
 pub mod popups;
 pub mod shell;
 

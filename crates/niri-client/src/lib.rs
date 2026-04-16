@@ -8,10 +8,7 @@ use niri_ipc::socket::Socket;
 use niri_ipc::{Action, Output, Request, Response, Window as NiriWindow, WindowLayout, Workspace};
 
 pub use niri_ipc::{
-	Output as NiriOutput,
-	Window as NiriWindowRaw,
-	WindowLayout as NiriWindowLayout,
-	Workspace as NiriWorkspace,
+	Output as NiriOutput, Window as NiriWindowRaw, WindowLayout as NiriWindowLayout, Workspace as NiriWorkspace,
 };
 
 #[derive(Clone, Copy)]

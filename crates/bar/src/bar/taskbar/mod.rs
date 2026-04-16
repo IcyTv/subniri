@@ -8,9 +8,7 @@ use glib::clone;
 use glib::object::Cast;
 use gtk4::prelude::*;
 use gtk4::{CustomSorter, Ordering as GtkOrdering, gdk, gio};
-use niri_client::{
-	NiriWindowLayout as WindowLayout, NiriWindowRaw as Window, NiriWorkspace as Workspace,
-};
+use niri_client::{NiriWindowLayout as WindowLayout, NiriWindowRaw as Window, NiriWorkspace as Workspace};
 
 use widgets::{TaskbarItem, TaskbarItemKind};
 

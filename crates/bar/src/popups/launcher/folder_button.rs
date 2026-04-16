@@ -2,8 +2,8 @@ use std::cell::RefCell;
 
 use astal4::prelude::*;
 use glib::Properties;
-use gtk4::subclass::prelude::*;
 use gtk4::CompositeTemplate;
+use gtk4::subclass::prelude::*;
 
 use icons::Icon;
 

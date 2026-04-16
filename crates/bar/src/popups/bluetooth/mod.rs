@@ -31,8 +31,8 @@ mod imp {
 	#[derive(Default, Clone, Copy)]
 	struct AdapterState {
 		discoverable: bool,
-		pairable:     bool,
-		discovering:  bool,
+		pairable: bool,
+		discovering: bool,
 	}
 
 	#[derive(Default, Properties, CompositeTemplate)]
@@ -40,7 +40,7 @@ mod imp {
 	#[properties(wrapper_type = super::BluetoothPopup)]
 	pub struct BluetoothPopup {
 		#[template_child]
-		list_view:      TemplateChild<gtk4::ListView>,
+		list_view: TemplateChild<gtk4::ListView>,
 		previous_state: RefCell<Option<AdapterState>>,
 	}
 
@@ -146,8 +146,8 @@ mod imp {
 								// Store previous state
 								let state = AdapterState {
 									discoverable: adapter.is_discoverable(),
-									pairable:     adapter.is_pairable(),
-									discovering:  adapter.is_discovering(),
+									pairable: adapter.is_pairable(),
+									discovering: adapter.is_discovering(),
 								};
 								*imp.previous_state.borrow_mut() = Some(state);
 

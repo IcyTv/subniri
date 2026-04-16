@@ -33,7 +33,10 @@
           overlays = [(import rust-overlay)];
         };
 
-        rustToolchain = p: p.rust-bin.stable.latest.default;
+        rustToolchain = p:
+          p.rust-bin.stable.latest.default.override {
+            extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo"];
+          };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 

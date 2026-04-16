@@ -53,19 +53,45 @@ fn build_ui(_args: Args) -> impl Fn(&gtk4::Application) {
 	move |app| {
 		let display = Display::default().expect("Could not get a display");
 		let notifications_overlay = bar::NotificationsOverlay::new_primary(&display);
-		let bars = bar::Bar::for_all_monitors(&display);
+		let player_model = bar::player::PlayerModel::new();
+		let (command_send, command_recv) = bar::player::channel();
+		bar::player::spawn_controller(player_model.clone(), command_recv);
+
+		let player_manager = bar::dbus::DbusManager::new(command_send.clone());
+
+		let bars = bar::Bar::for_all_monitors(&display, player_model.clone(), command_send);
+
 		for bar in bars {
 			app.add_window(&bar.window);
 			bar.window.present();
 		}
 
 		if let Some(overlay) = notifications_overlay {
-			// SAFETY: `gtk4::Application` is a GObject and stores the overlay
-			// for the full application lifetime.
 			unsafe {
-				app.set_data("subniri.notifications-overlay", overlay.clone());
+				app.set_data("bar.notifications-overlay", overlay.clone());
 			}
 			app.add_window(&overlay.window);
 		}
+
+		unsafe {
+			app.set_data("bar.player-model", player_model.clone());
+		}
+
+		let app = app.clone();
+		gtk4::glib::spawn_future_local(async move {
+			let conn = zbus::connection::Builder::session()
+				.unwrap()
+				.name("de.icytv.subniri.Bar")
+				.unwrap()
+				.serve_at("/de/icytv/subniri/Bar", player_manager)
+				.unwrap()
+				.build()
+				.await
+				.unwrap();
+
+			unsafe {
+				app.set_data("bar.player-manager-connection", conn);
+			}
+		});
 	}
 }

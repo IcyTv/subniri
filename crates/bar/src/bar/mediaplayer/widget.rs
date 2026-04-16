@@ -1,12 +1,15 @@
 use std::cell::RefCell;
 
-use astal_mpris::prelude::{MprisExt, PlayerExt};
-use astal_mpris::{Mpris, PlaybackStatus, Player};
+use astal_mpris::Player;
+use astal_mpris::prelude::PlayerExt;
+use async_channel::Sender;
 use glib::{Properties, clone};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{CompositeTemplate, glib};
-use lazy_regex::regex;
+
+use crate::dbus::PlayerCommand;
+use crate::player::PlayerModel;
 
 use super::single_media_player;
 
@@ -17,8 +20,10 @@ glib::wrapper! {
 }
 
 impl MediaPlayerWidget {
-	pub fn new() -> Self {
-		glib::Object::builder().build()
+	pub fn new(model: PlayerModel, command_send: Sender<PlayerCommand>) -> Self {
+		let obj: Self = glib::Object::builder().build();
+		obj.imp().bind_to_model(model, command_send);
+		obj
 	}
 }
 
@@ -32,12 +37,14 @@ mod imp {
 	#[properties(wrapper_type = super::MediaPlayerWidget)]
 	pub struct MediaPlayerWidget {
 		#[property(get, set)]
-		players:          RefCell<Option<ListStore>>,
+		players: RefCell<Option<ListStore>>,
 		#[property(get, construct_only)]
 		player_selection: RefCell<Option<gtk4::SingleSelection>>,
 
 		#[template_child]
 		media_player_stack: TemplateChild<gtk4::Stack>,
+
+		model: RefCell<Option<PlayerModel>>,
 	}
 
 	#[glib::object_subclass]
@@ -49,7 +56,6 @@ mod imp {
 
 		fn class_init(klass: &mut Self::Class) {
 			Self::bind_template(klass);
-			// Self::bind_template_callbacks(klass);
 		}
 
 		fn instance_init(obj: &glib::subclass::InitializingObject<Self>) {
@@ -62,29 +68,9 @@ mod imp {
 		fn constructed(&self) {
 			self.parent_constructed();
 
-			let mpris = Mpris::default();
-
 			let (players, player_selection) = player_store();
 			self.players.replace(Some(players.clone()));
 			self.player_selection.replace(Some(player_selection.clone()));
-
-			let update_players = clone!(
-				#[weak]
-				players,
-				move |mpris: &Mpris| {
-					let mut new_players = valid_mpris_players(mpris);
-					new_players.sort_by_key(player_to_key);
-
-					players.remove_all();
-
-					for player in new_players {
-						players.append(&player);
-					}
-				}
-			);
-
-			update_players(&mpris);
-			mpris.connect_players_notify(update_players);
 
 			let stack = &self.media_player_stack;
 			player_selection.connect_selected_item_notify(clone!(
@@ -93,7 +79,6 @@ mod imp {
 				move |sel| {
 					if let Some(player) = sel.selected_item().and_then(|o| o.downcast::<Player>().ok()) {
 						let bus_name = player.bus_name();
-						// Only set visible child if it exists in the stack
 						if stack.child_by_name(&bus_name).is_some() {
 							stack.set_visible_child_name(&bus_name);
 						}
@@ -107,24 +92,18 @@ mod imp {
 				#[weak]
 				stack,
 				move |list, _position, _removed, _added| {
-					// TODO: We recreate the whole stack every time we get a new list. This is
-					// inefficient. Maybe we can do better...
-					// 1. Clear stack
 					while let Some(child) = stack.first_child() {
 						stack.remove(&child);
 					}
 
-					// 2. Re-add all players
 					for index in 0..list.n_items() {
 						let item = list.item(index).and_then(|o| o.downcast::<Player>().ok());
 						if let Some(player) = item {
 							let player_widget = single_media_player::SingleMediaPlayerWidget::new(&player);
 							let obj = weak_obj.clone();
 							player_widget.connect_local("player-changed", false, move |_| {
-								println!("Switching to next player");
-								// obj.imp().next_player();
 								if let Some(obj) = obj.upgrade() {
-									obj.imp().next_player();
+									obj.imp().on_local_cycle_requested();
 								}
 								None
 							});
@@ -140,24 +119,96 @@ mod imp {
 	impl BoxImpl for MediaPlayerWidget {}
 
 	impl MediaPlayerWidget {
-		pub fn next_player(&self) {
+		pub fn bind_to_model(&self, model: PlayerModel, command_send: Sender<PlayerCommand>) {
+			self.model.replace(Some(model.clone()));
+
+			let players = self.players.borrow();
+			let players = players.as_ref().unwrap();
+			let model_players = model.players();
+			players.remove_all();
+			for index in 0..model_players.n_items() {
+				if let Some(player) = model_players.item(index).and_then(|o| o.downcast::<Player>().ok()) {
+					players.append(&player);
+				}
+			}
+			self.sync_selection_from_model();
+
+			model_players.connect_items_changed(clone!(
+				#[weak(rename_to = obj)]
+				self.obj(),
+				move |list, _position, _removed, _added| {
+					let imp = obj.imp();
+					let players = imp.players.borrow();
+					let players = players.as_ref().unwrap();
+
+					players.remove_all();
+					for index in 0..list.n_items() {
+						if let Some(player) = list.item(index).and_then(|o| o.downcast::<Player>().ok()) {
+							players.append(&player);
+						}
+					}
+
+					imp.sync_selection_from_model();
+				}
+			));
+
+			model.connect_active_bus_name_notify(clone!(
+				#[weak(rename_to = obj)]
+				self.obj(),
+				move |_| {
+					obj.imp().sync_selection_from_model();
+				}
+			));
+
+			let sender = command_send.clone();
 			let selection = self.player_selection.borrow();
 			let selection = selection.as_ref().unwrap();
-			let n_items = selection.n_items();
-			println!("Number of players: {n_items}");
-			if n_items == 0 {
+			selection.connect_selected_item_notify(move |sel| {
+				let bus_name = sel
+					.selected_item()
+					.and_then(|o| o.downcast::<Player>().ok())
+					.map(|player| player.bus_name().to_string());
+
+				let _ = sender.try_send(PlayerCommand::SetActiveByBusName(bus_name));
+			});
+		}
+
+		fn on_local_cycle_requested(&self) {
+			if let Some(model) = self.model.borrow().as_ref() {
+				model.cycle_active_player();
+			}
+		}
+
+		fn sync_selection_from_model(&self) {
+			let model = self.model.borrow();
+			let Some(model) = model.as_ref() else {
+				return;
+			};
+
+			let active = model.active_bus_name();
+			let selection = self.player_selection.borrow();
+			let selection = selection.as_ref().unwrap();
+
+			if active.is_empty() {
+				if selection.selected() != gtk4::INVALID_LIST_POSITION {
+					selection.set_selected(gtk4::INVALID_LIST_POSITION);
+				}
 				return;
 			}
 
-			let current = selection.selected();
-
-			let next = if current == gtk4::INVALID_LIST_POSITION {
-				0
-			} else {
-				(current + 1) % n_items
-			};
-
-			selection.set_selected(next);
+			let players = self.players.borrow();
+			let players = players.as_ref().unwrap();
+			for index in 0..players.n_items() {
+				let player = players.item(index).and_then(|o| o.downcast::<Player>().ok());
+				if let Some(player) = player
+					&& player.bus_name().as_str() == active
+				{
+					if selection.selected() != index {
+						selection.set_selected(index);
+					}
+					return;
+				}
+			}
 		}
 	}
 
@@ -171,31 +222,4 @@ mod imp {
 
 		(player_store, player_selection)
 	}
-}
-
-fn valid_mpris_players(mpris: &Mpris) -> Vec<Player> {
-	mpris
-		.players()
-		.into_iter()
-		.filter(|p| player_to_key(p) < usize::MAX)
-		.collect()
-}
-
-fn player_to_key(player: &Player) -> usize {
-	let mut base_key = match (
-		player.bus_name().as_str(),
-		player.title().as_str(),
-		player.can_control(),
-	) {
-		(_, "", _) | (_, _, false) => return usize::MAX,
-		(bn, ..) if bn.ends_with("spotify") => 100,
-		(bn, ..) if regex!(r#"^org.mpris.MediaPlayer2.firefox.instance_.*$"#).is_match(bn) => 200,
-		_ => usize::MAX - 1000,
-	};
-
-	if player.playback_status() == PlaybackStatus::Playing {
-		base_key -= 10;
-	}
-
-	base_key
 }

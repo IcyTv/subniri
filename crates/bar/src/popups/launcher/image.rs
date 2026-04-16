@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::time::Duration;
 
-use glib::{clone, Properties};
+use glib::{Properties, clone};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use gtk4::{gdk, gio, glib};

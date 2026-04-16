@@ -32,9 +32,7 @@ pub fn ensure_single_instance(scope: &str, policy: ExistingInstancePolicy) -> En
 			}
 			ExistingInstancePolicy::ReplaceExisting => {
 				replaced_existing = true;
-				let _ = Command::new("kill")
-					.args(["-TERM", &existing_pid.to_string()])
-					.status();
+				let _ = Command::new("kill").args(["-TERM", &existing_pid.to_string()]).status();
 
 				for _ in 0..20 {
 					if !Path::new(&format!("/proc/{existing_pid}")).exists() {

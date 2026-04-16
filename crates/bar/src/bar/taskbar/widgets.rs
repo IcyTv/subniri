@@ -1,12 +1,12 @@
 use std::cell::RefCell;
 
-use glib::subclass::InitializingObject;
 use glib::Properties;
+use glib::subclass::InitializingObject;
+use gtk4::CompositeTemplate;
+use gtk4::Widget;
 use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use gtk4::CompositeTemplate;
-use gtk4::Widget;
 use niri_client::{Niri, NiriWindowLayout as WindowLayout, NiriWindowRaw as NiriWindow, NiriWorkspace as Workspace};
 
 #[derive(Clone, Copy, PartialEq, Eq)]

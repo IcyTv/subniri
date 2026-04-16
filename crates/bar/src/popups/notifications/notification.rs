@@ -1,13 +1,13 @@
 use std::cell::RefCell;
 
-use astal_notifd::prelude::*;
 use astal_notifd::Notifd;
+use astal_notifd::prelude::*;
 use astal_tray::prelude::*;
 use astal_tray::{Tray, TrayItem};
-use glib::{clone, Properties};
+use glib::{Properties, clone};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use gtk4::{gdk, gio, CompositeTemplate};
+use gtk4::{CompositeTemplate, gdk, gio};
 
 use super::item::NotificationItem;
 

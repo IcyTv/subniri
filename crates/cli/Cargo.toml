@@ -1,0 +1,14 @@
+[package]
+name = "cli"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[[bin]]
+name = "subniri-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+tokio = { version = "1.52.0", features = ["full"] }
+zbus.workspace = true
