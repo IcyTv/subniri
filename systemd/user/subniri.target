@@ -1,0 +1,8 @@
+[Unit]
+Description=Subniri desktop stack
+Wants=subniri-bar.service subniri-launcher.service
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Install]
+WantedBy=default.target

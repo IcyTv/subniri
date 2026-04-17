@@ -1,0 +1,7 @@
+[Unit]
+Description=Subniri development stack
+Wants=subniri-dev-bar.service subniri-dev-launcher.service
+After=graphical-session.target
+
+[Install]
+WantedBy=default.target

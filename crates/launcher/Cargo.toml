@@ -1,0 +1,15 @@
+[package]
+name = "launcher"
+version = "0.1.0"
+edition = "2024"
+autobins = false
+
+[[bin]]
+name = "avalaunch"
+path = "src/main.rs"
+
+[dependencies]
+glib.workspace = true
+gtk4.workspace = true
+process-guard.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

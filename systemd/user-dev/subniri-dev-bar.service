@@ -1,0 +1,14 @@
+[Unit]
+Description=Subniri development bar service
+PartOf=subniri-dev.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=cargo run -p bar --bin polarbar
+WorkingDirectory=%h/projects/subniri
+Restart=on-failure
+RestartSec=1s
+
+[Install]
+WantedBy=subniri-dev.target

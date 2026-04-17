@@ -47,12 +47,14 @@
             (craneLib.fileset.commonCargoSources ./crates/bar)
             (craneLib.fileset.commonCargoSources ./crates/cli)
             (craneLib.fileset.commonCargoSources ./crates/icons)
+            (craneLib.fileset.commonCargoSources ./crates/launcher)
             (craneLib.fileset.commonCargoSources ./crates/niri-client)
             (craneLib.fileset.commonCargoSources ./crates/process-guard)
             (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
             (craneLib.fileset.commonCargoSources ./crates/xtask)
             (lib.fileset.fileFilter (file: file.hasExt "blp") ./.)
             (lib.fileset.maybeMissing ./assets)
+            (lib.fileset.maybeMissing ./systemd)
             ./style.css
             ./Cargo.toml
             ./Cargo.lock
@@ -185,9 +187,17 @@
             '';
           }
         );
+
+        avalaunch = craneLib.buildPackage (
+          individualCrateArgs
+          // {
+            pname = "avalaunch";
+            cargoExtraArgs = "-p launcher --bin avalaunch";
+          }
+        );
       in {
         checks = {
-          inherit subniri polarbar;
+          inherit subniri polarbar avalaunch;
 
           subniri-workspace-hakari = craneLib.mkCargoDerivation {
             inherit src;
@@ -209,7 +219,7 @@
         };
 
         packages = {
-          inherit subniri polarbar;
+          inherit subniri polarbar avalaunch;
           default = subniri;
         };
 
@@ -227,6 +237,11 @@
           polarbar = flake-utils.lib.mkApp {
             drv = polarbar;
             name = "polarbar";
+          };
+
+          avalaunch = flake-utils.lib.mkApp {
+            drv = avalaunch;
+            name = "avalaunch";
           };
         };
 
