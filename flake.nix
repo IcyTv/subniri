@@ -26,6 +26,14 @@
     nvim,
     ...
   }: let
+    overlay = final: prev: {
+      subniri = self.packages.${prev.system}.subniri;
+      polarbar = self.packages.${prev.system}.polarbar;
+      avalaunch = self.packages.${prev.system}.avalaunch;
+      subniri-systemd = self.packages.${prev.system}.subniri-systemd;
+      subniri-stack = self.packages.${prev.system}.subniri-stack;
+    };
+
     systems = flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {
@@ -330,6 +338,7 @@
   in
     systems
     // {
+      overlays.default = overlay;
       homeModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
     };
 }

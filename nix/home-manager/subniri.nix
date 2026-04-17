@@ -31,9 +31,23 @@ in {
         description = "Enable the subniri launcher service.";
       };
     };
+
+    installCli = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = "Install the subniri CLI into the user profile PATH.";
+    };
+
+    cliPackage = lib.mkOption {
+      type = lib.types.package;
+      default = packageSet.subniri;
+      description = "Package that provides the subniri CLI binary.";
+    };
   };
 
   config = lib.mkIf cfg.enable {
+    home.packages = lib.mkIf cfg.installCli [cfg.cliPackage];
+
     home.file.".config/systemd/user/subniri.target" = {
       source = "${cfg.package}/share/systemd/user/subniri.target";
     };
