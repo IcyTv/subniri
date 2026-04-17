@@ -54,6 +54,8 @@
             (lib.fileset.fileFilter (file: file.hasExt "blp") ./.)
             (lib.fileset.maybeMissing ./assets)
             ./style.css
+            ./Cargo.toml
+            ./Cargo.lock
           ];
         };
 
@@ -154,7 +156,7 @@
           };
 
         subniri = craneLib.buildPackage {
-          inherit src cargoArtifacts;
+          inherit src;
           inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
           strictDeps = true;
 
