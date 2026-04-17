@@ -1,26 +1,6 @@
-[package]
-name = "subniri"
-version = "0.1.0"
-edition = "2024"
-autobins = false
-
-[[bin]]
-name = "subniri"
-path = "src/main.rs"
-
-[dependencies]
-astal-notifd.workspace = true
-astal4.workspace = true
-bar = { path = "./crates/bar" }
-clap.workspace = true
-gtk4.workspace = true
-icons.workspace = true
-process-guard.workspace = true
-workspace-hack = { version = "0.1", path = "crates/workspace-hack" }
-zbus.workspace = true
-
 [workspace]
-members = ["crates/*", "crates/workspace-hack"]
+members = ["crates/*"]
+resolver = "2"
 
 [workspace.dependencies]
 astal-apps = "0.1.0"
@@ -61,3 +41,4 @@ system_shutdown = "4.1.0"
 urlencoding = "2.1.3"
 which = "8.0.0"
 zbus = "5.14.0"
+tokio = { version = "1.52.0", features = ["full"] }

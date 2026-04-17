@@ -2,6 +2,17 @@ use gtk4::gdk::Display;
 use gtk4::prelude::*;
 use process_guard::{EnsureOutcome, ExistingInstancePolicy};
 
+fn load_css() {
+	let provider = gtk4::CssProvider::new();
+	provider.load_from_string(include_str!("../../../src/style.css"));
+
+	gtk4::style_context_add_provider_for_display(
+		&Display::default().expect("Could not get a display"),
+		&provider,
+		gtk4::STYLE_PROVIDER_PRIORITY_USER,
+	);
+}
+
 fn main() {
 	if let EnsureOutcome::AlreadyRunning =
 		process_guard::ensure_single_instance("subniri-bar", ExistingInstancePolicy::ReplaceExisting)
@@ -16,6 +27,7 @@ fn main() {
 		.build();
 
 	app.connect_startup(|_| {
+		load_css();
 		bar::init_resources();
 		icons::register_bundled_icons();
 	});

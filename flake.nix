@@ -49,6 +49,7 @@
             (lib.fileset.fileFilter (file: file.hasExt "blp") unfilteredSrc)
             (lib.fileset.maybeMissing ./assets)
             (lib.fileset.maybeMissing ./crates/bar/assets)
+            (lib.fileset.maybeMissing ./crates/cli/src)
             ./src/style.css
           ];
         };
@@ -60,39 +61,34 @@
           inherit src;
           strictDeps = true;
 
-          buildInputs = with pkgs;
-            [
-              astal.apps
-              astal.io
-              astal.tray
-              astal.mpris
-              astal.notifd
-              astal.cava
-              astal.wireplumber
-              astal.network
-              astal.bluetooth
-              astal.astal4
-              gtk4
-              gtk4-layer-shell
-              json-glib
-              networkmanager
-              graphene
-              glib-networking
-              gvfs
-              libglycin
-              libgweather
-              glycin-loaders
-              lcms
-              bubblewrap
-              cacert
-              gnutls
-              gsettings-desktop-schemas
-              appmenu-glib-translator
-            ]
-            ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
-              # Additional darwin specific inputs can be set here
-              pkgs.libiconv
-            ];
+          buildInputs = with pkgs; [
+            astal.apps
+            astal.io
+            astal.tray
+            astal.mpris
+            astal.notifd
+            astal.cava
+            astal.wireplumber
+            astal.network
+            astal.bluetooth
+            astal.astal4
+            gtk4
+            gtk4-layer-shell
+            json-glib
+            networkmanager
+            graphene
+            glib-networking
+            gvfs
+            libglycin
+            libgweather
+            glycin-loaders
+            lcms
+            bubblewrap
+            cacert
+            gnutls
+            gsettings-desktop-schemas
+            appmenu-glib-translator
+          ];
 
           nativeBuildInputs = with pkgs; [
             pkg-config
@@ -150,30 +146,20 @@
           commonArgs
           // {
             inherit cargoArtifacts;
-            inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
+            version = "0.1.0";
             doCheck = false;
           };
 
-        subniri = craneLib.buildPackage (
-          individualCrateArgs
-          // {
-            pname = "subniri";
-            cargoExtraArgs = "-p subniri --bin subniri";
+        subniri = craneLib.buildPackage {
+          buildInputs = [
+            pkgs.dbus
+          ];
+          pname = "subniri";
+          cargoExtraArgs = "-p cli --bin subniri";
 
-            LUCIDE_ICONS_PATH = "${lucideIcons}";
-            SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
-
-            # Ensure glycin finds its loaders in the wrapped binary (wrapGAppsHook4)
-            # and that bubblewrap is on PATH for glycin-image-rs sandboxing.
-            preFixup = ''
-              gappsWrapperArgs+=(
-                --set GLYCIN_LOADERS_PATH ${pkgs.glycin-loaders}/libexec/glycin-loaders/2+
-                --prefix XDG_DATA_DIRS : ${pkgs.glycin-loaders}/share
-                --prefix PATH : ${pkgs.bubblewrap}/bin
-              )
-            '';
-          }
-        );
+          # Ensure glycin finds its loaders in the wrapped binary (wrapGAppsHook4)
+          # and that bubblewrap is on PATH for glycin-image-rs sandboxing.
+        };
 
         polarbar = craneLib.buildPackage (
           individualCrateArgs
@@ -193,16 +179,6 @@
             '';
           }
         );
-
-        climate = craneLib.buildPackage {
-          inherit src;
-          strictDeps = true;
-
-          buildInputs = [
-            pkgs.dbus
-          ];
-          cargoExtraArgs = "-p cli --bin climate";
-        };
       in {
         checks = {
           inherit subniri polarbar;
@@ -210,6 +186,7 @@
           subniri-workspace-hakari = craneLib.mkCargoDerivation {
             inherit src;
             pname = "subniri-workspace-hakari";
+            version = "0.1.0";
             cargoArtifacts = null;
             doInstallCargoArtifacts = false;
 
@@ -226,7 +203,7 @@
         };
 
         packages = {
-          inherit subniri polarbar climate;
+          inherit subniri polarbar;
           default = subniri;
         };
 
@@ -244,11 +221,6 @@
           polarbar = flake-utils.lib.mkApp {
             drv = polarbar;
             name = "polarbar";
-          };
-
-          climate = flake-utils.lib.mkApp {
-            drv = climate;
-            name = "climate";
           };
         };
 

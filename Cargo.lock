@@ -661,6 +661,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "tokio",
+ "workspace-hack",
  "zbus",
 ]
 
@@ -2339,21 +2340,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "subniri"
-version = "0.1.0"
-dependencies = [
- "astal-notifd",
- "astal4",
- "bar",
- "clap",
- "gtk4",
- "icons",
- "process-guard",
- "workspace-hack",
- "zbus",
 ]
 
 [[package]]

@@ -5,10 +5,11 @@ edition = "2024"
 autobins = false
 
 [[bin]]
-name = "climate"
+name = "subniri"
 path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
-tokio = { version = "1.52.0", features = ["full"] }
+tokio.workspace = true
 zbus.workspace = true
+workspace-hack = { version = "0.1", path = "../workspace-hack" }

@@ -2,7 +2,7 @@ use std::io::{BufRead, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::thread;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
@@ -69,7 +69,7 @@ impl Component {
 				bin: "polarbar",
 			}),
 			Self::Subniri => Some(FastBin {
-				package: "subniri",
+				package: "cli",
 				bin: "subniri",
 			}),
 			Self::Avalaunch | Self::Systemd => None,
