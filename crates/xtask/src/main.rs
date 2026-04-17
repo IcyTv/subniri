@@ -1,5 +1,7 @@
 use std::io::{BufRead, BufReader, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 
 use anyhow::{bail, Context, Result};
@@ -68,11 +70,15 @@ impl Component {
 				package: "bar",
 				bin: "polarbar",
 			}),
+			Self::Avalaunch => Some(FastBin {
+				package: "launcher",
+				bin: "avalaunch",
+			}),
 			Self::Subniri => Some(FastBin {
 				package: "cli",
 				bin: "subniri",
 			}),
-			Self::Avalaunch | Self::Systemd => None,
+			Self::Systemd => None,
 		}
 	}
 
@@ -132,7 +138,7 @@ fn run() -> Result<()> {
 
 fn run_command(components: &[Component]) -> Result<()> {
 	let parsed = if components.is_empty() {
-		ParsedRun::Fast(vec![Component::Polarbar])
+		ParsedRun::Fast(vec![Component::Polarbar, Component::Avalaunch])
 	} else if components.contains(&Component::Systemd) {
 		if components.len() > 1 {
 			bail!("`systemd` run mode cannot be combined with other components")
@@ -218,7 +224,27 @@ fn run_fast(components: &[Component]) -> Result<()> {
 fn run_systemd() -> Result<()> {
 	ensure_prod_stack_inactive()?;
 	up(DevOrProd::Dev)?;
-	logs(DevOrProd::Dev, None)
+	let should_teardown = Arc::new(AtomicBool::new(false));
+	let should_teardown_signal = Arc::clone(&should_teardown);
+
+	ctrlc::set_handler(move || {
+		should_teardown_signal.store(true, Ordering::SeqCst);
+	})
+	.context("failed to install ctrl-c signal handler")?;
+
+	println!("running dev systemd stack; press Ctrl+C to stop and tear down");
+	let logs_result = logs(DevOrProd::Dev, None);
+
+	if should_teardown.load(Ordering::SeqCst) {
+		let down_result = down(DevOrProd::Dev);
+		if let Err(err) = down_result {
+			return Err(err).context("failed to tear down dev stack after run");
+		}
+
+		return Ok(());
+	}
+
+	logs_result
 }
 
 fn up(mode: DevOrProd) -> Result<()> {
@@ -230,6 +256,14 @@ fn up(mode: DevOrProd) -> Result<()> {
 	if matches!(mode, DevOrProd::Dev) {
 		ensure_prod_stack_inactive()?;
 		link_units(units)?;
+		import_systemd_user_environment(&[
+			"PATH",
+			"XDG_DATA_DIRS",
+			"GIO_EXTRA_MODULES",
+			"LD_LIBRARY_PATH",
+			"LUCIDE_ICONS_PATH",
+			"SIMPLE_ICONS_PATH",
+		])?;
 	}
 
 	cmd_ok("systemctl", &["--user", "daemon-reload"]).context("failed to reload user systemd daemon")?;
@@ -237,6 +271,31 @@ fn up(mode: DevOrProd) -> Result<()> {
 		.with_context(|| format!("failed to start `{}`", units.target))?;
 
 	Ok(())
+}
+
+fn import_systemd_user_environment(var_names: &[&str]) -> Result<()> {
+	let mut names = Vec::new();
+	for &name in var_names {
+		if std::env::var_os(name).is_some() {
+			names.push(name.to_string());
+		}
+	}
+
+	if names.is_empty() {
+		return Ok(());
+	}
+
+	let mut args: Vec<&str> = vec!["--user", "import-environment"];
+	for name in &names {
+		args.push(name.as_str());
+	}
+
+	cmd_ok("systemctl", &args).with_context(|| {
+		format!(
+			"failed to import environment into user systemd manager ({})",
+			names.join(", ")
+		)
+	})
 }
 
 fn down(mode: DevOrProd) -> Result<()> {

@@ -6,4 +6,5 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 clap.workspace = true
+ctrlc = "3.5.1"
 duct = "1.1.1"
