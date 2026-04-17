@@ -25,8 +25,8 @@
     rust-overlay,
     nvim,
     ...
-  }:
-    flake-utils.lib.eachDefaultSystem (
+  }: let
+    systems = flake-utils.lib.eachDefaultSystem (
       system: let
         pkgs = import nixpkgs {
           inherit system;
@@ -195,9 +195,30 @@
             cargoExtraArgs = "-p launcher --bin avalaunch";
           }
         );
+
+        subniri-systemd = pkgs.runCommand "subniri-systemd-${self.shortRev or "dev"}" {} ''
+          mkdir -p "$out/share/systemd/user"
+          cp -r ${./systemd/user}/. "$out/share/systemd/user/"
+
+          substituteInPlace "$out/share/systemd/user/subniri-bar.service" \
+            --replace-fail "ExecStart=polarbar" "ExecStart=${polarbar}/bin/polarbar"
+
+          substituteInPlace "$out/share/systemd/user/subniri-launcher.service" \
+            --replace-fail "ExecStart=avalaunch" "ExecStart=${avalaunch}/bin/avalaunch"
+        '';
+
+        subniri-stack = pkgs.symlinkJoin {
+          name = "subniri-stack";
+          paths = [
+            subniri
+            polarbar
+            avalaunch
+            subniri-systemd
+          ];
+        };
       in {
         checks = {
-          inherit subniri polarbar avalaunch;
+          inherit subniri polarbar avalaunch subniri-stack;
 
           subniri-workspace-hakari = craneLib.mkCargoDerivation {
             inherit src;
@@ -219,8 +240,8 @@
         };
 
         packages = {
-          inherit subniri polarbar avalaunch;
-          default = subniri;
+          inherit subniri polarbar avalaunch subniri-systemd subniri-stack;
+          default = subniri-stack;
         };
 
         apps = {
@@ -305,4 +326,9 @@
         };
       }
     );
+  in
+    systems
+    // {
+      homeModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
+    };
 }
