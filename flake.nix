@@ -54,6 +54,7 @@
             (craneLib.fileset.commonCargoSources ./crates/xtask)
             (lib.fileset.fileFilter (file: file.hasExt "blp") ./.)
             (lib.fileset.maybeMissing ./assets)
+            (lib.fileset.maybeMissing ./crates/bar/assets)
             (lib.fileset.maybeMissing ./systemd)
             ./style.css
             ./Cargo.toml
