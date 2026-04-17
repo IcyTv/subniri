@@ -193,6 +193,16 @@
             '';
           }
         );
+
+        climate = craneLib.buildPackage {
+          inherit src;
+          strictDeps = true;
+
+          buildInputs = [
+            pkgs.dbus
+          ];
+          cargoExtraArgs = "-p cli --bin climate";
+        };
       in {
         checks = {
           inherit subniri polarbar;
@@ -216,7 +226,7 @@
         };
 
         packages = {
-          inherit subniri polarbar;
+          inherit subniri polarbar climate;
           default = subniri;
         };
 
@@ -234,6 +244,11 @@
           polarbar = flake-utils.lib.mkApp {
             drv = polarbar;
             name = "polarbar";
+          };
+
+          climate = flake-utils.lib.mkApp {
+            drv = climate;
+            name = "climate";
           };
         };
 
