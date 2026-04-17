@@ -26,14 +26,10 @@
     nvim,
     ...
   }: let
-    overlay = final: prev: let
-      system = final.stdenv.hostPlatform.system;
+    overlay = final: _prev: let
+      inherit (final.stdenv.hostPlatform) system;
     in {
-      subniri = self.packages.${system}.subniri;
-      polarbar = self.packages.${system}.polarbar;
-      avalaunch = self.packages.${system}.avalaunch;
-      subniri-systemd = self.packages.${system}.subniri-systemd;
-      subniri-stack = self.packages.${system}.subniri-stack;
+      inherit (self.packages.${system}) subniri polabar avalaunch subniri-systemd subniri-stack;
     };
 
     systems = flake-utils.lib.eachDefaultSystem (

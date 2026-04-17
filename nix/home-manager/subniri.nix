@@ -46,18 +46,20 @@ in {
   };
 
   config = lib.mkIf cfg.enable {
-    home.packages = lib.mkIf cfg.installCli [cfg.cliPackage];
+    home = {
+      packages = lib.mkIf cfg.installCli [cfg.cliPackage];
 
-    home.file.".config/systemd/user/subniri.target" = {
-      source = "${cfg.package}/share/systemd/user/subniri.target";
-    };
-
-    home.file.".config/systemd/user/subniri-bar.service" = lib.mkIf cfg.bar.enable {
-      source = "${cfg.package}/share/systemd/user/subniri-bar.service";
-    };
-
-    home.file.".config/systemd/user/subniri-launcher.service" = lib.mkIf cfg.launcher.enable {
-      source = "${cfg.package}/share/systemd/user/subniri-launcher.service";
+      file = {
+        ".config/systemd/user/subniri.target" = {
+          source = "${cfg.package}/share/systemd/user/subniri.target";
+        };
+        ".config/systemd/user/subniri-bar.service" = lib.mkIf cfg.bar.enable {
+          source = "${cfg.package}/share/systemd/user/subniri-bar.service";
+        };
+        ".config/systemd/user/subniri-launcher.service" = lib.mkIf cfg.launcher.enable {
+          source = "${cfg.package}/share/systemd/user/subniri-launcher.service";
+        };
+      };
     };
 
     systemd.user.startServices = true;
