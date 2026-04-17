@@ -53,7 +53,7 @@
             (craneLib.fileset.commonCargoSources ./crates/xtask)
             (lib.fileset.fileFilter (file: file.hasExt "blp") ./.)
             (lib.fileset.maybeMissing ./assets)
-            ./src/style.css
+            ./style.css
           ];
         };
 
@@ -153,26 +153,16 @@
             doCheck = false;
           };
 
-        filesetForCrate = crate:
-          lib.fileset.toSource {
-            root = ./.;
-            fileset = lib.fileset.unions [
-              ./Cargo.toml
-              ./Cargo.lock
-              (craneLib.fileset.commonCargoSources ./crates/icons)
-              (craneLib.fileset.commonCargoSources ./crates/niri-client)
-              (craneLib.fileset.commonCargoSources crate)
-            ];
-          };
-
         subniri = craneLib.buildPackage {
+          inherit src cargoArtifacts;
+          inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
+          strictDeps = true;
+
           buildInputs = [
             pkgs.dbus
           ];
           pname = "subniri";
           cargoExtraArgs = "-p cli --bin subniri";
-
-          src = filesetForCrate ./crates/cli;
         };
 
         polarbar = craneLib.buildPackage (
@@ -191,8 +181,6 @@
                 --prefix PATH : ${pkgs.bubblewrap}/bin
               )
             '';
-
-            src = filesetForCrate ./crates/cli;
           }
         );
       in {
