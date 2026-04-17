@@ -41,15 +41,18 @@
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
         inherit (pkgs) lib;
-        unfilteredSrc = ./.;
         src = lib.fileset.toSource {
-          root = unfilteredSrc;
+          root = ./.;
           fileset = lib.fileset.unions [
-            (craneLib.fileset.commonCargoSources unfilteredSrc)
-            (lib.fileset.fileFilter (file: file.hasExt "blp") unfilteredSrc)
+            (craneLib.fileset.commonCargoSources ./crates/bar)
+            (craneLib.fileset.commonCargoSources ./crates/cli)
+            (craneLib.fileset.commonCargoSources ./crates/icons)
+            (craneLib.fileset.commonCargoSources ./crates/niri-client)
+            (craneLib.fileset.commonCargoSources ./crates/process-guard)
+            (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
+            (craneLib.fileset.commonCargoSources ./crates/xtask)
+            (lib.fileset.fileFilter (file: file.hasExt "blp") ./.)
             (lib.fileset.maybeMissing ./assets)
-            (lib.fileset.maybeMissing ./crates/bar/assets)
-            (lib.fileset.maybeMissing ./crates/cli/src)
             ./src/style.css
           ];
         };
@@ -146,8 +149,20 @@
           commonArgs
           // {
             inherit cargoArtifacts;
-            version = "0.1.0";
+            inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
             doCheck = false;
+          };
+
+        filesetForCrate = crate:
+          lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              ./Cargo.toml
+              ./Cargo.lock
+              (craneLib.fileset.commonCargoSources ./crates/icons)
+              (craneLib.fileset.commonCargoSources ./crates/niri-client)
+              (craneLib.fileset.commonCargoSources crate)
+            ];
           };
 
         subniri = craneLib.buildPackage {
@@ -157,8 +172,7 @@
           pname = "subniri";
           cargoExtraArgs = "-p cli --bin subniri";
 
-          # Ensure glycin finds its loaders in the wrapped binary (wrapGAppsHook4)
-          # and that bubblewrap is on PATH for glycin-image-rs sandboxing.
+          src = filesetForCrate ./crates/cli;
         };
 
         polarbar = craneLib.buildPackage (
@@ -177,6 +191,8 @@
                 --prefix PATH : ${pkgs.bubblewrap}/bin
               )
             '';
+
+            src = filesetForCrate ./crates/cli;
           }
         );
       in {
