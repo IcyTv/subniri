@@ -8,16 +8,15 @@ use launcher_common::{
 	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, MatchKind, Provider, ProviderContext,
 	ProviderEvent, ProviderId, ProviderStatus, Query, RuntimeHandle, SectionHint, SessionHandle,
 };
-use nucleo::{Config, Matcher, Utf32Str};
+// use nucleo::{Config, Matcher, Utf32Str};
 use rayon::prelude::*;
 
 const APP_PROVIDER_ID: ProviderId = ProviderId("apps");
 
 pub struct AppProvider {
-	// apps: Arc<RwLock<Vec<App>>>,
-	// matcher: Arc<SkimMatcherV2>,
-	matcher: Matcher,
-
+	apps: Arc<RwLock<Vec<App>>>,
+	matcher: Arc<SkimMatcherV2>,
+	// matcher: Matcher,
 	sender: Sender<ProviderEvent>,
 	receiver: Receiver<ProviderEvent>,
 }
@@ -25,12 +24,12 @@ pub struct AppProvider {
 impl AppProvider {
 	pub fn new() -> Self {
 		let (sender, receiver) = async_channel::unbounded();
-		let config = Config::DEFAULT;
-		let matcher = Matcher::new(config);
+		// let config = Config::DEFAULT;
+		// let matcher = Matcher::new(config);
 		Self {
-			// apps: Arc::new(RwLock::new(vec![])),
-			// matcher: Arc::new(SkimMatcherV2::default()),
-			matcher,
+			apps: Arc::new(RwLock::new(vec![])),
+			matcher: Arc::new(SkimMatcherV2::default()),
+			// matcher,
 			sender,
 			receiver,
 		}
@@ -42,13 +41,13 @@ const WEIGHT_GENERIC: i64 = 80;
 const WEIGHT_KEYWORD: i64 = 60;
 const WEIGHT_CATEGORY: i64 = 30;
 
-fn analyze_match(text: &str, pattern: &str, matcher: &Matcher) -> Option<(i64, MatchKind)> {
-	let mut scratch_buffer = Vec::<char>::with_capacity(text.len().max(pattern.len()));
-	let text = Utf32Str::new(text, &mut scratch_buffer);
-	let pattern = Utf32Str::new(pattern, &mut scratch_buffer);
-	let mut indices = Vec::new();
-	// if let Some((score, indices)) = matcher.fuzzy_indices(text, pattern) {
-	if let Some(_) = matcher.fuzzy_indices(text, pattern, &mut indices) {
+fn analyze_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<(i64, MatchKind)> {
+	// let mut scratch_buffer = Vec::<char>::with_capacity(text.len().max(pattern.len()));
+	// let text = Utf32Str::new(text, &mut scratch_buffer);
+	// let pattern = Utf32Str::new(pattern, &mut scratch_buffer);
+	// let mut indices = Vec::new();
+	if let Some((score, indices)) = matcher.fuzzy_indices(text, pattern) {
+		// if let Some(_) = matcher.fuzzy_indices(text, pattern, &mut indices) {
 		// for indices in matches {
 		let is_contiguous = indices.windows(2).all(|w| w[0] + 1 == w[1]);
 
