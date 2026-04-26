@@ -226,7 +226,7 @@ impl Provider for AppProvider {
 	}
 
 	async fn activate(
-		&self, _session: SessionHandle, _candidate_id: &CandidateId, activation: &ActivationKey, _rt: RuntimeHandle,
+		&self, _session: SessionHandle, _candidate_id: &CandidateId, _activation: &ActivationKey, _rt: RuntimeHandle,
 	) -> anyhow::Result<Activation> {
 		Ok(Activation::CloseLauncher)
 	}

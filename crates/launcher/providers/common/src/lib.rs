@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use futures::stream::BoxStream;
 
 mod runtime_handle;
 pub use runtime_handle::RuntimeHandle;

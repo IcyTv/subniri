@@ -69,7 +69,7 @@ impl Provider for CalcProvider {
 
 			return Ok(());
 		}
-		let mut e = expr_str.clone();
+		let e = expr_str.clone();
 		let res = rt
 			.spawn_blocking(move || -> Result<f64, &'static str> {
 				let mut expr = Expression::new(&e);
