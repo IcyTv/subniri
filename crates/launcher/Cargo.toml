@@ -9,7 +9,18 @@ name = "avalaunch"
 path = "src/main.rs"
 
 [dependencies]
+anyhow.workspace = true
+astal4.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+calc-provider = { version = "0.1.0", path = "providers/calc" }
+app-provider = { version = "0.1.0", path = "providers/app" }
+futures.workspace = true
 glib.workspace = true
 gtk4.workspace = true
+icons.workspace = true
+launcher-common = { workspace = true, features = ["glib"] }
 process-guard.workspace = true
 workspace-hack = { version = "0.1", path = "../workspace-hack" }
+zbus.workspace = true
+clap.workspace = true

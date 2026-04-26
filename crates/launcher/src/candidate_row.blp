@@ -1,0 +1,49 @@
+using Gtk 4.0;
+
+template $CandidateRow: Gtk.Box {
+	orientation: horizontal;
+
+	styles [
+		"candidate"
+	]
+
+	Gtk.Box {
+		orientation: vertical;
+
+		styles [
+			"titles"
+		]
+		
+		Gtk.Label {
+			label: bind template.title;
+
+			styles [
+				"title"
+			]
+		}
+
+		Gtk.Label {
+			label: bind template.subtitle;
+
+			styles [
+				"subtitle"
+			]
+		}
+	}
+
+	Gtk.Box {
+		hexpand: true;
+		
+		styles [
+			"spacer"
+		]
+	}
+
+	Gtk.Label {
+		label: bind template.right_text;
+
+		styles [
+			"right-text"
+		]
+	}
+}

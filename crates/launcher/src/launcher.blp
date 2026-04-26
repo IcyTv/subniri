@@ -1,0 +1,67 @@
+using Gtk 4.0;
+
+template $LauncherWidget: Gtk.Box {
+	orientation: vertical;
+	overflow: hidden;
+	width-request: 600;
+
+	styles [
+		"launcher"
+	]
+
+	Gtk.Overlay {
+		styles [
+			"input"
+		]
+
+		child: Gtk.Label preview_label {
+			can-target: false;
+			can-focus: false;
+			halign: start;
+			valign: center;
+			use-markup: true;
+		};
+
+		[overlay]
+		Gtk.Text input_field {
+			placeholder-text: "Search";
+		}
+	}
+
+	Gtk.ListView {
+		orientation: horizontal;
+
+		model: Gtk.SingleSelection {
+			model: bind template.provider-names;
+			autoselect: false;
+			can-unselect: true;
+		};
+
+		factory: Gtk.BuilderListItemFactory {
+			template ListItem {
+				child: Label {
+					label: bind template.item as <Gtk.StringObject>.string;
+					
+					styles [
+						"provider-tag"
+					]
+				};
+			}
+		};
+	}
+
+	Gtk.ScrolledWindow results {
+		hscrollbar-policy: never;
+		vscrollbar-policy: automatic;
+		max-content-height: 800;
+		propagate-natural-height: true;
+
+		styles [
+			"results"
+		]
+
+		child: Gtk.ListView list_view {
+			orientation: vertical;
+		};
+	}
+}

@@ -568,3 +568,38 @@ scale.media-player-seekbar > trough {
 .weather-box .weather-icon-small {
 	color: @purple_1;
 }
+
+
+/* ------------------------
+* Launcher
+* ------------------------- */
+
+.avalaunch .window {
+}
+
+.avalaunch .launcher {
+	background-color: alpha(@window_bg_color, 0.85);
+	border: 1px solid alpha(@window_fg_color, 0.3);
+	box-shadow: 0 5px 16px alpha(black, 0.7);
+	border-radius: 12px;
+}
+
+.avalaunch .input {
+	background-color: @window_bg_color;
+	padding: 12px;
+	font-size: 2em;
+}
+
+.avalaunch .input placeholder {
+	color: alpha(@window_fg_color, 0.6);
+}
+
+.avalaunch .provider-tag {
+	border-radius: 16px;
+	padding: 4px;
+	background-color: shade(@accent_bg_color, 0.7);
+	color: white;
+}
+
+.avalaunch .backdrop {
+}

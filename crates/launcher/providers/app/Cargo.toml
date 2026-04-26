@@ -1,0 +1,18 @@
+[package]
+name = "app-provider"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+async-trait.workspace = true
+fst = { version = "0.4.7", features = ["levenshtein"] }
+futures.workspace = true
+fuzzy-matcher = "0.3.7"
+gio.workspace = true
+gio-unix.workspace = true
+glib.workspace = true
+launcher-common.workspace = true
+nucleo = "0.5.0"
+rayon = "1.12.0"

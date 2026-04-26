@@ -13,12 +13,17 @@ enum Command {
 		#[command(subcommand)]
 		command: PlayerCommand,
 	},
+	Launcher {
+		#[command(subcommand)]
+		command: LauncherCommand,
+	},
 }
 
 impl Command {
 	async fn run(&self) -> Result<()> {
 		match self {
 			Self::Player { command } => command.run().await,
+			Self::Launcher { command } => command.run().await,
 		}
 	}
 }
@@ -57,6 +62,35 @@ trait BarManager {
 	async fn toggle_play_pause(&self) -> Result<()>;
 	async fn next(&self) -> Result<()>;
 	async fn previous(&self) -> Result<()>;
+}
+
+#[derive(Subcommand)]
+enum LauncherCommand {
+	Launch,
+	Hide,
+}
+
+impl LauncherCommand {
+	async fn run(&self) -> Result<()> {
+		let connection = Connection::session().await?;
+
+		let proxy = LauncherManagerProxy::new(&connection).await?;
+
+		match self {
+			Self::Launch => proxy.launch().await,
+			Self::Hide => proxy.hide().await,
+		}
+	}
+}
+
+#[proxy(
+	interface = "de.icytv.subniri.Launcher",
+	default_service = "de.icytv.subniri.Launcher",
+	default_path = "/de/icytv/subniri/Launcher"
+)]
+trait LauncherManager {
+	async fn launch(&self) -> Result<()>;
+	async fn hide(&self) -> Result<()>;
 }
 
 #[tokio::main]

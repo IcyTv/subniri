@@ -15,6 +15,7 @@ publish = false
 
 ### BEGIN HAKARI SECTION
 [dependencies]
+astal-io = { version = "0.1", default-features = false, features = ["gio_v2_80"] }
 async-executor = { version = "1", default-features = false, features = ["static"] }
 bitflags = { version = "2", default-features = false, features = ["std"] }
 concurrent-queue = { version = "2" }

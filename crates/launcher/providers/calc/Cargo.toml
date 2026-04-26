@@ -1,0 +1,14 @@
+[package]
+name = "calc-provider"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+arboard = "3.6.1"
+async-channel.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+kalkulator = "0.2.2"
+launcher-common.workspace = true
+thread_local = "1.1.9"
