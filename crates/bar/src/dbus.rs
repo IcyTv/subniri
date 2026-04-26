@@ -20,7 +20,7 @@ impl DbusManager {
 	}
 }
 
-#[interface(name = "de.icytv.subniri.Bar")]
+#[interface(name = "de.icytv.subniri.Bar1")]
 impl DbusManager {
 	async fn cycle_player(&self) {
 		let _ = self.send.send(PlayerCommand::Cycle).await;

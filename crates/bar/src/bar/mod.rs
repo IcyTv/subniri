@@ -70,6 +70,7 @@ impl Bar {
 			.child(&center_box)
 			.keymode(astal4::Keymode::None)
 			.name("bar")
+			.namespace("subniri-bar")
 			.css_classes(["bar"])
 			.monitor(monitor_index)
 			.width_request(monitor_width)

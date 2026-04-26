@@ -15,7 +15,7 @@ template $BluetoothDevice: Gtk.Button {
     }
 
     Gtk.Label {
-      label: bind (template.device as <AstalBluetooth.Device>).alias;
+      label: bind template.device as <AstalBluetooth.Device>.alias;
     }
   };
 }

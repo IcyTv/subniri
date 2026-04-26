@@ -12,7 +12,7 @@ template $DeviceWidget: Gtk.ToggleButton {
       max-width-chars: 20;
       ellipsize: middle;
       hexpand: true;
-      label: bind (template.endpoint as <AstalWp.Endpoint>).description;
+      label: bind template.endpoint as <AstalWp.Endpoint>.description;
     }
   };
 }

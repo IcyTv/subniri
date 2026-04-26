@@ -40,7 +40,7 @@ template $VolumePopup: Gtk.Popover {
 
         Gtk.ToggleButton {
           icon-name: bind template.speaker-icon;
-          active: bind (template.default-speaker as <AstalWp.Endpoint>).mute;
+          active: bind template.default-speaker as <AstalWp.Endpoint>.mute;
 
           styles [
             "speaker-mute",
@@ -56,7 +56,7 @@ template $VolumePopup: Gtk.Popover {
             width-chars: 20;
             max-width-chars: 20;
             ellipsize: middle;
-            label: bind (template.default-speaker as <AstalWp.Endpoint>).name;
+            label: bind template.default-speaker as <AstalWp.Endpoint>.name;
 
             styles [
               "speaker-name",
@@ -88,7 +88,7 @@ template $VolumePopup: Gtk.Popover {
 
         Gtk.ToggleButton {
           icon-name: bind template.mic-icon;
-          active: bind (template.default-mic as <AstalWp.Endpoint>).mute;
+          active: bind template.default-mic as <AstalWp.Endpoint>.mute;
 
           styles [
             "mic-mute",
@@ -104,7 +104,7 @@ template $VolumePopup: Gtk.Popover {
             width-chars: 20;
             max-width-chars: 20;
             ellipsize: middle;
-            label: bind (template.default-mic as <AstalWp.Endpoint>).description;
+            label: bind template.default-mic as <AstalWp.Endpoint>.description;
 
             styles [
               "mic-name",

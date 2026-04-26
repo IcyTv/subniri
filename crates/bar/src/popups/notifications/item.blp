@@ -32,7 +32,7 @@ template $NotificationItem: Gtk.Box {
         wrap: true;
         wrap-mode: word_char;
         max-width-chars: 42;
-        label: bind (template.notification as <AstalNotifd.Notification>).summary;
+        label: bind template.notification as <AstalNotifd.Notification>.summary;
 
         styles [
           "notification-title",
@@ -46,7 +46,7 @@ template $NotificationItem: Gtk.Box {
         wrap-mode: word_char;
         max-width-chars: 42;
         lines: 3;
-        label: bind (template.notification as <AstalNotifd.Notification>).body;
+        label: bind template.notification as <AstalNotifd.Notification>.body;
 
         styles [
           "notification-body",

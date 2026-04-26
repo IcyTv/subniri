@@ -41,7 +41,7 @@
 
         rustToolchain = p:
           p.rust-bin.stable.latest.default.override {
-            extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo"];
+            extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
           };
 
         craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
@@ -164,6 +164,14 @@
             doCheck = false;
           };
 
+        runtimeLibs = with pkgs; lib.makeLibraryPath [
+          astal.apps astal.io astal.tray astal.mpris astal.notifd
+          astal.cava astal.wireplumber astal.network astal.bluetooth astal.astal4
+          gtk4 gtk4-layer-shell glib json-glib networkmanager graphene
+          libglycin glycin-loaders lcms fontconfig libseccomp glib-networking
+          gvfs gnutls gsettings-desktop-schemas libgweather appmenu-glib-translator
+        ];
+
         subniri = craneLib.buildPackage {
           inherit src;
           inherit (craneLib.crateNameFromCargoToml {inherit src;}) version;
@@ -190,6 +198,7 @@
                 --set GLYCIN_LOADERS_PATH ${pkgs.glycin-loaders}/libexec/glycin-loaders/2+
                 --prefix XDG_DATA_DIRS : ${pkgs.glycin-loaders}/share
                 --prefix PATH : ${pkgs.bubblewrap}/bin
+                --prefix LD_LIBRARY_PATH : ${runtimeLibs}
               )
             '';
           }
@@ -200,6 +209,12 @@
           // {
             pname = "avalaunch";
             cargoExtraArgs = "-p launcher --bin avalaunch";
+
+            preFixup = ''
+              gappsWrapperArgs+=(
+                --prefix LD_LIBRARY_PATH : ${runtimeLibs}
+              )
+            '';
           }
         );
 

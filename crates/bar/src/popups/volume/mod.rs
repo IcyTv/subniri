@@ -123,10 +123,11 @@ mod imp {
 				gtk4::Ordering::Equal
 			});
 
-			let sort_model = gtk4::SortListModel::new(Some(store.clone()), Some(sorter.clone()));
-
-			// Use the same sorter for section sorter
-			sort_model.set_section_sorter(Some(&sorter));
+			let sort_model = gtk4::SortListModel::builder()
+				.model(&store)
+				.sorter(&sorter)
+				.section_sorter(&sorter)
+				.build();
 
 			let selection_model = gtk4::NoSelection::new(Some(sort_model));
 

@@ -32,7 +32,7 @@ impl NotificationsOverlay {
 			.build();
 
 		let window = astal4::Window::builder()
-			.layer(astal4::Layer::Top)
+			.layer(astal4::Layer::Overlay)
 			.anchor(astal4::WindowAnchor::TOP | astal4::WindowAnchor::RIGHT)
 			.exclusivity(astal4::Exclusivity::Ignore)
 			.keymode(astal4::Keymode::None)
