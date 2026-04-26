@@ -210,6 +210,9 @@
             pname = "avalaunch";
             cargoExtraArgs = "-p launcher --bin avalaunch";
 
+            LUCIDE_ICONS_PATH = "${lucideIcons}";
+            SIMPLE_ICONS_PATH = "${simpleIcons}/icons";
+
             preFixup = ''
               gappsWrapperArgs+=(
                 --prefix LD_LIBRARY_PATH : ${runtimeLibs}
