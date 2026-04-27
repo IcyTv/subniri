@@ -53,7 +53,7 @@ impl PlayerCommand {
 
 // TODO: Create a unified crate for this interface...
 #[proxy(
-	interface = "de.icytv.subniri.Bar",
+	interface = "de.icytv.subniri.Bar1",
 	default_service = "de.icytv.subniri.Bar",
 	default_path = "/de/icytv/subniri/Bar"
 )]
