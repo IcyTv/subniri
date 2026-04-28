@@ -2,13 +2,24 @@ using Gtk 4.0;
 
 template $CandidateRow: Gtk.Box {
 	orientation: horizontal;
+	spacing: 20;
 
 	styles [
 		"candidate"
 	]
 
+	Gtk.Image {
+		gicon: bind template.icon;
+		icon-size: large;
+
+		styles [
+			"icon"
+		]
+	}
+
 	Gtk.Box {
 		orientation: vertical;
+		halign: start;
 
 		styles [
 			"titles"
@@ -16,6 +27,7 @@ template $CandidateRow: Gtk.Box {
 		
 		Gtk.Label {
 			label: bind template.title;
+			xalign: 0;
 
 			styles [
 				"title"
@@ -24,6 +36,7 @@ template $CandidateRow: Gtk.Box {
 
 		Gtk.Label {
 			label: bind template.subtitle;
+			xalign: 0;
 
 			styles [
 				"subtitle"

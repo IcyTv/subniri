@@ -27,6 +27,7 @@ impl CandidateRow {
 			.bind_property("right_text", self, "right_text")
 			.sync_create()
 			.build();
+		candidate_obj.bind_property("icon", self, "icon").sync_create().build();
 	}
 }
 
@@ -34,12 +35,12 @@ mod imp {
 	use std::cell::RefCell;
 
 	use glib::Properties;
-	use gtk4::CompositeTemplate;
+	use gtk4::{CompositeTemplate, gio::Icon};
 
 	use super::*;
 
 	#[derive(CompositeTemplate, Properties, Default)]
-	#[template(file = "./src/candidate_row.blp")]
+	#[template(file = "./src/candidate_row/candidate_row.blp")]
 	#[properties(wrapper_type = super::CandidateRow)]
 	pub struct CandidateRow {
 		#[property(get, set)]
@@ -48,6 +49,8 @@ mod imp {
 		subtitle: RefCell<Option<String>>,
 		#[property(get, set)]
 		right_text: RefCell<Option<String>>,
+		#[property(get, set)]
+		icon: RefCell<Option<Icon>>,
 	}
 
 	#[glib::object_subclass]

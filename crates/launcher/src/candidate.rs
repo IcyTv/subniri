@@ -1,6 +1,7 @@
+use gtk4::gio::{Icon, ThemedIcon};
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
-use launcher_common::{Candidate, SectionHint};
+use launcher_common::{Candidate, IconRef, SectionHint};
 
 glib::wrapper! {
 	pub struct CandidateObject(ObjectSubclass<imp::CandidateObject>);
@@ -22,7 +23,7 @@ impl CandidateObject {
 			.property("title", value.title.as_ref())
 			.property("subtitle", value.subtitle.map(|v| v.to_string()))
 			.property("right_text", value.right_text.map(|v| v.to_string()))
-			// TODO: Icon
+			.property("icon", value.icon.and_then(|ir| to_gicon(ir).ok()))
 			.property("kind", value.kind)
 			.property("section_hint", value.section_hint.unwrap_or(SectionHint::None))
 			.property("match_kind", value.match_kind)
@@ -30,11 +31,20 @@ impl CandidateObject {
 	}
 }
 
+fn to_gicon(icon_ref: IconRef) -> anyhow::Result<Icon> {
+	match icon_ref {
+		IconRef::SerializedIcon(serialized_icon) => Ok(Icon::for_string(&serialized_icon)?),
+		// NOTE: unwrap() is safe here, because gtk guarantees that a GThemedIcon is a subclass of
+		// GIcon
+		IconRef::ThemedName(name) => Ok(ThemedIcon::new(&name).upcast::<Icon>()),
+		_ => todo!("Convert IconRef"),
+	}
+}
+
 mod imp {
 	use std::cell::{Cell, RefCell};
 
 	use glib::Properties;
-	use gtk4::gio::Icon;
 	use launcher_common::{CandidateKind, MatchKind, SectionHint};
 
 	use super::*;

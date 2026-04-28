@@ -2,13 +2,14 @@ use std::sync::{Arc, RwLock};
 
 use async_channel::{Receiver, Sender};
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
-use gio::prelude::{AppInfoExt, IconExt};
-use gio_unix::prelude::Cast as _;
+use gio::{
+	glib::object::Cast as _,
+	prelude::{AppInfoExt, IconExt},
+};
 use launcher_common::{
-	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, MatchKind, Provider, ProviderContext,
+	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, IconRef, MatchKind, Provider, ProviderContext,
 	ProviderEvent, ProviderId, ProviderStatus, Query, RuntimeHandle, SectionHint, SessionHandle,
 };
-// use nucleo::{Config, Matcher, Utf32Str};
 use rayon::prelude::*;
 
 const APP_PROVIDER_ID: ProviderId = ProviderId("apps");
@@ -16,7 +17,6 @@ const APP_PROVIDER_ID: ProviderId = ProviderId("apps");
 pub struct AppProvider {
 	apps: Arc<RwLock<Vec<App>>>,
 	matcher: Arc<SkimMatcherV2>,
-	// matcher: Matcher,
 	sender: Sender<ProviderEvent>,
 	receiver: Receiver<ProviderEvent>,
 }
@@ -24,12 +24,9 @@ pub struct AppProvider {
 impl AppProvider {
 	pub fn new() -> Self {
 		let (sender, receiver) = async_channel::unbounded();
-		// let config = Config::DEFAULT;
-		// let matcher = Matcher::new(config);
 		Self {
 			apps: Arc::new(RwLock::new(vec![])),
 			matcher: Arc::new(SkimMatcherV2::default()),
-			// matcher,
 			sender,
 			receiver,
 		}
@@ -38,17 +35,12 @@ impl AppProvider {
 
 const WEIGHT_NAME: i64 = 100;
 const WEIGHT_GENERIC: i64 = 80;
+const WEIGHT_ACTION: i64 = 70;
 const WEIGHT_KEYWORD: i64 = 60;
 const WEIGHT_CATEGORY: i64 = 30;
 
 fn analyze_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<(i64, MatchKind)> {
-	// let mut scratch_buffer = Vec::<char>::with_capacity(text.len().max(pattern.len()));
-	// let text = Utf32Str::new(text, &mut scratch_buffer);
-	// let pattern = Utf32Str::new(pattern, &mut scratch_buffer);
-	// let mut indices = Vec::new();
 	if let Some((score, indices)) = matcher.fuzzy_indices(text, pattern) {
-		// if let Some(_) = matcher.fuzzy_indices(text, pattern, &mut indices) {
-		// for indices in matches {
 		let is_contiguous = indices.windows(2).all(|w| w[0] + 1 == w[1]);
 
 		let match_kind = if indices.len() == text.len() {
@@ -76,23 +68,85 @@ struct App {
 	categories: Arc<[Arc<str>]>,
 	keywords: Arc<[Arc<str>]>,
 	generic_name: Option<Arc<str>>,
+	subtitle: Option<Arc<str>>,
 }
 
 impl App {
+	#[inline]
 	fn to_cand(&self, score: i64, match_kind: MatchKind) -> Candidate {
 		Candidate {
 			provider: APP_PROVIDER_ID,
 			id: CandidateId(self.id.clone()),
 			activation: ActivationKey(self.id.clone()),
 			title: self.display_name.clone(),
-			subtitle: None,
-			right_text: Some(Arc::from(self.actions.join(", "))),
-			icon: None,
+			subtitle: self.subtitle.clone().or_else(|| self.generic_name.clone()),
+			right_text: None,
+			icon: self.icon.clone().map(IconRef::SerializedIcon),
 			kind: CandidateKind::App,
 			section_hint: Some(SectionHint::Apps),
 			match_kind,
 			provider_score: score as f32,
 		}
+	}
+
+	#[inline]
+	fn action_candidate(&self, action_name: Arc<str>, score: i64, match_kind: MatchKind) -> Candidate {
+		let id = Arc::<str>::from(format!("{}::{}", self.id, action_name));
+		Candidate {
+			id: CandidateId(id.clone()),
+			activation: ActivationKey(id.clone()),
+			title: action_name,
+			subtitle: Some(self.display_name.clone()),
+			kind: CandidateKind::Action,
+			section_hint: Some(SectionHint::Actions),
+			..self.to_cand(score, match_kind)
+		}
+	}
+}
+
+fn get_match(input: &str, matcher: &SkimMatcherV2, entry: &App) -> Option<(i64, MatchKind)> {
+	let mut best_score = -1;
+	let mut best_kind = MatchKind::Unknown;
+
+	if let Some((score, kind)) = analyze_match(entry.display_name.as_ref(), input.as_ref(), &matcher) {
+		best_score = score * WEIGHT_NAME;
+		best_kind = kind;
+	}
+
+	if let Some(generic_name) = entry.generic_name.as_ref() {
+		if let Some((score, kind)) = analyze_match(generic_name, input.as_ref(), &matcher) {
+			let score = score * WEIGHT_GENERIC;
+			if score > best_score {
+				best_score = score;
+				best_kind = kind;
+			}
+		}
+	}
+
+	for kw in entry.keywords.iter() {
+		if let Some((score, kind)) = analyze_match(kw, input.as_ref(), &matcher) {
+			let score = score * WEIGHT_KEYWORD;
+			if score > best_score {
+				best_score = score;
+				best_kind = kind;
+			}
+		}
+	}
+
+	for cat in entry.categories.iter() {
+		if let Some((score, kind)) = analyze_match(cat, input.as_ref(), &matcher) {
+			let score = score * WEIGHT_CATEGORY;
+			if score > best_score {
+				best_score = score;
+				best_kind = kind;
+			}
+		}
+	}
+
+	if best_score > 0 {
+		Some((best_score, best_kind))
+	} else {
+		None
 	}
 }
 
@@ -113,7 +167,7 @@ impl Provider for AppProvider {
 				gio::AppInfo::all()
 					.into_iter()
 					.filter(|info| info.should_show())
-					.filter_map(|info| info.downcast::<gio_unix::DesktopAppInfo>().ok())
+					.filter_map(|info| info.downcast::<gio::DesktopAppInfo>().ok())
 					.map(|app| App {
 						id: Arc::from(app.id().unwrap_or_else(|| app.name()).as_str()),
 						display_name: Arc::from(app.display_name().as_str()),
@@ -142,6 +196,7 @@ impl Provider for AppProvider {
 								.collect::<Vec<_>>(),
 						),
 						generic_name: app.generic_name().map(|n| Arc::from(n.as_str())),
+						subtitle: app.string("Comment").map(|n| Arc::from(n.as_str())),
 					})
 					.collect::<Vec<_>>()
 			})
@@ -174,47 +229,35 @@ impl Provider for AppProvider {
 		rt.spawn_blocking(move || {
 			let apps = apps.read().unwrap();
 			apps.par_iter().for_each_with(sender, |s, entry| {
-				let mut best_score = -1;
-				let mut best_kind = MatchKind::Unknown;
+				let app_match = get_match(&input, &matcher, entry);
 
-				if let Some((score, kind)) = analyze_match(entry.display_name.as_ref(), input.as_ref(), &matcher) {
-					best_score = score * WEIGHT_NAME;
-					best_kind = kind;
-				}
-
-				if let Some(generic_name) = entry.generic_name.as_ref() {
-					if let Some((score, kind)) = analyze_match(generic_name, input.as_ref(), &matcher) {
-						let score = score * WEIGHT_GENERIC;
-						if score > best_score {
-							best_score = score;
-							best_kind = kind;
+				if let Some((score, kind)) = app_match {
+					s.send_blocking(ProviderEvent::CandidateUpsert(entry.to_cand(score, kind)))
+						.unwrap();
+					for action in entry.actions.iter() {
+						s.send_blocking(ProviderEvent::CandidateUpsert(entry.action_candidate(
+							action.clone(),
+							score - 10,
+							kind,
+						)))
+						.unwrap();
+					}
+				} else {
+					for action in entry.actions.iter() {
+						if let Some((score, kind)) =
+							analyze_match(&format!("{} {}", entry.display_name, action), &input, &matcher)
+						{
+							let score = score * WEIGHT_ACTION;
+							if score > 0 {
+								s.send_blocking(ProviderEvent::CandidateUpsert(entry.action_candidate(
+									action.clone(),
+									score,
+									kind,
+								)))
+								.unwrap();
+							}
 						}
 					}
-				}
-
-				for kw in entry.keywords.iter() {
-					if let Some((score, kind)) = analyze_match(kw, input.as_ref(), &matcher) {
-						let score = score * WEIGHT_KEYWORD;
-						if score > best_score {
-							best_score = score;
-							best_kind = kind;
-						}
-					}
-				}
-
-				for cat in entry.categories.iter() {
-					if let Some((score, kind)) = analyze_match(cat, input.as_ref(), &matcher) {
-						let score = score * WEIGHT_CATEGORY;
-						if score > best_score {
-							best_score = score;
-							best_kind = kind;
-						}
-					}
-				}
-
-				if best_score > 0 {
-					let cand = entry.to_cand(best_score, best_kind);
-					s.send_blocking(ProviderEvent::CandidateUpsert(cand)).unwrap();
 				}
 			});
 		})

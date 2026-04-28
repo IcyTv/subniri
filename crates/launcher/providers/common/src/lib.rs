@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-
 mod runtime_handle;
 pub use runtime_handle::RuntimeHandle;
 
@@ -112,6 +111,7 @@ pub enum IconRef {
 	IconName(Arc<str>),
 	ThemedName(Arc<str>),
 	AbsolutePath(Arc<str>),
+	SerializedIcon(Arc<str>),
 }
 
 /// Provider-owned opaque payload key used for activation.

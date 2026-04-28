@@ -11,7 +11,6 @@ fst = { version = "0.4.7", features = ["levenshtein"] }
 futures.workspace = true
 fuzzy-matcher = "0.3.7"
 gio.workspace = true
-gio-unix.workspace = true
 glib.workspace = true
 launcher-common.workspace = true
 nucleo = "0.5.0"
