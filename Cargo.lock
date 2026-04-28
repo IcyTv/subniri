@@ -557,6 +557,7 @@ dependencies = [
  "system_shutdown",
  "urlencoding",
  "workspace-hack",
+ "x11rb",
  "zbus",
 ]
 

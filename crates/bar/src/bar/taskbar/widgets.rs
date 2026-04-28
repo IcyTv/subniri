@@ -1,5 +1,8 @@
 use std::cell::RefCell;
+use std::ffi::OsStr;
 use std::io::BufRead;
+use std::os::unix::ffi::OsStrExt;
+use std::path::Path;
 use std::path::PathBuf;
 
 use glib::Properties;
@@ -10,6 +13,9 @@ use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use niri_client::{Niri, NiriWindowLayout as WindowLayout, NiriWindowRaw as NiriWindow, NiriWorkspace as Workspace};
+use x11rb::connection::Connection;
+use x11rb::protocol::xproto::AtomEnum;
+use x11rb::protocol::xproto::ConnectionExt;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarItemKind {
@@ -230,20 +236,169 @@ fn resolve_app_icon_from_window(window: &NiriWindow) -> Option<gio::Icon> {
 	}
 
 	if let Some(pid) = window.pid {
-		let mut file = std::io::BufReader::new(std::fs::File::open(format!("/proc/{pid}/cmdline")).ok()?);
-		let mut bytes = Vec::new();
-		let _ = file.read_until(0, &mut bytes).ok()?;
-		let file_path = String::from_utf8(bytes).ok()?;
-		let file_path = PathBuf::from(file_path);
+		let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
 
-		let exec_name = file_path.file_name()?.to_str()?;
+		let args: Vec<&[u8]> = bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
 
-		for (cmdline, icon) in gio::AppInfo::all()
-			.into_iter()
-			.filter_map(|a| a.commandline().zip(a.icon()))
-		{
-			if cmdline.to_string_lossy().contains(exec_name) {
+		if args.is_empty() {
+			return None;
+		}
+
+		let mut names = Vec::new();
+
+		for (i, arg) in args.iter().filter(|a| !a.starts_with(b"-")).enumerate() {
+			let path = Path::new(OsStr::from_bytes(arg));
+
+			// Strategy A: The File Name (e.g., "obsidian" or "main.py")
+			if let Some(file_name) = path.file_name() {
+				let name = file_name.to_string_lossy().to_string();
+				names.push(name);
+
+				if let Some(stem) = path.file_stem() {
+					let stem = stem.to_string_lossy().to_string();
+					names.push(stem);
+				}
+			}
+
+			// Strategy B: The Parent Directory (Crucial for NixOS and .asar/flatpaks)
+			// e.g., .../share/my-cool-app/main.py -> "my-cool-app"
+			if let Some(parent_name) = path.parent().and_then(|p| p.file_name()) {
+				names.push(parent_name.to_string_lossy().to_string());
+			}
+
+			if i > 3 {
+				break;
+			}
+		}
+
+		for name in &names {
+			if let Some(icon) = icons::resolve_app_icon_from_app_id(name) {
 				return Some(icon);
+			}
+		}
+
+		let theme = gtk4::gdk::Display::default().map(|display| gtk4::IconTheme::for_display(&display))?;
+		for name in &names {
+			if theme.has_icon(name) {
+				return gio::Icon::for_string(name).ok();
+			}
+			let branded_name = format!("{name}-icon");
+			if theme.has_icon(&branded_name) {
+				return gio::Icon::for_string(&branded_name).ok();
+			}
+		}
+	}
+
+	if let Some(app_id) = &window.app_id {
+		if let Some(root_folder) = find_executable_for_x11_app(app_id)
+			.ok()
+			.and_then(|a| app_root_for_executable(&a))
+		{
+			if let Some(df) = find_desktop_file_for_root_folder(&root_folder) {
+				let app_info = gio::DesktopAppInfo::from_filename(&*df.to_string_lossy())?;
+
+				if let Some(icon_str) = app_info.string("Icon") {
+					if PathBuf::from(&icon_str).exists() {
+						let file = gio::File::for_path(icon_str);
+						return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
+					} else {
+						const ICON_SIZES: &[&'static str] =
+							&["scalable", "256x256", "128x128", "64x64", "48x48", "32x32"];
+						const ICON_EXTENSIONS: &[&'static str] = &["svg", "png", "xpm"];
+
+						for size in ICON_SIZES {
+							let icon = root_folder
+								.join("share")
+								.join("icons")
+								.join("hicolor")
+								.join(size)
+								.join("apps")
+								.join(&icon_str);
+
+							for ext in ICON_EXTENSIONS {
+								let icon = icon.with_extension(ext);
+								if icon.exists() {
+									let file = gio::File::for_path(icon);
+									return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
+								}
+							}
+						}
+
+						let icon = root_folder.join("share").join("pixmaps").join(&icon_str);
+						for ext in ICON_EXTENSIONS {
+							let icon = icon.with_extension(ext);
+							if icon.exists() {
+								let file = gio::File::for_path(icon);
+								return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	None
+}
+
+fn find_executable_for_x11_app(app_id: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+	let (conn, screen_num) = x11rb::connect(None)?;
+	let screen = &conn.setup().roots[screen_num];
+	let root_window = screen.root;
+
+	let net_win_pid_atom = conn.intern_atom(false, b"_NET_WM_PID")?.reply()?.atom;
+	let wm_class_atom = AtomEnum::WM_CLASS;
+
+	let tree = conn.query_tree(root_window)?.reply()?;
+
+	for window in tree.children {
+		let class_cookie = conn.get_property(false, window, wm_class_atom, AtomEnum::STRING, 0, 1024)?;
+		let class_reply = class_cookie.reply()?;
+
+		if let Some(class_val) = class_reply.value8() {
+			let class_val: Vec<_> = class_val.collect();
+			let class_str = String::from_utf8_lossy(&class_val);
+
+			if class_str.contains(app_id) {
+				let pid_cookie = conn.get_property(false, window, net_win_pid_atom, AtomEnum::CARDINAL, 0, 1)?;
+				let pid_reply = pid_cookie.reply()?;
+
+				if let Some(mut pid_val) = pid_reply.value32() {
+					if let Some(pid) = pid_val.next() {
+						let proc_path = format!("/proc/{}/exe", pid);
+						let exe_path = std::fs::read_link(proc_path)?;
+
+						return Ok(exe_path);
+					}
+				}
+			}
+		}
+	}
+
+	Err("Window or PID not found".into())
+}
+
+fn app_root_for_executable(executable: &Path) -> Option<PathBuf> {
+	if executable
+		.parent()
+		.and_then(|p| p.file_name())
+		.map_or(false, |name| name == "bin")
+	{
+		return executable.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+	}
+
+	eprintln!("TODO: What could this look like");
+	// TODO
+
+	None
+}
+
+fn find_desktop_file_for_root_folder(executable: &Path) -> Option<PathBuf> {
+	let applications_share_folder = executable.join("share").join("applications");
+	for entry in std::fs::read_dir(&applications_share_folder).ok()? {
+		if let Ok(entry) = entry.map(|e| e.path()) {
+			if entry.extension().map_or(false, |e| e.to_string_lossy() == "desktop") {
+				return Some(entry);
 			}
 		}
 	}
