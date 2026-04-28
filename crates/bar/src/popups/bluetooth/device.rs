@@ -22,14 +22,7 @@ impl BluetoothDevice {
 }
 
 mod imp {
-	use std::ffi::c_void;
-
 	use astal_bluetooth::prelude::DeviceExt;
-	use async_channel::Sender;
-	use glib::ffi::GError;
-	use glib::gobject_ffi::GObject;
-	use glib::translate::ToGlibPtr;
-	use gtk4::gio::ffi::{GAsyncReadyCallback, GAsyncResult};
 
 	use super::*;
 
@@ -123,7 +116,7 @@ mod imp {
 						#[weak]
 						device,
 						async move {
-							match device.connect_device().await {
+							match device.connect_device_future().await {
 								Ok(_) => {
 									println!("Connected to device {:?}", device);
 								}
@@ -143,7 +136,7 @@ mod imp {
 						#[weak]
 						obj,
 						async move {
-							match device.disconnect_device().await {
+							match device.disconnect_device_future().await {
 								Ok(_) => {
 									println!("Disconnected from device {:?}", device);
 								}
@@ -171,126 +164,6 @@ mod imp {
 				Some("audio-headset") => Icon::Headset.name(),
 				_ => Icon::Bluetooth.name(),
 			}
-		}
-	}
-
-	trait BtDeviceExt {
-		async fn connect_device(&self) -> Result<(), Box<dyn std::error::Error>>;
-		async fn disconnect_device(&self) -> Result<(), Box<dyn std::error::Error>>;
-	}
-
-	struct ContextData {
-		tx: Sender<ConnectionResult>,
-		finish:
-			unsafe extern "C" fn(*mut astal_bluetooth_sys::AstalBluetoothDevice, *mut GAsyncResult, *mut *mut GError),
-		_device: Device,
-	}
-
-	enum ConnectionResult {
-		Success,
-		Error(String),
-	}
-
-	impl BtDeviceExt for Device {
-		async fn connect_device(&self) -> Result<(), Box<dyn std::error::Error>> {
-			let callback = GAsyncReadyCallback::Some(callback);
-
-			let (tx, rx) = async_channel::bounded(1);
-			let user_data = Box::new(ContextData {
-				tx,
-				finish: astal_bluetooth_sys::astal_bluetooth_device_connect_device_finish,
-				_device: self.clone(),
-			});
-			let user_data_ptr = Box::into_raw(user_data);
-
-			// SAFETY: the strong ref stored in ContextData keeps the device alive until the callback
-			// runs; the borrowed pointer returned by to_glib_none() is valid for this call.
-			unsafe {
-				astal_bluetooth_sys::astal_bluetooth_device_connect_device(
-					self.to_glib_none().0,
-					callback,
-					user_data_ptr as *mut c_void,
-				);
-			}
-
-			match rx.recv().await {
-				Ok(ConnectionResult::Success) => Ok(()),
-				Ok(ConnectionResult::Error(msg)) => Err(Box::new(std::io::Error::other(msg))),
-				Err(e) => Err(Box::new(e)),
-			}
-		}
-
-		async fn disconnect_device(&self) -> Result<(), Box<dyn std::error::Error>> {
-			let callback = GAsyncReadyCallback::Some(callback);
-
-			let (tx, rx) = async_channel::bounded(1);
-			let user_data = Box::new(ContextData {
-				tx,
-				finish: astal_bluetooth_sys::astal_bluetooth_device_disconnect_device_finish,
-				_device: self.clone(),
-			});
-			let user_data_ptr = Box::into_raw(user_data);
-
-			unsafe {
-				astal_bluetooth_sys::astal_bluetooth_device_disconnect_device(
-					self.to_glib_none().0,
-					callback,
-					user_data_ptr as *mut c_void,
-				);
-			}
-
-			match rx.recv().await {
-				Ok(ConnectionResult::Success) => Ok(()),
-				Ok(ConnectionResult::Error(msg)) => Err(Box::new(std::io::Error::other(msg))),
-				Err(e) => Err(Box::new(e)),
-			}
-		}
-	}
-
-	unsafe extern "C" fn callback(source_object: *mut GObject, result: *mut GAsyncResult, user_data: *mut c_void) {
-		if user_data.is_null() {
-			eprintln!("User data is null in on_connect");
-			return;
-		}
-
-		println!("on_connect called");
-
-		// SAFETY: We allocated this with Box::into_raw() and GIO guarantees the callback
-		// is invoked exactly once (see GAsyncReadyCallback documentation in gio(3)).
-		// Taking ownership here ensures proper cleanup.
-		let user_data = unsafe { Box::from_raw(user_data as *mut ContextData) };
-
-		let finish = user_data.finish;
-
-		let mut error: *mut GError = std::ptr::null_mut();
-
-		// SAFETY: Calling the finish function for the async operation with valid pointers.
-		// - source_object is the same AstalBluetoothDevice* passed to the original async call,
-		//   guaranteed by GIO to be passed back to the callback (see GAsyncReadyCallback in gio(3))
-		// - result is a valid GAsyncResult* provided by GIO
-		// - error is an out-parameter that will be set if the operation failed
-		unsafe {
-			finish(
-				source_object as *mut astal_bluetooth_sys::AstalBluetoothDevice,
-				result,
-				(&mut error) as *mut *mut GError,
-			);
-		}
-
-		if error.is_null() {
-			let _ = user_data.tx.send_blocking(ConnectionResult::Success);
-		} else {
-			// SAFETY: error is a valid GError pointer set by the finish function.
-			// We must read the message and then free the error.
-			let message = unsafe {
-				let c_str = std::ffi::CStr::from_ptr((*error).message);
-				let message = c_str.to_string_lossy().into_owned();
-				// Free the GError as per GLib memory management (see g_error_free in glib(3))
-				glib::ffi::g_error_free(error);
-				message
-			};
-
-			let _ = user_data.tx.send_blocking(ConnectionResult::Error(message));
 		}
 	}
 }

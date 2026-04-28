@@ -1,4 +1,6 @@
 use std::cell::RefCell;
+use std::io::BufRead;
+use std::path::PathBuf;
 
 use glib::Properties;
 use glib::subclass::InitializingObject;
@@ -203,10 +205,12 @@ impl NiriWindowWidget {
 	}
 
 	fn icon_for_window(window: &NiriWindow) -> gio::Icon {
-		window
-			.app_id
-			.as_ref()
-			.and_then(Self::get_icon_for_app_id)
+		// window
+		// 	.app_id
+		// 	.as_ref()
+		// 	.and_then(Self::get_icon_for_app_id)
+		// 	.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap())
+		resolve_app_icon_from_window(window)
 			.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap())
 	}
 
@@ -214,10 +218,37 @@ impl NiriWindowWidget {
 		let pos = window.layout.pos_in_scrolling_layout.unwrap_or_default();
 		(pos.0 as i32, pos.1 as i32)
 	}
+}
 
-	fn get_icon_for_app_id(app_id: impl AsRef<str>) -> Option<gio::Icon> {
-		icons::resolve_app_icon_from_app_id(app_id.as_ref())
+fn resolve_app_icon_from_window(window: &NiriWindow) -> Option<gio::Icon> {
+	if let Some(icon) = window
+		.app_id
+		.as_ref()
+		.and_then(|app_id| icons::resolve_app_icon_from_app_id(&app_id))
+	{
+		return Some(icon);
 	}
+
+	if let Some(pid) = window.pid {
+		let mut file = std::io::BufReader::new(std::fs::File::open(format!("/proc/{pid}/cmdline")).ok()?);
+		let mut bytes = Vec::new();
+		let _ = file.read_until(0, &mut bytes).ok()?;
+		let file_path = String::from_utf8(bytes).ok()?;
+		let file_path = PathBuf::from(file_path);
+
+		let exec_name = file_path.file_name()?.to_str()?;
+
+		for (cmdline, icon) in gio::AppInfo::all()
+			.into_iter()
+			.filter_map(|a| a.commandline().zip(a.icon()))
+		{
+			if cmdline.to_string_lossy().contains(exec_name) {
+				return Some(icon);
+			}
+		}
+	}
+
+	None
 }
 
 mod niri_window_imp {

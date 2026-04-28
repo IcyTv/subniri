@@ -28,7 +28,7 @@ pub fn resolve_app_icon_from_app_id(app_id: &str) -> Option<gio::Icon> {
 		}
 	}
 
-	resolve_app_info_icon_by_fuzzy_match(app_id)
+	resolve_app_info_icon_by_fallback_match(app_id)
 }
 
 pub fn resolve_icon_candidate(candidate: &str, icon_theme: Option<&gtk4::IconTheme>) -> Option<gio::Icon> {
@@ -84,30 +84,33 @@ fn app_id_candidates(app_id: &str) -> Vec<String> {
 	candidates
 }
 
-pub fn resolve_app_info_icon_by_fuzzy_match(app_id: &str) -> Option<gio::Icon> {
+pub fn resolve_app_info_icon_by_fallback_match(app_id: &str) -> Option<gio::Icon> {
 	let needle = app_id.to_ascii_lowercase();
 
 	for app_info in gio::AppInfo::all() {
+		// 1. Check if the ID exactly matches (ignoring case)
 		let id_match = app_info
 			.id()
-			.map(|id| id.to_ascii_lowercase().contains(&needle))
+			.map(|id| id.to_ascii_lowercase() == needle)
 			.unwrap_or(false);
-		let name_match = app_info.name().to_ascii_lowercase().contains(&needle);
-		let display_name_match = app_info.display_name().to_ascii_lowercase().contains(&needle);
+
+		// 2. Check if the executable name exactly matches the app_id
 		let executable_match = app_info
 			.executable()
-			.to_string_lossy()
-			.to_ascii_lowercase()
-			.contains(&needle);
+			.file_name()
+			.map(|f| f.to_string_lossy().to_ascii_lowercase() == needle)
+			.unwrap_or(false);
+
+		// 3. Check StartupWMClass (Crucial for XWayland apps)
 		let startup_wm_class_match = app_info
 			.clone()
 			.downcast::<gio::DesktopAppInfo>()
 			.ok()
 			.and_then(|desktop_info| desktop_info.startup_wm_class())
-			.map(|wm_class| wm_class.to_ascii_lowercase().contains(&needle))
+			.map(|wm_class| wm_class.to_ascii_lowercase() == needle)
 			.unwrap_or(false);
 
-		if (id_match || name_match || display_name_match || executable_match || startup_wm_class_match)
+		if (id_match || executable_match || startup_wm_class_match)
 			&& let Some(icon) = app_info.icon()
 		{
 			return Some(icon);

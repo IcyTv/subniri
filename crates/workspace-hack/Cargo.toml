@@ -28,13 +28,16 @@ futures-executor = { version = "0.3" }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-gio = { version = "0.21", default-features = false, features = ["v2_80"] }
-gio-sys = { version = "0.21", default-features = false, features = ["v2_80"] }
+gio = { version = "0.21", default-features = false, features = ["v2_82"] }
+gio-sys = { version = "0.21", default-features = false, features = ["v2_82"] }
 glib = { version = "0.21", features = ["v2_86"] }
 glib-sys = { version = "0.21", default-features = false, features = ["v2_86"] }
 gobject-sys = { version = "0.21", default-features = false, features = ["v2_76", "v2_86"] }
 libc = { version = "0.2", features = ["extra_traits"] }
+lock_api = { version = "0.4", features = ["arc_lock"] }
+parking_lot = { version = "0.12", features = ["arc_lock", "send_guard"] }
 rustix = { version = "1", features = ["fs", "net"] }
+slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit-mut"] }
 uuid = { version = "1", features = ["serde", "v4"] }
@@ -49,12 +52,13 @@ futures-executor = { version = "0.3" }
 futures-io = { version = "0.3" }
 futures-sink = { version = "0.3", default-features = false, features = ["std"] }
 futures-util = { version = "0.3", features = ["channel", "io", "sink"] }
-gio = { version = "0.21", default-features = false, features = ["v2_80"] }
-gio-sys = { version = "0.21", default-features = false, features = ["v2_80"] }
+gio = { version = "0.21", default-features = false, features = ["v2_82"] }
+gio-sys = { version = "0.21", default-features = false, features = ["v2_82"] }
 glib = { version = "0.21", features = ["v2_86"] }
 glib-sys = { version = "0.21", default-features = false, features = ["v2_86"] }
 gobject-sys = { version = "0.21", default-features = false, features = ["v2_76", "v2_86"] }
 libc = { version = "0.2", features = ["extra_traits"] }
+slab = { version = "0.4" }
 smallvec = { version = "1", default-features = false, features = ["const_new", "union"] }
 syn = { version = "2", features = ["extra-traits", "fold", "full", "visit-mut"] }
 uuid = { version = "1", features = ["serde", "v4"] }
