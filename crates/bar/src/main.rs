@@ -1,3 +1,4 @@
+use bar::bar::IconCache;
 use gtk4::gdk::Display;
 use gtk4::prelude::*;
 use process_guard::{EnsureOutcome, ExistingInstancePolicy};
@@ -41,7 +42,7 @@ fn main() {
 
 		let player_manager = bar::dbus::DbusManager::new(command_send.clone());
 
-		let bars = bar::Bar::for_all_monitors(&display, player_model.clone(), command_send);
+		let bars = bar::Bar::for_all_monitors(&display, player_model.clone(), command_send, IconCache::new());
 
 		for bar in bars {
 			app.add_window(&bar.window);

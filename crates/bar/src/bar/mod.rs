@@ -1,6 +1,7 @@
 use gtk4::gdk;
 use gtk4::prelude::{BoxExt as _, *};
 
+pub use crate::bar::taskbar::IconCache;
 use crate::dbus::PlayerCommand;
 use crate::player::PlayerModel;
 
@@ -20,10 +21,10 @@ pub struct Bar {
 impl Bar {
 	fn new(
 		monitor_index: i32, monitor_width: i32, player_model: PlayerModel,
-		command_send: async_channel::Sender<PlayerCommand>,
+		command_send: async_channel::Sender<PlayerCommand>, icon_cache: IconCache,
 	) -> Self {
 		let overview = overview::Overview::new();
-		let taskbar = taskbar::Taskbar::new(monitor_index);
+		let taskbar = taskbar::Taskbar::new(monitor_index, icon_cache);
 		let start_child = gtk4::Box::builder()
 			.hexpand(true)
 			.orientation(gtk4::Orientation::Horizontal)
@@ -81,6 +82,7 @@ impl Bar {
 
 	pub fn for_all_monitors(
 		display: &gtk4::gdk::Display, player_model: PlayerModel, command_send: async_channel::Sender<PlayerCommand>,
+		icon_cache: IconCache,
 	) -> Vec<Self> {
 		display
 			.monitors()
@@ -89,7 +91,13 @@ impl Bar {
 			.enumerate()
 			.map(|(idx, monitor)| {
 				let width = monitor.geometry().width();
-				Bar::new(idx as i32, width, player_model.clone(), command_send.clone())
+				Bar::new(
+					idx as i32,
+					width,
+					player_model.clone(),
+					command_send.clone(),
+					icon_cache.clone(),
+				)
 			})
 			.collect()
 	}

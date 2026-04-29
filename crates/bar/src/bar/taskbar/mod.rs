@@ -1,23 +1,90 @@
 mod widgets;
 
+use std::cell::RefCell;
 use std::cmp::Ordering as StdOrdering;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
+use std::rc::Rc;
 
 use futures::StreamExt;
 use glib::clone;
 use glib::object::Cast;
 use gtk4::prelude::*;
 use gtk4::{CustomSorter, Ordering as GtkOrdering, gdk, gio};
+use lru::LruCache;
 use niri_client::{NiriWindowLayout as WindowLayout, NiriWindowRaw as Window, NiriWorkspace as Workspace};
 
 use widgets::{TaskbarItem, TaskbarItemKind};
+
+#[derive(Clone)]
+pub struct IconCache(Rc<RefCell<LruCache<String, Option<gio::Icon>>>>);
+
+impl IconCache {
+	pub fn new() -> Self {
+		Self(Rc::new(RefCell::new(LruCache::new(unsafe {
+			NonZeroUsize::new_unchecked(100)
+		}))))
+	}
+
+	/// Get a cached icon based of the PID
+	/// This function caches based off the `/proc/<pid>/cmdline` file.
+	/// That means: If the window has no PID, we can't cache it (should only happen with the gnome
+	/// portal, so not a huge deal)...
+	///
+	/// # Returns:
+	/// - `None` if the underlying resolver needs to run
+	/// - `Some(None)` if we have cached, that the app has no icon we can resolve
+	/// - `Some(Some(icon))` if the icon can be resolved
+	pub fn get(&self, window: &Window) -> Option<Option<gio::Icon>> {
+		let cache_key = Self::cache_key(window)?;
+
+		let mut icon_cache = self.0.borrow_mut();
+		icon_cache.get(&cache_key).cloned()
+	}
+
+	pub fn insert(&self, window: &Window, icon: Option<gio::Icon>) {
+		let Some(cache_key) = Self::cache_key(window) else {
+			return;
+		};
+
+		let mut icon_cache = self.0.borrow_mut();
+		let _ = icon_cache.push(cache_key, icon);
+	}
+
+	fn cache_key(window: &Window) -> Option<String> {
+		let mut cache_key = String::new();
+		if let Some(app_id) = &window.app_id {
+			if !matches!(app_id.as_str(), "electron" | "python" | "java") {
+				cache_key = app_id.clone();
+			}
+		}
+		if let Some(pid) = window.pid
+			&& cache_key.is_empty()
+		{
+			let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+				return None;
+			};
+			let cmdline = String::from_utf8_lossy(&cmdline);
+			cache_key = cmdline.to_string()
+		}
+
+		if cache_key.contains("xwayland") {
+			// TODO: For now we don't cache xwayland windows that don't properly advertise.
+			// We could technically do the stunt we do in the actual icon resolution, but, since
+			// this is rare, we simply re-resolve the icon...
+			return None;
+		}
+
+		if !cache_key.is_empty() { Some(cache_key) } else { None }
+	}
+}
 
 pub struct Taskbar {
 	widget: gtk4::ListView,
 }
 
 impl Taskbar {
-	pub fn new(monitor_index: i32) -> Self {
+	pub fn new(monitor_index: i32, icon_cache: IconCache) -> Self {
 		let item_factory = create_item_factory();
 		let sorter = create_sorter();
 
@@ -66,10 +133,10 @@ impl Taskbar {
 							update_workspace_focus(&store, workspace_tracker.focused_workspace_id());
 						}
 						WindowsChanged { windows } => {
-							rebuild_window_items(&store, &workspace_tracker, &windows);
+							rebuild_window_items(&store, &workspace_tracker, &windows, icon_cache.clone());
 						}
 						WindowOpenedOrChanged { window } => {
-							handle_window_update(&store, &workspace_tracker, &window);
+							handle_window_update(&store, &workspace_tracker, &window, icon_cache.clone());
 						}
 						WindowClosed { id } => {
 							remove_window_item(&store, id);
@@ -262,29 +329,29 @@ fn reconcile_window_items_with_workspaces(store: &gio::ListStore, tracker: &Work
 	}
 }
 
-fn rebuild_window_items(store: &gio::ListStore, tracker: &WorkspaceTracker, windows: &[Window]) {
+fn rebuild_window_items(store: &gio::ListStore, tracker: &WorkspaceTracker, windows: &[Window], icon_cache: IconCache) {
 	remove_window_items(store);
 
 	for window in windows {
 		if let Some((workspace_id, display_index)) = tracker.workspace_details(window) {
-			let item = TaskbarItem::new_window(window, workspace_id, display_index);
+			let item = TaskbarItem::new_window(window, workspace_id, display_index, icon_cache.clone());
 			store.append(&item);
 		}
 	}
 }
 
-fn handle_window_update(store: &gio::ListStore, tracker: &WorkspaceTracker, window: &Window) {
+fn handle_window_update(store: &gio::ListStore, tracker: &WorkspaceTracker, window: &Window, icon_cache: IconCache) {
 	let placement = tracker.workspace_details(window);
 
 	if let Some((index, item)) = find_taskbar_item(store, |item| item.is_window() && item.window_id() == window.id) {
 		if let Some((workspace_id, display_index)) = placement {
-			item.update_window(window, workspace_id, display_index);
+			item.update_window(window, workspace_id, display_index, icon_cache);
 			store.items_changed(index, 1, 1);
 		} else {
 			store.remove(index);
 		}
 	} else if let Some((workspace_id, display_index)) = placement {
-		let item = TaskbarItem::new_window(window, workspace_id, display_index);
+		let item = TaskbarItem::new_window(window, workspace_id, display_index, icon_cache);
 		store.append(&item);
 	}
 }

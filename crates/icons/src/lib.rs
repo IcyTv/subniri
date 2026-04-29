@@ -61,7 +61,7 @@ pub fn resolve_desktop_entry_icon(desktop_entry: &str) -> Option<gio::Icon> {
 	gio::DesktopAppInfo::new(&desktop_file).and_then(|app_info| app_info.icon())
 }
 
-fn app_id_candidates(app_id: &str) -> Vec<String> {
+pub fn app_id_candidates(app_id: &str) -> Vec<String> {
 	let mut candidates = Vec::new();
 	let mut push = |value: String| {
 		if !value.is_empty() && !candidates.contains(&value) {

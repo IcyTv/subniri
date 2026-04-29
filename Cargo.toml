@@ -33,7 +33,6 @@ glib-build-tools = "=0.21.0"
 glycin = { version = "=3.0.8", features = ["gdk4"] }
 gtk4 = { version = "=0.10.3", features = ["blueprint", "gio_v2_80", "v4_20"] }
 gio = { version = "=0.21.5", features = ["v2_82"] }
-gio-sys = { version = "=0.21.5", features = ["v2_82"] }
 heck = "0.5.0"
 icons = { path = "./crates/icons" }
 launcher-common = { path = "./crates/launcher/providers/common" }

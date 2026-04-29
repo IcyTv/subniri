@@ -76,10 +76,8 @@ const LUCIDE_ICONS: &[&str] = &[
 const BRAND_ICONS: &[&str] = &["discord", "spotify", "firefox", "nixos"];
 
 fn main() {
-	println!("cargo:rerun-if-env-changed=LUCIDE_ICONS_PATH");
-	println!("cargo:rerun-if-env-changed=SIMPLE_ICONS_PATH");
-	println!("cargo:rerun-if-changed=assets/resources.xml");
-	println!("cargo:rerun-if-changed=assets");
+	println!("cargo::rerun-if-env-changed=LUCIDE_ICONS_PATH");
+	println!("cargo::rerun-if-env-changed=SIMPLE_ICONS_PATH");
 
 	let out_dir = std::env::var("OUT_DIR").unwrap();
 	let dest_path = Path::new(&out_dir);
@@ -135,7 +133,11 @@ fn main() {
 	xml.push_str("  </gresource>\n</gresources>\n");
 
 	let xml_path = dest_path.join("lucide.xml");
-	std::fs::write(&xml_path, xml).unwrap();
+	let contents = std::fs::read_to_string(&xml_path).unwrap_or_default();
+	if contents != xml {
+		println!("cargo::warning=writing lucide.xml, because it changed");
+		std::fs::write(&xml_path, xml).unwrap();
+	}
 
 	let paths: &[&Path] = &[];
 	glib_build_tools::compile_resources(paths, xml_path.to_str().unwrap(), "lucide.gresource");
@@ -145,5 +147,10 @@ fn main() {
 		 str {{\n        match self {{\n{}\n        }}\n    }}\n}}",
 		variants, matches
 	);
-	std::fs::write(dest_path.join("icons.rs"), code).unwrap();
+
+	let icons_rs_path = dest_path.join("icons.rs");
+	let icons_content = std::fs::read_to_string(&icons_rs_path).unwrap_or_default();
+	if icons_content != code {
+		std::fs::write(&icons_rs_path, code).unwrap();
+	}
 }

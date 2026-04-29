@@ -1,10 +1,3 @@
-use std::cell::RefCell;
-use std::ffi::OsStr;
-use std::io::BufRead;
-use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
-use std::path::PathBuf;
-
 use glib::Properties;
 use glib::subclass::InitializingObject;
 use gtk4::CompositeTemplate;
@@ -13,9 +6,14 @@ use gtk4::gio;
 use gtk4::prelude::*;
 use gtk4::subclass::prelude::*;
 use niri_client::{Niri, NiriWindowLayout as WindowLayout, NiriWindowRaw as NiriWindow, NiriWorkspace as Workspace};
+use std::cell::RefCell;
+use std::path::Path;
+use std::path::PathBuf;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::AtomEnum;
 use x11rb::protocol::xproto::ConnectionExt;
+
+use super::IconCache;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum TaskbarItemKind {
@@ -42,8 +40,8 @@ impl TaskbarItem {
 		Self::from_widget(widget.upcast::<Widget>(), TaskbarItemKind::Workspace)
 	}
 
-	pub fn new_window(window: &NiriWindow, workspace_id: u64, display_index: u8) -> Self {
-		let widget = NiriWindowWidget::from_window(display_index, workspace_id, window);
+	pub fn new_window(window: &NiriWindow, workspace_id: u64, display_index: u8, icon_cache: IconCache) -> Self {
+		let widget = NiriWindowWidget::from_window(display_index, workspace_id, window, icon_cache);
 		Self::from_widget(widget.upcast::<Widget>(), TaskbarItemKind::Window)
 	}
 
@@ -119,9 +117,9 @@ impl TaskbarItem {
 		}
 	}
 
-	pub fn update_window(&self, window: &NiriWindow, workspace_id: u64, display_index: u8) {
+	pub fn update_window(&self, window: &NiriWindow, workspace_id: u64, display_index: u8, icon_cache: IconCache) {
 		if let Some(widget) = self.window() {
-			widget.refresh_from_window(display_index, workspace_id, window);
+			widget.refresh_from_window(display_index, workspace_id, window, icon_cache);
 		}
 	}
 }
@@ -160,8 +158,8 @@ glib::wrapper! {
 }
 
 impl NiriWindowWidget {
-	pub fn from_window(workspace_index: u8, workspace_id: u64, window: &NiriWindow) -> Self {
-		let icon = Self::icon_for_window(window);
+	pub fn from_window(workspace_index: u8, workspace_id: u64, window: &NiriWindow, icon_cache: IconCache) -> Self {
+		let icon = Self::icon_for_window(window, icon_cache);
 		let (column, tile) = Self::position_for_window(window);
 
 		let widget: Self = glib::Object::builder()
@@ -187,7 +185,9 @@ impl NiriWindowWidget {
 		self.set_tile_index(tile as i32);
 	}
 
-	pub fn refresh_from_window(&self, workspace_index: u8, workspace_id: u64, window: &NiriWindow) {
+	pub fn refresh_from_window(
+		&self, workspace_index: u8, workspace_id: u64, window: &NiriWindow, icon_cache: IconCache,
+	) {
 		self.set_workspace_index(workspace_index);
 		self.set_workspace_id(workspace_id);
 
@@ -198,7 +198,7 @@ impl NiriWindowWidget {
 		let title = window.title.as_deref().unwrap_or_default();
 		self.set_title(title);
 
-		let icon = Self::icon_for_window(window);
+		let icon = Self::icon_for_window(window, icon_cache);
 		self.set_icon(icon);
 	}
 
@@ -210,13 +210,8 @@ impl NiriWindowWidget {
 		}
 	}
 
-	fn icon_for_window(window: &NiriWindow) -> gio::Icon {
-		// window
-		// 	.app_id
-		// 	.as_ref()
-		// 	.and_then(Self::get_icon_for_app_id)
-		// 	.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap())
-		resolve_app_icon_from_window(window)
+	fn icon_for_window(window: &NiriWindow, icon_cache: IconCache) -> gio::Icon {
+		resolve_app_icon_from_window(window, icon_cache)
 			.unwrap_or_else(|| gio::Icon::for_string(icons::Icon::FileTerminal.name()).unwrap())
 	}
 
@@ -226,114 +221,224 @@ impl NiriWindowWidget {
 	}
 }
 
-fn resolve_app_icon_from_window(window: &NiriWindow) -> Option<gio::Icon> {
+// TODO: For better consolidation, move the inserts (and maybe the get) of the cache into a wrapper
+// function or just leave it to the calling function...
+// TODO: In fact we might just want to store a raw gio::Icon (without the Option) in the icon cache,
+// and just use the default icon for unresolved icons...
+fn resolve_app_icon_from_window(window: &NiriWindow, icon_cache: IconCache) -> Option<gio::Icon> {
+	if let Some(cached) = icon_cache.get(window) {
+		return cached;
+	}
+
 	if let Some(icon) = window
 		.app_id
 		.as_ref()
 		.and_then(|app_id| icons::resolve_app_icon_from_app_id(&app_id))
 	{
+		icon_cache.insert(window, Some(icon.clone()));
 		return Some(icon);
 	}
 
 	if let Some(pid) = window.pid {
-		let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+		let exe_path = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+		let exe_str = exe_path
+			.as_ref()
+			.map(|p| p.to_string_lossy().into_owned())
+			.unwrap_or_default();
 
-		let args: Vec<&[u8]> = bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
+		let cmdline_bytes = std::fs::read(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+		let args: Vec<&[u8]> = cmdline_bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
+		// Check if it's an Xwayland app
+		let is_x11 = exe_str.to_ascii_lowercase().contains("xwayland")
+			|| args
+				.iter()
+				.any(|arg| arg.to_ascii_lowercase().windows(8).any(|w| w == b"xwayland"));
 
-		if args.is_empty() {
-			return None;
+		let true_exe_path = if is_x11 {
+			if let Some(app_id) = &window.app_id {
+				find_executable_for_x11_app(app_id).ok()
+			} else {
+				None
+			}
+		} else {
+			exe_path.clone()
+		};
+
+		// Collect candidate paths: the true executable, and any absolute paths in cmdline
+		let mut candidate_paths = Vec::new();
+		if let Some(path) = true_exe_path {
+			candidate_paths.push(path);
 		}
 
-		let mut names = Vec::new();
+		for arg in &args {
+			let path_str = String::from_utf8_lossy(arg);
+			let path = PathBuf::from(path_str.as_ref());
+			if path.is_absolute() && path.exists() {
+				candidate_paths.push(path);
+			}
+		}
 
-		for (i, arg) in args.iter().filter(|a| !a.starts_with(b"-")).enumerate() {
-			let path = Path::new(OsStr::from_bytes(arg));
+		let candidates = window
+			.app_id
+			.as_ref()
+			.map_or(vec![], |app_id| icons::app_id_candidates(app_id));
 
-			// Strategy A: The File Name (e.g., "obsidian" or "main.py")
-			if let Some(file_name) = path.file_name() {
-				let name = file_name.to_string_lossy().to_string();
-				names.push(name);
-
-				if let Some(stem) = path.file_stem() {
-					let stem = stem.to_string_lossy().to_string();
-					names.push(stem);
+		// Try to resolve using local prefix (e.g. Nix store, /opt, ~/.local)
+		for candidate in &candidate_paths {
+			let roots = find_app_roots_from_path(candidate);
+			for root in roots {
+				if let Some(df) = find_desktop_file_for_root_folder(&root, &candidates) {
+					let kf = glib::KeyFile::new();
+					match kf.load_from_file(&df, glib::KeyFileFlags::NONE) {
+						Ok(_) => (),
+						Err(e) => {
+							eprintln!("Failed to parse keyfile: {e}");
+							continue;
+						}
+					};
+					if let Ok(icon_str) = kf.string("Desktop Entry", "Icon") {
+						if let Some(icon) = resolve_local_app_icon(&root, &icon_str) {
+							icon_cache.insert(window, Some(icon.clone()));
+							return Some(icon);
+						}
+					}
 				}
-			}
-
-			// Strategy B: The Parent Directory (Crucial for NixOS and .asar/flatpaks)
-			// e.g., .../share/my-cool-app/main.py -> "my-cool-app"
-			if let Some(parent_name) = path.parent().and_then(|p| p.file_name()) {
-				names.push(parent_name.to_string_lossy().to_string());
-			}
-
-			if i > 3 {
-				break;
-			}
-		}
-
-		for name in &names {
-			if let Some(icon) = icons::resolve_app_icon_from_app_id(name) {
-				return Some(icon);
-			}
-		}
-
-		let theme = gtk4::gdk::Display::default().map(|display| gtk4::IconTheme::for_display(&display))?;
-		for name in &names {
-			if theme.has_icon(name) {
-				return gio::Icon::for_string(name).ok();
-			}
-			let branded_name = format!("{name}-icon");
-			if theme.has_icon(&branded_name) {
-				return gio::Icon::for_string(&branded_name).ok();
 			}
 		}
 	}
 
-	if let Some(app_id) = &window.app_id {
-		if let Some(root_folder) = find_executable_for_x11_app(app_id)
-			.ok()
-			.and_then(|a| app_root_for_executable(&a))
-		{
-			if let Some(df) = find_desktop_file_for_root_folder(&root_folder) {
-				let app_info = gio::DesktopAppInfo::from_filename(&*df.to_string_lossy())?;
+	icon_cache.insert(window, None);
+	None
+}
 
-				if let Some(icon_str) = app_info.string("Icon") {
-					if PathBuf::from(&icon_str).exists() {
-						let file = gio::File::for_path(icon_str);
-						return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
-					} else {
-						const ICON_SIZES: &[&'static str] =
-							&["scalable", "256x256", "128x128", "64x64", "48x48", "32x32"];
-						const ICON_EXTENSIONS: &[&'static str] = &["svg", "png", "xpm"];
+fn find_app_roots_from_path(path: &Path) -> Vec<PathBuf> {
+	let mut roots = Vec::new();
+	let mut current = Some(path);
 
-						for size in ICON_SIZES {
-							let icon = root_folder
-								.join("share")
-								.join("icons")
-								.join("hicolor")
-								.join(size)
-								.join("apps")
-								.join(&icon_str);
+	while let Some(parent) = current.and_then(|p| p.parent()) {
+		let share_apps = parent.join("share").join("applications");
+		if share_apps.is_dir() {
+			roots.push(parent.to_path_buf());
+		}
+		current = Some(parent);
+	}
 
-							for ext in ICON_EXTENSIONS {
-								let icon = icon.with_extension(ext);
-								if icon.exists() {
-									let file = gio::File::for_path(icon);
-									return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
-								}
-							}
-						}
+	roots
+}
 
-						let icon = root_folder.join("share").join("pixmaps").join(&icon_str);
-						for ext in ICON_EXTENSIONS {
-							let icon = icon.with_extension(ext);
-							if icon.exists() {
-								let file = gio::File::for_path(icon);
-								return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
-							}
-						}
-					}
+fn find_desktop_file_for_root_folder(root_folder: &Path, candidates: &[String]) -> Option<PathBuf> {
+	let applications_share_folder = root_folder.join("share").join("applications");
+
+	let mut all_desktops = Vec::new();
+
+	if let Ok(entries) = std::fs::read_dir(&applications_share_folder) {
+		for entry in entries.flatten() {
+			let path = entry.path();
+			if path.extension().map_or(false, |e| e == "desktop") {
+				all_desktops.push(path);
+			}
+		}
+	}
+
+	if all_desktops.is_empty() {
+		return None;
+	}
+
+	if !candidates.is_empty() {
+		// 1. Exact match
+		for path in &all_desktops {
+			if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+				if candidates.iter().any(|c| c == file_stem) {
+					return Some(path.clone());
 				}
+			}
+		}
+
+		// 2. Reverse-DNS suffix match
+		for path in &all_desktops {
+			if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
+				if candidates.iter().any(|c| file_stem.ends_with(&format!(".{c}"))) {
+					return Some(path.clone());
+				}
+			}
+		}
+	}
+
+	// 3. Smart Fallback: Score them based on likeliness of being the main app
+	let mut scored_desktops: Vec<_> = all_desktops
+		.into_iter()
+		.map(|path| {
+			let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+			let mut penalty_score = 100; // Lower is better
+
+			// Huge boost if it at least contains the candidate name
+			if candidates.iter().any(|c| file_stem.contains(c)) {
+				penalty_score -= 50;
+			}
+
+			// Penalize MIME-type and generic handlers
+			if file_stem.contains('_') {
+				penalty_score += 30; // Heavy penalty for things like 'krita_csv'
+			}
+			if file_stem.contains('-') {
+				penalty_score += 10; // Light penalty for things like 'krita-painter'
+			}
+
+			// Break ties with length (shorter is usually the main app, assuming no underscores)
+			penalty_score += file_stem.len();
+
+			(penalty_score, path)
+		})
+		.collect();
+
+	// Sort by lowest penalty score
+	scored_desktops.sort_by_key(|k| k.0);
+
+	// Return the winner
+	scored_desktops.into_iter().next().map(|(_, p)| p)
+}
+
+fn resolve_local_app_icon(root_folder: &Path, icon_str: &str) -> Option<gio::Icon> {
+	let path = PathBuf::from(icon_str);
+
+	if path.is_absolute() && path.exists() {
+		let file = gio::File::for_path(&path);
+		return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
+	}
+
+	const ICON_SIZES: &[&str] = &["scalable", "256x256", "128x128", "64x64", "48x48", "32x32"];
+	const ICON_EXTENSIONS: &[&str] = &["svg", "png", "xpm"];
+
+	for size in ICON_SIZES {
+		let apps_folder = root_folder
+			.join("share")
+			.join("icons")
+			.join("hicolor")
+			.join(size)
+			.join("apps");
+
+		if !apps_folder.exists() {
+			continue;
+		}
+
+		// Exact Match
+		for ext in ICON_EXTENSIONS {
+			let icon = apps_folder.join(icon_str).with_extension(ext);
+			if icon.exists() {
+				let file = gio::File::for_path(icon);
+				return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
+			}
+		}
+	}
+
+	let pixmaps_folder = root_folder.join("share").join("pixmaps");
+	if pixmaps_folder.exists() {
+		// Exact Match
+		for ext in ICON_EXTENSIONS {
+			let icon = pixmaps_folder.join(icon_str).with_extension(ext);
+			if icon.exists() {
+				let file = gio::File::for_path(icon);
+				return Some(gio::FileIcon::new(&file).upcast::<gio::Icon>());
 			}
 		}
 	}
@@ -376,34 +481,6 @@ fn find_executable_for_x11_app(app_id: &str) -> Result<PathBuf, Box<dyn std::err
 	}
 
 	Err("Window or PID not found".into())
-}
-
-fn app_root_for_executable(executable: &Path) -> Option<PathBuf> {
-	if executable
-		.parent()
-		.and_then(|p| p.file_name())
-		.map_or(false, |name| name == "bin")
-	{
-		return executable.parent().and_then(|p| p.parent()).map(|p| p.to_path_buf());
-	}
-
-	eprintln!("TODO: What could this look like");
-	// TODO
-
-	None
-}
-
-fn find_desktop_file_for_root_folder(executable: &Path) -> Option<PathBuf> {
-	let applications_share_folder = executable.join("share").join("applications");
-	for entry in std::fs::read_dir(&applications_share_folder).ok()? {
-		if let Ok(entry) = entry.map(|e| e.path()) {
-			if entry.extension().map_or(false, |e| e.to_string_lossy() == "desktop") {
-				return Some(entry);
-			}
-		}
-	}
-
-	None
 }
 
 mod niri_window_imp {

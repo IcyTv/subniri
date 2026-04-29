@@ -41,6 +41,7 @@ workspace-hack = { version = "0.1", path = "../workspace-hack" }
 zbus.workspace = true
 async-broadcast.workspace = true
 x11rb = "0.13.2"
+lru = "0.18.0"
 
 [build-dependencies]
 glib-build-tools.workspace = true
