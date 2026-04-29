@@ -5,7 +5,7 @@
   ...
 }: let
   cfg = config.services.subniri;
-  packageSet = self.packages.${pkgs.system};
+  packageSet = self.packages.${pkgs.stdenv.hostPlatform.system};
 in {
   options.services.subniri = {
     enable = lib.mkEnableOption "subniri desktop stack";
