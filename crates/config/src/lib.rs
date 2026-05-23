@@ -52,16 +52,20 @@ pub struct Nightlight {
     /// and dusk times based of the real times that the sun sets.
     /// This setting can't be combined with manually setting `dawn` or `dusk`
     #[config(default = false)]
+    #[garde(custom(verify_use_location_dusk_dawn(&self.dusk, &self.dawn)))]
     use_location: bool,
 
     /// Time (usually in the morning), when the nightlight should change to the `day` settings.
     /// The format can be anything close to `"HH:MM"`
+    // TODO: Allow for default = None, when use_location and not specified...
     #[config(default = Time::new(7, 0, 0, 0).unwrap())]
-    dawn: Time,
+    #[garde(custom(verify_dusk_dawn_use_location("dawn", self.use_location)))]
+    dawn: Option<Time>,
     /// Time (usually in the evening), when the nightlight should change to the `night` settings.
     /// The format can be anything close to `"HH:MM"`
     #[config(default = Time::new(20, 0, 0, 0).unwrap())]
-    dusk: Time,
+    #[garde(custom(verify_dusk_dawn_use_location("dusk", self.use_location)))]
+    dusk: Option<Time>,
 
     /// Settings for daytime (after dawn, before dusk)
     #[config(default = NightlightSetting::day())]
@@ -73,13 +77,47 @@ pub struct Nightlight {
     night: NightlightSetting,
 }
 
+fn verify_use_location_dusk_dawn<'a>(
+    dusk: &'a Option<Time>,
+    dawn: &'a Option<Time>,
+) -> impl FnOnce(&bool, &()) -> garde::Result + 'a {
+    move |value, _| {
+        if *value && dusk.is_some() {
+            Err(garde::Error::new(
+                "`use_location` and `dusk` are mutually exclusive",
+            ))
+        } else if *value && dawn.is_some() {
+            Err(garde::Error::new(
+                "`use_location` and `dawn` are mutually exclusive",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn verify_dusk_dawn_use_location(
+    name: &'static str,
+    use_location: bool,
+) -> impl FnOnce(&Option<Time>, &()) -> garde::Result {
+    move |value, _| {
+        if use_location && value.is_some() {
+            Err(garde::Error::new(format!(
+                "`use_location` and `{name}` are mutually exclusive"
+            )))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl Default for Nightlight {
     fn default() -> Self {
         Self {
             enabled: false,
             use_location: false,
-            dawn: jiff::civil::Time::new(7, 0, 0, 0).unwrap(),
-            dusk: jiff::civil::Time::new(20, 0, 0, 0).unwrap(),
+            dawn: Some(jiff::civil::Time::new(7, 0, 0, 0).unwrap()),
+            dusk: Some(jiff::civil::Time::new(20, 0, 0, 0).unwrap()),
             night: NightlightSetting::night(),
             day: NightlightSetting::day(),
         }
@@ -176,6 +214,7 @@ mod test {
         let doc = r#"
 nightlight {
 enabled
+use_location
 }
 
 homeassistant {
