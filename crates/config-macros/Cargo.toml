@@ -1,0 +1,18 @@
+[package]
+name = "config-macros"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+documentation.workspace = true
+
+[dependencies]
+convert_case = "0.11.0"
+deluxe = "0.5.0"
+proc-macro-error2 = "2.0.1"
+proc-macro2 = "1.0.106"
+quote = "1.0.45"
+syn = { version = "2.0.117", features = ["full"] }
+
+[lib]
+proc-macro = true

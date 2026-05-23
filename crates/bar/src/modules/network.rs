@@ -1,0 +1,44 @@
+use iced::{
+    Element, Font, Length,
+    alignment::Vertical,
+    font,
+    widget::{row, svg, text},
+};
+
+use crate::{
+    modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS},
+    phosphor_icon,
+    style::COLORS,
+    widgets::{NeoButton, neo_button},
+};
+
+pub fn network<'a>() -> NeoButton<'a, Message> {
+    neo_button(
+        row![
+            svg(phosphor_icon!("network"))
+                .width(Length::Shrink)
+                .height(ICON_HEIGHT),
+            text("todo")
+                .font(Font {
+                    weight: font::Weight::Bold,
+                    ..Font::DEFAULT
+                })
+                .color(COLORS.text)
+                .size(18)
+                .align_y(Vertical::Center)
+        ]
+        .spacing(5.)
+        .align_y(Vertical::Center),
+    )
+    .height(MODULE_HEIGHT)
+    .radius(MODULE_RADIUS)
+    .background(COLORS.decorative.green)
+    .into()
+}
+
+#[derive(Debug, Clone)]
+pub enum Message {
+    Pressed,
+}
+
+pub struct Network {}

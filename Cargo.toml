@@ -1,0 +1,14 @@
+[workspace.package]
+version = "0.0.1"
+authors = ["IcyTv"]
+description = "Desktop shell for niri"
+edition = "2024"
+documentation = "https://github.com/IcyTv/subniri-slint"
+
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[profile.release]
+codegen-units = 1
+lto = true

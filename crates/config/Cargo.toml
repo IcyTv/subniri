@@ -1,0 +1,16 @@
+[package]
+name = "config"
+version.workspace = true
+authors.workspace = true
+description = "Config helpers for the subniri shell"
+edition.workspace = true
+documentation.workspace = true
+
+[dependencies]
+config-macros = { version = "0.0.1", path = "../config-macros" }
+config-traits = { version = "0.0.1", path = "../config-traits" }
+garde = { version = "0.22.1", features = ["derive"] }
+jiff = "0.2.24"
+kdl = { version = "6.5.0", features = ["v1-fallback"] }
+miette = { version = "7.6.0", features = ["fancy"] }
+url = "2.5.8"

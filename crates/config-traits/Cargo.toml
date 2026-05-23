@@ -1,0 +1,17 @@
+[package]
+name = "config-traits"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+documentation.workspace = true
+
+[dependencies]
+anyhow = "1.0.102"
+dateparser = "0.3.1"
+jiff = "0.2.24"
+kdl = { version = "6.5.0", features = ["v1-fallback"] }
+garde = "0.22.1"
+miette = { version = "7.6.0", features = ["derive"] }
+thiserror = "2.0.18"
+url = "2.5.8"
