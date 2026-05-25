@@ -13,6 +13,7 @@ async-channel = "2.5.0"
 async-stream = "0.3.6"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 chrono = "0.4.44"
+config = { version = "0.0.1", path = "../config" }
 dirs = "6.0.0"
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
@@ -38,6 +39,8 @@ iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", 
 iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3ed8530bf1d2708b2ba23bcbccb2babbfebd05d2" }
 icon = "0.2.0"
 image = "0.25.10"
+jiff = "0.2.25"
+kdl = { version = "6.5.0", features = ["v1-fallback"] }
 lazy-regex = "3.6.0"
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
@@ -47,6 +50,7 @@ lyon_algorithms = "1.0.20"
 mime = "0.3.17"
 mprizzle = { git = "https://github.com/IcyTv/mprizzle", version = "0.0.8" }
 niri-ipc = "26.4.0"
+nix = { version = "0.31.3", features = ["user"] }
 num-traits = "0.2.19"
 paste = "1.0.15"
 pretty_env_logger = "0.5.0"

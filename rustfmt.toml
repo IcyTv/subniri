@@ -1,0 +1,5 @@
+edition = "2024"
+fn_params_layout = "Compressed"
+hard_tabs = true
+newline_style = "Unix"
+use_field_init_shorthand = true

@@ -9,6 +9,7 @@ documentation.workspace = true
 [dependencies]
 config-macros = { version = "0.0.1", path = "../config-macros" }
 config-traits = { version = "0.0.1", path = "../config-traits" }
+dirs = "6.0.0"
 garde = { version = "0.22.1", features = ["derive"] }
 jiff = "0.2.24"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }

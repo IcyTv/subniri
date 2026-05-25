@@ -12,5 +12,11 @@ pub use neo_surface::NeoSurfaceStyle;
 mod neo_slider;
 pub use neo_slider::{NeoSlider, neo_slider};
 
+mod neo_toggle;
+pub use neo_toggle::{NeoToggle, neo_toggle};
+
+mod neo_toggle_button;
+pub use neo_toggle_button::neo_toggle_button;
+
 mod spinner;
 pub use spinner::{Spinner, spinner};
