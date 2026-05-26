@@ -100,6 +100,7 @@ impl Module {
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
 			}
+			Self::SystemMenu(menu) => menu.init().map(ModuleMessage::SystemMenu),
 			_ => Task::none(),
 		}
 	}
@@ -132,7 +133,7 @@ impl Module {
 				taskbar.update(message)
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
-				menu.update(message, config)
+				return menu.update(message, config).map(ModuleMessage::SystemMenu);
 			}
 			(_, ModuleMessage::Pressed(kind, bounds)) => {
 				println!("{kind:?} pressed");

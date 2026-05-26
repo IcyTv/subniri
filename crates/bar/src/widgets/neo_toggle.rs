@@ -153,6 +153,13 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
+			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
+				if state.pressed.value() =>
+			{
+				state.pressed.go_mut(false, Instant::now());
+				shell.request_redraw();
+				shell.capture_event();
+			}
 			Event::Window(window::Event::RedrawRequested(now)) => {
 				if state.pressed.is_animating(*now) || state.toggled.is_animating(*now) {
 					shell.request_redraw();
@@ -230,6 +237,8 @@ where
 				bounds: track,
 				border: iced::Border {
 					radius: self.track.radius.into(),
+					color: self.track.border,
+					width: self.track.border_width,
 					..Default::default()
 				},
 				snap: true,
@@ -240,6 +249,35 @@ where
 			} else {
 				self.track.background
 			},
+		);
+
+		let handle_size = bounds.height * 1.25;
+		let handle_x = if state.toggled.value() {
+			bounds.x - handle_size
+		} else {
+			bounds.x
+		};
+
+		let handle = Rectangle {
+			x: handle_x + offset,
+			y: bounds.y - (bounds.height * 0.125) + offset,
+			width: handle_size,
+			height: handle_size,
+		};
+
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: handle,
+				border: iced::Border {
+					radius: self.handle.radius.into(),
+					width: self.handle.border_width,
+					color: self.handle.border,
+					..Default::default()
+				},
+				snap: true,
+				..Default::default()
+			},
+			self.handle.background,
 		);
 	}
 }

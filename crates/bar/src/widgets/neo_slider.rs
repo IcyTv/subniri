@@ -186,6 +186,13 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
+			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
+				if state.pressed.value() =>
+			{
+				state.pressed.go_mut(false, Instant::now());
+				shell.request_redraw();
+				shell.capture_event();
+			}
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
@@ -374,7 +381,8 @@ where
 		);
 
 		let handle_size = bounds.height * 1.25;
-		let handle_x = bounds.width * percentage_filled;
+		let track_width = bounds.width - s;
+		let handle_x = bounds.x + (track_width - handle_size).max(0.0) * percentage_filled;
 
 		let offset = state
 			.pressed

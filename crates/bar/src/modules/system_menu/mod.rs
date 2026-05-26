@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use config::{ConfigFile, SystemMenuWidgets};
 use iced::{
-	Element, Font, Length, Subscription,
+	Element, Font, Length, Subscription, Task,
 	alignment::Vertical,
 	font,
 	widget::{column, grid, image, row, svg, text},
@@ -12,6 +12,7 @@ use jiff::{
 	fmt::friendly::{Designator, Spacing, SpanPrinter},
 };
 use nix::unistd::{Uid, User};
+use nmrs::NetworkManager;
 
 use crate::{
 	modules::{MODULE_HEIGHT, MODULE_RADIUS},
@@ -22,16 +23,25 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum Message {
+	AsyncDataLoaded(AsyncData),
 	UptimeUpdated(jiff::Span),
+	ToggleWifi,
 	Noop,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
+pub struct AsyncData {
+	nm: NetworkManager,
+	// Placeholder for any asynchronous data you might want to load in the future
+}
+
+#[derive(Debug, Clone)]
 pub struct SystemMenu {
 	widgets: Vec<SystemMenuWidgets>,
 	username: String,
 	avatar: image::Handle,
 	uptime: jiff::Span,
+	async_data: Option<AsyncData>,
 }
 
 impl SystemMenu {
@@ -41,8 +51,9 @@ impl SystemMenu {
 			.flatten()
 			.map(|u| u.name)
 			.unwrap_or_else(|| "<unknown>".to_string());
-		let avatar =
-			image::Handle::from_bytes(include_bytes!("../../../../assets/avatar.gif").as_slice());
+		let avatar = image::Handle::from_bytes(
+			include_bytes!("../../../../../assets/avatar.gif").as_slice(),
+		);
 		let uptime = uptime().unwrap_or_default();
 
 		Self {
@@ -50,7 +61,12 @@ impl SystemMenu {
 			username,
 			avatar,
 			uptime,
+			async_data: None,
 		}
+	}
+
+	pub fn init(&self) -> Task<Message> {
+		Task::perform(load_data(), Message::AsyncDataLoaded)
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
@@ -66,15 +82,29 @@ impl SystemMenu {
 		)
 	}
 
-	pub fn update(&mut self, message: Message, config: &ConfigFile) {
+	pub fn update(&mut self, message: Message, config: &ConfigFile) -> Task<Message> {
 		// Handle messages here
 		// FIXME: I absolutely hate this
 		self.widgets = config.system_menu.widgets.clone();
 
 		match message {
 			Message::UptimeUpdated(uptime) => self.uptime = uptime,
+			Message::AsyncDataLoaded(data) => self.async_data = Some(data),
+			Message::ToggleWifi if let Some(data) = &self.async_data => {
+				let nm = data.nm.clone();
+				return Task::perform(
+					async move {
+						let radios = nm.airplane_mode_state().await.unwrap();
+						let enabled = radios.wifi.enabled;
+						nm.set_wireless_enabled(!enabled).await.unwrap();
+					},
+					|_| Message::Noop,
+				);
+			}
 			_ => (),
 		}
+
+		Task::none()
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -137,17 +167,54 @@ impl SystemMenu {
 		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
 
 		for widget in &self.widgets {
-			match widget {
-				SystemMenuWidgets::Wifi => {
-					let tb = neo_toggle_button(true).width(Length::Fill).height(64);
-					grid = grid.push(tb);
-				}
-				SystemMenuWidgets::Bluetooth => (),
-				SystemMenuWidgets::Speaker => (),
-				SystemMenuWidgets::Microphone => (),
-				SystemMenuWidgets::Vpn => (),
-				SystemMenuWidgets::Nightlight => (),
+			let widget = match widget {
+				SystemMenuWidgets::Wifi => neo_toggle_button(
+					phosphor_icon!("wifi-high"),
+					"Wifi",
+					"-- %",
+					true,
+					Some(COLORS.white),
+				)
+				.on_press(Message::ToggleWifi),
+				SystemMenuWidgets::Bluetooth => neo_toggle_button(
+					phosphor_icon!("bluetooth"),
+					"Bluetooth",
+					"0 connected",
+					false,
+					Some(COLORS.white),
+				),
+				SystemMenuWidgets::Speaker => neo_toggle_button(
+					phosphor_icon!("speaker-high"),
+					"Default Sink",
+					"-- %",
+					true,
+					Some(COLORS.white),
+				),
+				SystemMenuWidgets::Microphone => neo_toggle_button(
+					phosphor_icon!("microphone"),
+					"Default Source",
+					"-- %",
+					false,
+					Some(COLORS.white),
+				),
+				SystemMenuWidgets::Vpn => neo_toggle_button(
+					phosphor_icon!("shield-slash"),
+					"VPN",
+					"Disconnected",
+					false,
+					Some(COLORS.white),
+				),
+				SystemMenuWidgets::Nightlight => neo_toggle_button(
+					phosphor_icon!("moon"),
+					"Nightlight",
+					"Off",
+					false,
+					Some(COLORS.white),
+				),
 			}
+			.width(Length::Fill)
+			.height(64);
+			grid = grid.push(widget);
 		}
 
 		content = content.push(grid);
@@ -158,6 +225,15 @@ impl SystemMenu {
 			.radius(MODULE_RADIUS)
 			.into()
 	}
+}
+
+async fn load_data() -> AsyncData {
+	let nm = NetworkManager::new()
+		.await
+		// FIXME: Don't panic here
+		.expect("Failed to connect to NetworkManager");
+
+	AsyncData { nm }
 }
 
 const UPTIME_PRINTER: SpanPrinter = SpanPrinter::new()

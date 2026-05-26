@@ -51,6 +51,7 @@ mime = "0.3.17"
 mprizzle = { git = "https://github.com/IcyTv/mprizzle", version = "0.0.8" }
 niri-ipc = "26.4.0"
 nix = { version = "0.31.3", features = ["user"] }
+nmrs = "3.1.5"
 num-traits = "0.2.19"
 paste = "1.0.15"
 pretty_env_logger = "0.5.0"

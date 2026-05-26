@@ -211,6 +211,13 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
+			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
+				if state.pressed.value() =>
+			{
+				state.pressed = state.pressed.clone().go(false, Instant::now());
+				shell.request_redraw();
+				shell.capture_event();
+			}
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
