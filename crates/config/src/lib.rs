@@ -1,3 +1,4 @@
+use std::io;
 use std::path::Path;
 
 use config_macros::{Config, ConfigFile, ConfigFileSerialize, ConfigSerialize};
@@ -61,14 +62,33 @@ impl ConfigFile {
 	}
 
 	pub fn load_from_file<P: AsRef<Path>>(file: P) -> Result<(KdlDocument, Self), ConfigError> {
-		let doc = std::fs::read_to_string(file)?;
-		let config = Self::parse_validated(&doc).map_err(|e| {
-			std::io::Error::new(
-				std::io::ErrorKind::InvalidData,
-				format!("Failed to parse config file: {e}"),
-			)
-		})?;
-		Ok((config.0, config.1))
+		let file = file.as_ref();
+		match std::fs::read_to_string(file) {
+			Ok(doc) => {
+				let config = Self::parse_validated(&doc).map_err(|e| {
+					std::io::Error::new(
+						std::io::ErrorKind::InvalidData,
+						format!("Failed to parse config file: {e}"),
+					)
+				})?;
+				Ok((config.0, config.1))
+			}
+			Err(e) if e.kind() == io::ErrorKind::NotFound => {
+				let config = Self::default();
+				let mut doc = KdlDocument::new();
+				config.apply_to_kdl_document(&mut doc)?;
+				doc.autoformat();
+
+				if let Some(parent) = file.parent() {
+					std::fs::create_dir_all(parent)?;
+				}
+
+				std::fs::write(file, doc.to_string())?;
+
+				Ok((doc, config))
+			}
+			Err(e) => Err(e.into()),
+		}
 	}
 }
 

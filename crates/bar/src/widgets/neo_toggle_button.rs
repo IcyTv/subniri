@@ -9,8 +9,8 @@ use crate::style::COLORS;
 use super::{NeoButton, neo_button, neo_toggle};
 
 pub fn neo_toggle_button<'a, Message>(
-	icon: svg::Handle, title: &'a str, subtitle: &'a str, toggled: bool,
-	icon_color: Option<iced::Color>,
+	icon: svg::Handle, title: impl text::IntoFragment<'a>, subtitle: impl text::IntoFragment<'a>,
+	toggled: bool, icon_color: Option<iced::Color>,
 ) -> NeoButton<'a, Message>
 where
 	Message: Clone + 'a,
