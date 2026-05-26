@@ -95,8 +95,14 @@ struct State {
 
 impl Default for State {
 	fn default() -> Self {
+		Self::new(false)
+	}
+}
+
+impl State {
+	fn new(toggled: bool) -> Self {
 		Self {
-			toggled: Animation::new(false).very_quick(),
+			toggled: Animation::new(toggled).very_quick(),
 			pressed: Animation::new(false).very_quick(),
 			hovered: false,
 		}
@@ -117,7 +123,15 @@ where
 	}
 
 	fn state(&self) -> tree::State {
-		tree::State::new(State::default())
+		tree::State::new(State::new(self.toggled))
+	}
+
+	fn diff(&self, tree: &mut Tree) {
+		let state = tree.state.downcast_mut::<State>();
+
+		if state.toggled.value() != self.toggled {
+			state.toggled.go_mut(self.toggled, Instant::now());
+		}
 	}
 
 	fn update(
@@ -130,6 +144,7 @@ where
 		let over = cursor.is_over(bounds);
 
 		state.hovered = over;
+		state.toggled.go_mut(self.toggled, Instant::now());
 
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {
@@ -138,7 +153,7 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
-			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Right))
+			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
 				if over {
@@ -232,6 +247,11 @@ where
 			height: bounds.height - s,
 		};
 
+		let track_fill_color =
+			state
+				.toggled
+				.interpolate(self.track.background, self.fill_color, Instant::now());
+
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: track,
@@ -244,19 +264,15 @@ where
 				snap: true,
 				..Default::default()
 			},
-			if state.toggled.value() {
-				self.fill_color
-			} else {
-				self.track.background
-			},
+			track_fill_color,
 		);
 
 		let handle_size = bounds.height * 1.25;
-		let handle_x = if state.toggled.value() {
-			bounds.x - handle_size
-		} else {
-			bounds.x
-		};
+		let handle_x = state.toggled.interpolate(
+			bounds.x,
+			bounds.x + bounds.width - handle_size,
+			Instant::now(),
+		);
 
 		let handle = Rectangle {
 			x: handle_x + offset,

@@ -191,8 +191,7 @@ where
 
 	fn update(
 		&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
-		_renderer: &Renderer, shell: &mut iced::advanced::Shell<'_, Message>,
-		_viewport: &Rectangle,
+		renderer: &Renderer, shell: &mut iced::advanced::Shell<'_, Message>, viewport: &Rectangle,
 	) {
 		if !self.enabled {
 			return;
@@ -203,6 +202,17 @@ where
 		let over = cursor.is_over(bounds);
 
 		state.hovered = over;
+
+		Widget::update(
+			self.content.as_widget_mut(),
+			&mut tree.children[0],
+			event,
+			layout.child(0),
+			cursor,
+			renderer,
+			shell,
+			viewport,
+		);
 
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {

@@ -26,12 +26,14 @@ pub enum Message {
 	AsyncDataLoaded(AsyncData),
 	UptimeUpdated(jiff::Span),
 	ToggleWifi,
+	WifiToggled(bool),
 	Noop,
 }
 
 #[derive(Debug, Clone)]
 pub struct AsyncData {
 	nm: NetworkManager,
+	wifi_enabled: bool,
 	// Placeholder for any asynchronous data you might want to load in the future
 }
 
@@ -42,6 +44,7 @@ pub struct SystemMenu {
 	avatar: image::Handle,
 	uptime: jiff::Span,
 	async_data: Option<AsyncData>,
+	wifi_enabled: bool,
 }
 
 impl SystemMenu {
@@ -62,6 +65,7 @@ impl SystemMenu {
 			avatar,
 			uptime,
 			async_data: None,
+			wifi_enabled: false,
 		}
 	}
 
@@ -83,13 +87,15 @@ impl SystemMenu {
 	}
 
 	pub fn update(&mut self, message: Message, config: &ConfigFile) -> Task<Message> {
-		// Handle messages here
 		// FIXME: I absolutely hate this
 		self.widgets = config.system_menu.widgets.clone();
 
 		match message {
 			Message::UptimeUpdated(uptime) => self.uptime = uptime,
-			Message::AsyncDataLoaded(data) => self.async_data = Some(data),
+			Message::AsyncDataLoaded(data) => {
+				self.wifi_enabled = data.wifi_enabled;
+				self.async_data = Some(data);
+			}
 			Message::ToggleWifi if let Some(data) = &self.async_data => {
 				let nm = data.nm.clone();
 				return Task::perform(
@@ -97,10 +103,12 @@ impl SystemMenu {
 						let radios = nm.airplane_mode_state().await.unwrap();
 						let enabled = radios.wifi.enabled;
 						nm.set_wireless_enabled(!enabled).await.unwrap();
+						enabled
 					},
-					|_| Message::Noop,
+					Message::WifiToggled,
 				);
 			}
+			Message::WifiToggled(enabled) => self.wifi_enabled = enabled,
 			_ => (),
 		}
 
@@ -172,8 +180,12 @@ impl SystemMenu {
 					phosphor_icon!("wifi-high"),
 					"Wifi",
 					"-- %",
-					true,
-					Some(COLORS.white),
+					self.wifi_enabled,
+					if self.wifi_enabled {
+						Some(COLORS.decorative.green50)
+					} else {
+						Some(COLORS.white)
+					},
 				)
 				.on_press(Message::ToggleWifi),
 				SystemMenuWidgets::Bluetooth => neo_toggle_button(
@@ -233,7 +245,15 @@ async fn load_data() -> AsyncData {
 		// FIXME: Don't panic here
 		.expect("Failed to connect to NetworkManager");
 
-	AsyncData { nm }
+	let wifi_enabled = nm
+		.airplane_mode_state()
+		.await
+		.map(|state| state.wifi.enabled)
+		.unwrap_or(false);
+
+	log::trace!("Wifi enabled: {wifi_enabled}");
+
+	AsyncData { nm, wifi_enabled }
 }
 
 const UPTIME_PRINTER: SpanPrinter = SpanPrinter::new()
