@@ -2302,7 +2302,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -2349,7 +2349,7 @@ dependencies = [
 [[package]]
 name = "iced_layershell"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "enumflags2",
  "futures",
@@ -2376,7 +2376,7 @@ dependencies = [
 [[package]]
 name = "iced_layershell_macros"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "darling",
  "manyhow",
@@ -2438,7 +2438,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "futures",
  "iced",
@@ -2967,7 +2967,7 @@ dependencies = [
 [[package]]
 name = "layershellev"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
@@ -6531,7 +6531,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=052adc8f7c24965266a166e0ff87393630d8ff37#052adc8f7c24965266a166e0ff87393630d8ff37"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=db62e6ba336feeb37a1297325ad3fc9b66b886e2#db62e6ba336feeb37a1297325ad3fc9b66b886e2"
 dependencies = [
  "calloop 0.14.4",
  "log",

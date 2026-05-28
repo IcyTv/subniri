@@ -1,10 +1,10 @@
 use config::ConfigFile;
-use std::{path::PathBuf, process::Command, time::Duration};
+use std::{collections::HashMap, path::PathBuf, process::Command, time::Duration};
 
 use iced::Length;
 use iced::widget::{container, row, stack, text};
 use iced::window::Id;
-use iced::{Color, Element, Event, Subscription, Task, Theme, event};
+use iced::{Color, Element, Subscription, Task, Theme};
 use iced_layershell::actions::{IcedNewPopupSettings, PopupPlacement, PopupSize};
 use iced_layershell::reexport::{Anchor, xdg_positioner::ConstraintAdjustment};
 use iced_layershell::settings::{LayerShellSettings, StartMode};
@@ -43,6 +43,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 	)
 	.theme(neo_theme())
 	.style(Bar::style)
+	.scale_factor(Bar::scale_factor)
 	.subscription(Bar::subscription)
 	.settings(Settings {
 		with_connection: Some(connection.into()),
@@ -50,8 +51,8 @@ fn main() -> Result<(), iced_layershell::Error> {
 		..Default::default()
 	})
 	.layer_settings(LayerShellSettings {
-		size: Some((0, 60)),
-		exclusive_zone: 60,
+		size: Some((0, BASE_BAR_HEIGHT)),
+		exclusive_zone: BASE_BAR_HEIGHT as i32,
 		anchor: Anchor::Top | Anchor::Left | Anchor::Right,
 		start_mode: StartMode::AllScreens,
 		..Default::default()
@@ -60,7 +61,8 @@ fn main() -> Result<(), iced_layershell::Error> {
 	app.run()
 }
 
-#[allow(dead_code)]
+const BASE_BAR_HEIGHT: u32 = 60;
+
 fn scale_for_screen(height: u32) -> f32 {
 	const BASE_SCREEN_HEIGHT: f32 = 1440.0;
 	const SCREEN_SCALE_EXPONENT: f32 = 0.75;
@@ -77,6 +79,7 @@ struct Bar {
 	right: Vec<Module>,
 
 	open_popup: Option<(Id, Section, usize)>,
+	layer_heights: HashMap<Id, u32>,
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 }
@@ -97,6 +100,7 @@ impl Bar {
 				Module::clock(),
 			],
 			open_popup: None,
+			layer_heights: HashMap::new(),
 			config_doc,
 			config_file,
 		};
@@ -116,12 +120,15 @@ impl Bar {
 
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
-			BarMessage::WindowClosed(id) => {
-				if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
-					self.open_popup = None;
-				}
-				Task::none()
-			}
+			BarMessage::WindowEvent(id, event) => match event {
+				iced::window::Event::Opened { .. }
+				| iced::window::Event::Resized(_)
+				| iced::window::Event::Rescaled(_)
+				| iced::window::Event::RedrawRequested(_) => self.sync_layer_scale(id),
+				iced::window::Event::Closed => self.window_closed(id),
+				_ => Task::none(),
+			},
+			BarMessage::WindowClosed(id) => self.window_closed(id),
 			BarMessage::Module(section, index, ModuleMessage::OpenPopup(kind, bounds)) => {
 				let id = Id::unique();
 
@@ -192,6 +199,48 @@ impl Bar {
 			}
 			_ => Task::none(),
 		}
+	}
+
+	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
+		self.layer_heights.remove(&id);
+		if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
+			self.open_popup = None;
+		}
+		Task::none()
+	}
+
+	fn sync_layer_scale(&mut self, id: Id) -> Task<BarMessage> {
+		if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
+			return Task::none();
+		}
+
+		let height = Self::bar_height_for_scale(self.scale_factor(id));
+		if self.layer_heights.insert(id, height) == Some(height) {
+			return Task::none();
+		}
+
+		Task::batch([
+			Task::done(BarMessage::SizeChange {
+				id,
+				size: (0, height),
+			}),
+			Task::done(BarMessage::ExclusiveZoneChange {
+				id,
+				zone_size: height as i32,
+			}),
+		])
+	}
+
+	fn scale_factor(&self, id: Id) -> f32 {
+		let Some((_, height)) = iced_layershell::window::output_logical_size(id) else {
+			return 1.0;
+		};
+
+		scale_for_screen(height.max(0) as u32)
+	}
+
+	fn bar_height_for_scale(scale: f32) -> u32 {
+		(BASE_BAR_HEIGHT as f32 * scale).round() as u32
 	}
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
@@ -270,7 +319,7 @@ impl Bar {
 
 	fn subscription(&self) -> Subscription<BarMessage> {
 		let mut subscriptions = vec![
-			event::listen().map(BarMessage::IcedEvent),
+			iced::window::events().map(|(id, event)| BarMessage::WindowEvent(id, event)),
 			iced::window::close_events().map(BarMessage::WindowClosed),
 		];
 
@@ -311,8 +360,7 @@ enum Section {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 enum BarMessage {
-	#[allow(dead_code)]
-	IcedEvent(Event),
+	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
 	Module(Section, usize, ModuleMessage),
 	SetPopupId(Section, usize, ModuleKind, Id),

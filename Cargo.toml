@@ -35,9 +35,9 @@ iced = { version = "0.15.0-dev", features = [
   "tokio",
   "canvas",
 ], git = "https://github.com/IcyTv/iced", default-features = false, rev = "1722750ba7e279cc1661e52bee1c1014e42b167f" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "052adc8f7c24965266a166e0ff87393630d8ff37" }
+iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "db62e6ba336feeb37a1297325ad3fc9b66b886e2" }
 iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "1722750ba7e279cc1661e52bee1c1014e42b167f" }
-iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "052adc8f7c24965266a166e0ff87393630d8ff37" }
+iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "db62e6ba336feeb37a1297325ad3fc9b66b886e2" }
 icon = "0.2.0"
 image = "0.25.10"
 jiff = "0.2.25"
