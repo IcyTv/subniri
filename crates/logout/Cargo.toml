@@ -1,0 +1,20 @@
+[package]
+name = "iceout"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+documentation.workspace = true
+
+[dependencies]
+clap.workspace = true
+iced.workspace = true
+iced_layershell.workspace = true
+futures.workspace = true
+log.workspace = true
+neo-widgets.workspace = true
+nix.workspace = true
+pretty_env_logger.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
+zbus.workspace = true
+zvariant = "5.11.0"

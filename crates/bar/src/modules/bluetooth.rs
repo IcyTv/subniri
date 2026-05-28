@@ -9,13 +9,13 @@ use iced::{
 	font,
 	widget::{row, svg, text},
 };
-
-use crate::{
-	modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS},
+use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_button},
 };
+
+use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
 #[derive(Debug, Clone)]
 pub enum Message {

@@ -11,21 +11,24 @@ use jiff::{
 	SpanRound, Unit,
 	fmt::friendly::{Designator, Spacing, SpanPrinter},
 };
-use nix::unistd::{Uid, User};
-
-use crate::{
-	modules::{MODULE_HEIGHT, MODULE_RADIUS},
+use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_button, neo_card, neo_toggle_button},
 };
+use nix::unistd::{Uid, User};
 
+use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
+
+mod bluetooth;
 mod wifi;
 
 #[derive(Debug, Clone)]
 pub enum Message {
 	UptimeUpdated(jiff::Span),
 	Wifi(wifi::Message),
+	Bluetooth(bluetooth::Message),
+	OpenPowerMenu,
 	Noop,
 }
 
@@ -36,6 +39,7 @@ pub struct SystemMenu {
 	avatar: image::Handle,
 	uptime: jiff::Span,
 	wifi: wifi::Wifi,
+	bluetooth: bluetooth::Bluetooth,
 }
 
 impl SystemMenu {
@@ -56,11 +60,15 @@ impl SystemMenu {
 			avatar,
 			uptime,
 			wifi: wifi::Wifi::new(),
+			bluetooth: bluetooth::Bluetooth::new(),
 		}
 	}
 
 	pub fn init(&self) -> Task<Message> {
-		self.wifi.init().map(Message::Wifi)
+		Task::batch([
+			self.wifi.init().map(Message::Wifi),
+			self.bluetooth.init().map(Message::Bluetooth),
+		])
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
@@ -76,6 +84,7 @@ impl SystemMenu {
 				Duration::from_secs(60),
 			),
 			self.wifi.subscription().map(Message::Wifi),
+			self.bluetooth.subscription().map(Message::Bluetooth),
 		])
 	}
 
@@ -86,6 +95,9 @@ impl SystemMenu {
 		match message {
 			Message::UptimeUpdated(uptime) => self.uptime = uptime,
 			Message::Wifi(message) => return self.wifi.update(message).map(Message::Wifi),
+			Message::Bluetooth(message) => {
+				return self.bluetooth.update(message).map(Message::Bluetooth);
+			}
 			_ => (),
 		}
 
@@ -98,7 +110,6 @@ impl SystemMenu {
 			.height(MODULE_HEIGHT)
 			.background(COLORS.decorative.blue)
 			.radius(MODULE_RADIUS)
-			// .on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::SystemMenu, bounds))
 			.into()
 	}
 
@@ -122,14 +133,11 @@ impl SystemMenu {
 				.size(12)
 			]
 			.width(Length::Fill),
-			neo_button(svg(phosphor_icon!("lock")))
-				.width(32)
-				.height(32)
-				.padding(6),
 			neo_button(svg(phosphor_icon!("power")))
 				.width(32)
 				.height(32)
-				.padding(6),
+				.padding(6)
+				.on_press(Message::OpenPowerMenu),
 			neo_button(svg(phosphor_icon!("gear")))
 				.width(32)
 				.height(32)
@@ -154,13 +162,7 @@ impl SystemMenu {
 		for widget in &self.widgets {
 			let widget = match widget {
 				SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
-				SystemMenuWidgets::Bluetooth => neo_toggle_button(
-					phosphor_icon!("bluetooth"),
-					"Bluetooth",
-					"0 connected",
-					false,
-					Some(COLORS.white),
-				),
+				SystemMenuWidgets::Bluetooth => self.bluetooth.view().map(Message::Bluetooth),
 				SystemMenuWidgets::Speaker => neo_toggle_button(
 					phosphor_icon!("speaker-high"),
 					"Default Sink",

@@ -19,16 +19,16 @@ use mprizzle::{
 	LoopStatus, Mpris, MprisError, MprisEvent, MprisPlayer, MprisResult, PlaybackStatus,
 	PlayerError, PlayerIdentity,
 };
-use reqwest::{Client, IntoUrl, redirect};
-use small_map::FxSmallMap;
-
-use crate::{
+use neo_widgets::{
 	icons::{ResolvedIcon, resolve_icon},
-	modules::{MODULE_HEIGHT, MODULE_RADIUS},
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, spinner},
 };
+use reqwest::{Client, IntoUrl, redirect};
+use small_map::FxSmallMap;
+
+use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
 #[derive(Debug, Clone)]
 pub enum Message {

@@ -7,7 +7,7 @@ mod neo_card;
 pub use neo_card::{NeoCard, NeoCardStyle, neo_card};
 
 mod neo_surface;
-pub use neo_surface::NeoSurfaceStyle;
+pub use neo_surface::{NeoContentSurfaceStyle, NeoSurfaceStyle};
 
 mod neo_slider;
 pub use neo_slider::{NeoSlider, neo_slider};

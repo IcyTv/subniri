@@ -12,9 +12,24 @@ use iced::{
 	window,
 };
 
-use super::neo_surface::{self, NeoSurfaceStyle};
+use crate::style::COLORS;
 
-pub type NeoButtonStyle = NeoSurfaceStyle;
+use super::neo_surface::{self, NeoContentSurfaceStyle};
+
+#[derive(Debug, Clone, Copy)]
+pub struct NeoButtonStyle {
+	pub surface: NeoContentSurfaceStyle,
+	pub disabled_background: Color,
+}
+
+impl Default for NeoButtonStyle {
+	fn default() -> Self {
+		Self {
+			surface: NeoContentSurfaceStyle::default(),
+			disabled_background: COLORS.disabled_background,
+		}
+	}
+}
 
 pub fn neo_button<'a, Message, Theme, Renderer>(
 	content: impl Into<Element<'a, Message, Theme, Renderer>>,
@@ -91,7 +106,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 	}
 
 	pub fn background(mut self, color: Color) -> Self {
-		self.style.background = color;
+		self.style.surface.surface.background = color;
 		self
 	}
 
@@ -101,17 +116,17 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 	}
 
 	pub fn radius(mut self, radius: f32) -> Self {
-		self.style.radius = radius;
+		self.style.surface.surface.radius = radius;
 		self
 	}
 
 	pub fn padding(mut self, padding: impl Into<Padding>) -> Self {
-		self.style.padding = padding.into();
+		self.style.surface.padding = padding.into();
 		self
 	}
 
 	pub fn shadow_width(mut self, shadow_width: f32) -> Self {
-		self.style.shadow_width = shadow_width;
+		self.style.surface.surface.shadow_width = shadow_width;
 		self
 	}
 
@@ -185,7 +200,7 @@ where
 			limits,
 			self.width,
 			self.height,
-			self.style,
+			self.style.surface,
 		)
 	}
 
@@ -271,22 +286,24 @@ where
 		let state = tree.state.downcast_ref::<State>();
 		let bounds = layout.bounds();
 
-		let offset = state
-			.pressed
-			.interpolate(0.0, self.style.shadow_width, Instant::now());
+		let offset =
+			state
+				.pressed
+				.interpolate(0.0, self.style.surface.surface.shadow_width, Instant::now());
 
 		let child_layout = layout.child(0);
+		let surface = self.style.surface.surface;
 
 		neo_surface::draw(
 			renderer,
 			bounds,
-			NeoSurfaceStyle {
+			super::NeoSurfaceStyle {
 				background: if self.enabled {
-					self.style.background
+					surface.background
 				} else {
 					self.style.disabled_background
 				},
-				..self.style
+				..surface
 			},
 			offset,
 			|renderer| {

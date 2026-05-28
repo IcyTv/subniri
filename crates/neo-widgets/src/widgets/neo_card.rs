@@ -6,9 +6,9 @@ use iced::{
 	},
 };
 
-use super::neo_surface::{self, NeoSurfaceStyle};
+use super::neo_surface::{self, NeoContentSurfaceStyle};
 
-pub type NeoCardStyle = NeoSurfaceStyle;
+pub type NeoCardStyle = NeoContentSurfaceStyle;
 
 pub fn neo_card<'a, Message, Theme, Renderer>(
 	content: impl Into<Element<'a, Message, Theme, Renderer>>,
@@ -49,12 +49,12 @@ impl<'a, Message, Theme, Renderer> NeoCard<'a, Message, Theme, Renderer> {
 	}
 
 	pub fn background(mut self, color: Color) -> Self {
-		self.style.background = color;
+		self.style.surface.background = color;
 		self
 	}
 
 	pub fn radius(mut self, radius: f32) -> Self {
-		self.style.radius = radius;
+		self.style.surface.radius = radius;
 		self
 	}
 
@@ -138,7 +138,7 @@ where
 		let bounds = layout.bounds();
 		let child_layout = layout.child(0);
 
-		neo_surface::draw(renderer, bounds, self.style, 0.0, |renderer| {
+		neo_surface::draw(renderer, bounds, self.style.surface, 0.0, |renderer| {
 			self.content.as_widget().draw(
 				&tree.children[0],
 				renderer,

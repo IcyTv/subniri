@@ -165,3 +165,17 @@ pub const COLORS: Colors = Colors {
 	white: rgb(0xFFFFFF),
 	black: rgb(0x000000),
 };
+
+pub fn neo_theme() -> iced::Theme {
+	iced::Theme::custom(
+		"Subniri Neo",
+		iced::theme::palette::Seed {
+			background: COLORS.body,
+			text: COLORS.text,
+			primary: COLORS.background,
+			success: COLORS.feedback.success,
+			warning: COLORS.feedback.warning,
+			danger: COLORS.feedback.danger,
+		},
+	)
+}

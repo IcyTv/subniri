@@ -1,0 +1,16 @@
+[package]
+name = "neo-widgets"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "Reusable neo widgets for subniri"
+documentation.workspace = true
+
+[dependencies]
+freedesktop-desktop-entry.workspace = true
+iced.workspace = true
+icon.workspace = true
+log.workspace = true
+lyon_algorithms.workspace = true
+niri-ipc.workspace = true
+num-traits.workspace = true

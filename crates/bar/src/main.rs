@@ -1,4 +1,6 @@
 use config::ConfigFile;
+use std::{path::PathBuf, process::Command, time::Duration};
+
 use iced::Length;
 use iced::widget::{container, row, stack, text};
 use iced::window::Id;
@@ -7,18 +9,15 @@ use iced_layershell::actions::{IcedNewPopupSettings, PopupPlacement, PopupSize};
 use iced_layershell::reexport::{Anchor, xdg_positioner::ConstraintAdjustment};
 use iced_layershell::settings::{LayerShellSettings, StartMode};
 use iced_layershell::{Settings, daemon, to_layer_message};
+use neo_widgets::{
+	style::{COLORS, neo_theme},
+	widgets::neo_card,
+};
 use wayland_client::Connection;
 
 use crate::modules::{Module, ModuleKind, ModuleMessage};
-use crate::style::COLORS;
-use crate::widgets::neo_card;
 
-mod animation;
 mod modules;
-mod style;
-mod widgets;
-#[macro_use]
-mod icons;
 
 // mod clock;
 // mod icons;
@@ -42,6 +41,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 		Bar::update,
 		Bar::view,
 	)
+	.theme(neo_theme())
 	.style(Bar::style)
 	.subscription(Bar::subscription)
 	.settings(Settings {
@@ -157,6 +157,21 @@ impl Bar {
 				}))
 				.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
+			BarMessage::Module(_, _, ModuleMessage::OpenPowerMenu) => {
+				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(open_popup_id.0),
+					))
+				} else {
+					Task::none()
+				};
+
+				close_popup.chain(Task::future(async {
+					std::thread::sleep(Duration::from_millis(100));
+					open_power_menu();
+					BarMessage::Noop
+				}))
+			}
 			BarMessage::SetPopupId(section, index, _kind, id) => {
 				if let Some(module) = self.module_mut(section, index) {
 					module.set_popup_id(id);
@@ -245,11 +260,11 @@ impl Bar {
 		}
 	}
 
-	fn style(&self, theme: &Theme) -> iced::theme::Style {
+	fn style(&self, _theme: &Theme) -> iced::theme::Style {
 		iced::theme::Style {
 			// background_color: Color::from_rgba(1.0, 0.0, 0.0, 0.5),
 			background_color: Color::TRANSPARENT,
-			text_color: theme.palette().background.base.text,
+			text_color: COLORS.text,
 		}
 	}
 
@@ -301,4 +316,27 @@ enum BarMessage {
 	WindowClosed(Id),
 	Module(Section, usize, ModuleMessage),
 	SetPopupId(Section, usize, ModuleKind, Id),
+	Noop,
+}
+
+fn open_power_menu() {
+	let Some(iceout) = iceout_bin() else {
+		log::error!("Failed to find iceout executable");
+		return;
+	};
+
+	if let Err(e) = Command::new(&iceout).spawn() {
+		log::error!("Failed to launch iceout at '{}': {e}", iceout.display());
+	}
+}
+
+fn iceout_bin() -> Option<PathBuf> {
+	option_env!("SUBNIRI_ICEOUT_BIN")
+		.map(PathBuf::from)
+		.or_else(|| {
+			std::env::current_exe()
+				.ok()?
+				.parent()
+				.map(|p| p.join("iceout"))
+		})
 }

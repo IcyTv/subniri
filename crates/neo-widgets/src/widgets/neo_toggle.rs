@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use iced::{
-	Animation, Color, Element, Event, Length, Rectangle,
+	Animation, Color, Element, Event, Length, Padding, Rectangle,
 	advanced::{
 		Widget, layout, mouse, renderer,
 		widget::{Tree, tree},
@@ -198,11 +198,18 @@ where
 	fn layout(
 		&mut self, _tree: &mut Tree, _renderer: &Renderer, limits: &layout::Limits,
 	) -> layout::Node {
+		let shadow = self.track.shadow_width;
+
 		layout::padded(
 			limits,
 			self.width,
 			self.height,
-			self.track.padding,
+			Padding {
+				top: 0.0,
+				right: shadow,
+				bottom: shadow,
+				left: 0.0,
+			},
 			|limits| layout::atomic(limits, self.width, self.height),
 		)
 	}
@@ -213,8 +220,11 @@ where
 	) {
 		let state = tree.state.downcast_ref::<State>();
 		let bounds = layout.bounds();
+		let track_style = self.track;
+		let handle_style = self.handle;
+		let fill_color = self.fill_color;
 
-		let s = self.track.shadow_width;
+		let s = track_style.shadow_width;
 
 		let offset = state.pressed.interpolate(0.0, s, Instant::now());
 
@@ -230,13 +240,13 @@ where
 				renderer::Quad {
 					bounds: shadow,
 					border: iced::Border {
-						radius: self.track.radius.into(),
+						radius: track_style.radius.into(),
 						..Default::default()
 					},
 					snap: true,
 					..Default::default()
 				},
-				self.track.border,
+				track_style.border,
 			);
 		}
 
@@ -250,15 +260,15 @@ where
 		let track_fill_color =
 			state
 				.toggled
-				.interpolate(self.track.background, self.fill_color, Instant::now());
+				.interpolate(track_style.background, fill_color, Instant::now());
 
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: track,
 				border: iced::Border {
-					radius: self.track.radius.into(),
-					color: self.track.border,
-					width: self.track.border_width,
+					radius: track_style.radius.into(),
+					color: track_style.border,
+					width: track_style.border_width,
 					..Default::default()
 				},
 				snap: true,
@@ -285,15 +295,15 @@ where
 			renderer::Quad {
 				bounds: handle,
 				border: iced::Border {
-					radius: self.handle.radius.into(),
-					width: self.handle.border_width,
-					color: self.handle.border,
+					radius: handle_style.radius.into(),
+					width: handle_style.border_width,
+					color: handle_style.border,
 					..Default::default()
 				},
 				snap: true,
 				..Default::default()
 			},
-			self.handle.background,
+			handle_style.background,
 		);
 	}
 }

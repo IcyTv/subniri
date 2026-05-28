@@ -9,58 +9,43 @@ documentation.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-channel = "2.5.0"
-async-stream = "0.3.6"
-bluer = { version = "0.17.4", features = ["bluetoothd"] }
-chrono = "0.4.44"
-config = { version = "0.0.1", path = "../config" }
-dirs = "6.0.0"
-float-ord = "0.3.2"
-freedesktop-desktop-entry = "0.8.1"
-futures = "0.3.32"
-iced = { version = "0.15.0-dev", features = [
-  "advanced",
-  "crisp",
-  "hinting",
-  "image",
-  "lazy",
-  "linux-theme-detection",
-  "svg",
-  "sysinfo",
-  "thread-pool",
-  "wayland",
-  "wgpu",
-  "wgpu-bare",
-  "tokio",
-  "canvas",
-], git = "https://github.com/IcyTv/iced", default-features = false, rev = "d6493a25b291a9fee7d7cd195f05cc9464ab7a99" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3ed8530bf1d2708b2ba23bcbccb2babbfebd05d2" }
-iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "d6493a25b291a9fee7d7cd195f05cc9464ab7a99" }
-iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3ed8530bf1d2708b2ba23bcbccb2babbfebd05d2" }
-icon = "0.2.0"
-image = "0.25.10"
-jiff = "0.2.25"
-kdl = { version = "6.5.0", features = ["v1-fallback"] }
-lazy-regex = "3.6.0"
-libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
-libpulse-tokio = "0.1.1"
-log = "0.4.29"
-lru = "0.18.0"
-lyon_algorithms = "1.0.20"
-mime = "0.3.17"
-mprizzle = { git = "https://github.com/IcyTv/mprizzle", version = "0.0.8" }
-niri-ipc = "26.4.0"
-nix = { version = "0.31.3", features = ["user"] }
-nmrs = "3.1.5"
-num-traits = "0.2.19"
-paste = "1.0.15"
-pretty_env_logger = "0.5.0"
-reqwest = "0.13.3"
-rgb = "0.8.53"
-serde_json = "1.0.149"
-small-map = "0.1.5"
-tokio = { version = "1.52.3", features = ["full"] }
-tracing = "0.1.44"
-url = "2.5.8"
-wayland-client = "0.31.14"
-zbus = "5.15.0"
+async-channel.workspace = true
+async-stream.workspace = true
+bluer.workspace = true
+config.workspace = true
+dirs.workspace = true
+float-ord.workspace = true
+futures.workspace = true
+iced.workspace = true
+iced_layershell.workspace = true
+iced_runtime.workspace = true
+iced_wayland_subscriber.workspace = true
+image.workspace = true
+jiff.workspace = true
+kdl.workspace = true
+lazy-regex.workspace = true
+libpulse-binding.workspace = true
+libpulse-tokio.workspace = true
+log.workspace = true
+lru.workspace = true
+lyon_algorithms.workspace = true
+mime.workspace = true
+mprizzle.workspace = true
+neo-widgets.workspace = true
+niri-ipc.workspace = true
+nix.workspace = true
+nmrs.workspace = true
+num-traits.workspace = true
+paste.workspace = true
+pipewire-native = "0.1.4"
+pipewire-native-spa = "0.1.4"
+pretty_env_logger.workspace = true
+reqwest.workspace = true
+rgb.workspace = true
+serde_json.workspace = true
+small-map.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+url.workspace = true
+wayland-client.workspace = true
+zbus.workspace = true

@@ -8,13 +8,15 @@ use crate::style::COLORS;
 #[derive(Debug, Clone, Copy)]
 pub struct NeoSurfaceStyle {
 	pub background: Color,
-	pub disabled_background: Color,
 	pub border: Color,
-	pub text: Color,
-	pub disabled_text_alpha: f32,
 	pub radius: f32,
 	pub border_width: f32,
 	pub shadow_width: f32,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct NeoContentSurfaceStyle {
+	pub surface: NeoSurfaceStyle,
 	pub padding: Padding,
 }
 
@@ -22,13 +24,18 @@ impl Default for NeoSurfaceStyle {
 	fn default() -> Self {
 		Self {
 			background: COLORS.white,
-			disabled_background: COLORS.disabled_background,
 			border: COLORS.border,
-			text: COLORS.text,
-			disabled_text_alpha: 0.5,
 			radius: 3.0,
 			border_width: 2.0,
 			shadow_width: 4.0,
+		}
+	}
+}
+
+impl Default for NeoContentSurfaceStyle {
+	fn default() -> Self {
+		Self {
+			surface: NeoSurfaceStyle::default(),
 			padding: 8.0.into(),
 		}
 	}
@@ -37,13 +44,13 @@ impl Default for NeoSurfaceStyle {
 pub fn layout<'a, Message, Theme, Renderer>(
 	content: &mut Element<'a, Message, Theme, Renderer>, tree: &mut widget::Tree,
 	renderer: &Renderer, limits: &layout::Limits, width: Length, height: Length,
-	style: NeoSurfaceStyle,
+	style: NeoContentSurfaceStyle,
 ) -> layout::Node
 where
 	Renderer: renderer::Renderer,
 {
 	let padding = style.padding;
-	let shadow = style.shadow_width;
+	let shadow = style.surface.shadow_width;
 
 	layout::positioned(
 		limits,

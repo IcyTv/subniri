@@ -214,7 +214,6 @@
             libxkbcommon
             fontconfig
             vulkan-loader
-            libGL
           ]);
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 

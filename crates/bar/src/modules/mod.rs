@@ -1,7 +1,6 @@
 use config::ConfigFile;
 use iced::{Color, Element, Rectangle, Subscription, Task, widget::text, window::Id};
-
-use crate::{
+use neo_widgets::{
 	style::COLORS,
 	widgets::{neo_button, neo_card, spinner},
 };
@@ -29,6 +28,7 @@ pub enum Module {
 pub enum ModuleMessage {
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
+	OpenPowerMenu,
 
 	Clock(clock::Message),
 	Network(network::Message),
@@ -107,6 +107,12 @@ impl Module {
 
 	pub fn update(&mut self, message: ModuleMessage, config: &ConfigFile) -> Task<ModuleMessage> {
 		match (self, message) {
+			(
+				Self::SystemMenu(_),
+				ModuleMessage::SystemMenu(system_menu::Message::OpenPowerMenu),
+			) => {
+				return Task::done(ModuleMessage::OpenPowerMenu);
+			}
 			(Self::Bluetooth(bluetooth), ModuleMessage::BluetoothInitialized(result)) => {
 				match result {
 					Ok(initialized) => *bluetooth = Some(initialized),
@@ -211,6 +217,7 @@ impl Module {
 				controls.view_popup().map(ModuleMessage::MediaControls)
 			}
 			Self::SystemMenu(menu) => menu.view_popup().map(ModuleMessage::SystemMenu),
+			Self::Volume(Some(vol)) => vol.view_popup().map(ModuleMessage::Volume),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),

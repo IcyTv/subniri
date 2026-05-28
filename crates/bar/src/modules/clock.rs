@@ -1,20 +1,19 @@
 use std::time::Duration;
 
-use chrono::Local;
 use iced::{
 	Element, Font, Length, Subscription,
 	alignment::Vertical,
 	font, time,
 	widget::{row, svg, text},
 };
-
-use super::{MODULE_HEIGHT, MODULE_RADIUS};
-use crate::{
-	modules::ICON_HEIGHT,
+use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_button},
 };
+
+use super::{MODULE_HEIGHT, MODULE_RADIUS};
+use crate::modules::ICON_HEIGHT;
 
 #[derive(Debug)]
 pub struct Clock {
@@ -86,9 +85,15 @@ impl Clock {
 }
 
 fn current_time() -> String {
-	Local::now().format("%H:%M").to_string()
+	// jiff::Timestamp::now().format("%H:%M").to_string()
+	let time = jiff::Zoned::now();
+
+	jiff::fmt::strtime::format("%H:%M", &time).unwrap()
 }
 
 fn current_date() -> String {
-	Local::now().format("%a %B %d").to_string()
+	// Local::now().format("%a %B %d").to_string()
+	let time = jiff::Zoned::now();
+
+	jiff::fmt::strtime::format("%a %B %d", &time).unwrap()
 }

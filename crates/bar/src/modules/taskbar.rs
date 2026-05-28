@@ -6,7 +6,12 @@ use futures::{
 };
 use iced::{
 	Element, Length, Subscription,
-	widget::{Grid, image, row, space, svg},
+	widget::{column, container, image, row, space, svg},
+};
+use neo_widgets::{
+	icons::{ResolvedIcon, resolve_from_window},
+	style::COLORS,
+	widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_button, neo_card},
 };
 use niri_ipc::{
 	Action, Event, Reply, Request, Response, Window, Workspace, WorkspaceReferenceArg,
@@ -18,12 +23,7 @@ use tokio::{
 	sync::Mutex,
 };
 
-use crate::{
-	icons::{ResolvedIcon, resolve_from_window},
-	modules::{MODULE_HEIGHT, MODULE_RADIUS},
-	style::COLORS,
-	widgets::{NeoSurfaceStyle, neo_button, neo_card},
-};
+use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -131,6 +131,14 @@ impl Taskbar {
 					window.is_focused = Some(window.id) == id;
 				}
 			}
+			Message::Event(Event::WindowLayoutsChanged { changes }) => {
+				for (window_id, layout) in changes {
+					if let Some(window) = self.windows.iter_mut().find(|w| w.id == window_id) {
+						window.layout = layout;
+					}
+				}
+				self.windows.sort_by(cmp_windows);
+			}
 
 			Message::FocusWorkspace(id) => {
 				// TODO: I'm sure we can do better here... Maybe return a Task or sth?
@@ -186,47 +194,105 @@ impl Taskbar {
 
 fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element<'a, Message> {
 	let content: Element<Message> = if !workspace.is_active {
-		let iter = windows
+		let windows = windows
 			.iter()
 			.filter(|w| w.workspace_id == Some(workspace.id))
-			.take(4);
+			.take(4)
+			.collect::<Vec<_>>();
 
-		let count = iter.clone().count();
-
-		let mut grid = Grid::with_capacity(4)
-			.columns(count.min(2))
-			.height(Length::Shrink);
-
-		for window in iter {
-			let icon = resolve_from_window(window, 8, 2);
-			let icon: Element<Message> = match icon {
-				ResolvedIcon::Svg(handle) => svg(handle).width(8).height(8).into(),
-				ResolvedIcon::Image(handle) => image(handle).width(8).height(8).into(),
-			};
-
-			grid = grid.push(icon);
-		}
-
-		grid.into()
+		workspace_preview(&windows)
 	} else {
 		"".into()
 	};
 
 	neo_button(content)
-		.style(NeoSurfaceStyle {
-			background: if workspace.is_focused {
-				COLORS.decorative.yellow
-			} else {
-				COLORS.white
+		.style(NeoButtonStyle {
+			surface: NeoContentSurfaceStyle {
+				surface: NeoSurfaceStyle {
+					background: if workspace.is_active {
+						COLORS.decorative.yellow
+					} else {
+						COLORS.white
+					},
+					shadow_width: 2.0,
+					..Default::default()
+				},
+				padding: 4.0.into(),
 			},
-			shadow_width: 2.0,
-			padding: 2.0.into(),
 			..Default::default()
 		})
 		.height(MODULE_HEIGHT - 20.)
 		.width(MODULE_HEIGHT - 20.)
 		.on_press(Message::FocusWorkspace(workspace.id))
 		.into()
+}
+
+fn workspace_preview<'a>(windows: &[&'a Window]) -> Element<'a, Message> {
+	const IMAGE_SIZE: f32 = 8.0;
+	const ICON_GAP: f32 = 2.0;
+	const PREVIEW_SIZE: f32 = IMAGE_SIZE * 2.0 + ICON_GAP;
+
+	let preview: Element<_> = match windows {
+		[] => space()
+			.width(Length::Fixed(PREVIEW_SIZE))
+			.height(Length::Fixed(PREVIEW_SIZE))
+			.into(),
+		[window] => container(workspace_preview_icon(window))
+			.width(Length::Fixed(PREVIEW_SIZE))
+			.height(Length::Fixed(PREVIEW_SIZE))
+			.center_x(Length::Fill)
+			.center_y(Length::Fill)
+			.into(),
+		[window_a, window_b] => row![
+			workspace_preview_icon(window_a),
+			workspace_preview_icon(window_b)
+		]
+		.spacing(ICON_GAP)
+		.into(),
+		[window_a, window_b, window_c] => column![
+			row![
+				workspace_preview_icon(window_a),
+				workspace_preview_icon(window_b)
+			]
+			.spacing(ICON_GAP),
+			container(workspace_preview_icon(window_c))
+				.width(Length::Fixed(PREVIEW_SIZE))
+				.center_x(Length::Fill),
+		]
+		.spacing(ICON_GAP)
+		.into(),
+		[window_a, window_b, window_c, window_d] => column![
+			row![
+				workspace_preview_icon(window_a),
+				workspace_preview_icon(window_b)
+			]
+			.spacing(ICON_GAP),
+			row![
+				workspace_preview_icon(window_c),
+				workspace_preview_icon(window_d)
+			]
+			.spacing(ICON_GAP),
+		]
+		.spacing(ICON_GAP)
+		.into(),
+		_ => unreachable!(),
+	};
+
+	container(preview)
+		.width(Length::Fill)
+		.height(Length::Fill)
+		.center_x(Length::Fill)
+		.center_y(Length::Fill)
+		.into()
+}
+
+fn workspace_preview_icon(window: &Window) -> Element<'_, Message> {
+	const IMAGE_SIZE: Length = Length::Fixed(8.0);
+
+	match resolve_from_window(window, 8, 1) {
+		ResolvedIcon::Svg(handle) => svg(handle).width(IMAGE_SIZE).height(IMAGE_SIZE).into(),
+		ResolvedIcon::Image(handle) => image(handle).width(IMAGE_SIZE).height(IMAGE_SIZE).into(),
+	}
 }
 
 fn window_btn(window: &Window) -> Element<'_, Message> {

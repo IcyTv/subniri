@@ -42,25 +42,17 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 		Self {
 			track: NeoSurfaceStyle {
 				background: COLORS.white,
-				disabled_background: COLORS.white,
 				border: COLORS.black,
-				text: COLORS.text,
-				disabled_text_alpha: 1.0,
 				radius: 2.0,
 				border_width: 2.0,
 				shadow_width: 4.0,
-				padding: 0.0.into(),
 			},
 			handle: NeoSurfaceStyle {
 				background: COLORS.decorative.yellow,
-				disabled_background: COLORS.decorative.yellow,
 				border: COLORS.black,
-				text: COLORS.text,
-				disabled_text_alpha: 1.0,
 				radius: 2.0,
 				border_width: 2.0,
 				shadow_width: 4.0,
-				padding: 0.0.into(),
 			},
 			running_color: COLORS.decorative.pink70,
 			on_change: None,
@@ -275,8 +267,11 @@ where
 	) {
 		let state = tree.state.downcast_ref::<State>();
 		let bounds = layout.bounds();
+		let track = self.track;
+		let handle = self.handle;
+		let running_color = self.running_color;
 
-		let s = self.track.shadow_width;
+		let s = track.shadow_width;
 
 		let shadow = Rectangle {
 			x: bounds.x + s,
@@ -289,13 +284,13 @@ where
 			renderer::Quad {
 				bounds: shadow,
 				border: iced::Border {
-					radius: self.track.radius.into(),
+					radius: track.radius.into(),
 					..Default::default()
 				},
 				snap: true,
 				..Default::default()
 			},
-			self.track.border,
+			track.border,
 		);
 
 		let percentage_filled = if state.pressed.value() {
@@ -330,8 +325,8 @@ where
 				bounds: track_filled,
 				border: iced::Border {
 					radius: border::Radius {
-						top_left: self.track.radius,
-						bottom_left: self.track.radius,
+						top_left: track.radius,
+						bottom_left: track.radius,
 						..Default::default()
 					},
 					..Default::default()
@@ -339,15 +334,15 @@ where
 				snap: true,
 				..Default::default()
 			},
-			self.running_color,
+			running_color,
 		);
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: track_unfilled,
 				border: iced::Border {
 					radius: border::Radius {
-						top_right: self.track.radius,
-						bottom_right: self.track.radius,
+						top_right: track.radius,
+						bottom_right: track.radius,
 						..Default::default()
 					},
 					..Default::default()
@@ -355,7 +350,7 @@ where
 				snap: true,
 				..Default::default()
 			},
-			self.track.background,
+			track.background,
 		);
 
 		let border = Rectangle {
@@ -369,9 +364,9 @@ where
 			renderer::Quad {
 				bounds: border,
 				border: iced::Border {
-					radius: self.track.radius.into(),
-					color: self.track.border,
-					width: self.track.border_width,
+					radius: track.radius.into(),
+					color: track.border,
+					width: track.border_width,
 					..Default::default()
 				},
 				snap: true,
@@ -386,49 +381,49 @@ where
 
 		let offset = state
 			.pressed
-			.interpolate(0.0, self.handle.shadow_width, Instant::now());
+			.interpolate(0.0, handle.shadow_width, Instant::now());
 
 		let handle_y = bounds.y - (bounds.height * 0.125) - (offset / 1.5);
 
 		let handle_shadow = Rectangle {
-			x: handle_x + self.handle.shadow_width,
-			y: handle_y + self.handle.shadow_width,
-			width: handle_size - self.handle.shadow_width,
-			height: handle_size - self.handle.shadow_width,
+			x: handle_x + handle.shadow_width,
+			y: handle_y + handle.shadow_width,
+			width: handle_size - handle.shadow_width,
+			height: handle_size - handle.shadow_width,
 		};
 
 		let handle_surface = Rectangle {
 			x: handle_x + offset,
 			y: handle_y + offset,
-			width: handle_size - self.handle.shadow_width,
-			height: handle_size - self.handle.shadow_width,
+			width: handle_size - handle.shadow_width,
+			height: handle_size - handle.shadow_width,
 		};
 
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: handle_shadow,
 				border: iced::Border {
-					radius: self.handle.radius.into(),
+					radius: handle.radius.into(),
 					..Default::default()
 				},
 				snap: true,
 				..Default::default()
 			},
-			self.handle.border,
+			handle.border,
 		);
 		renderer.fill_quad(
 			renderer::Quad {
 				bounds: handle_surface,
 				border: iced::Border {
-					radius: self.handle.radius.into(),
-					width: self.handle.border_width,
-					color: self.handle.border,
+					radius: handle.radius.into(),
+					width: handle.border_width,
+					color: handle.border,
 					..Default::default()
 				},
 				snap: true,
 				..Default::default()
 			},
-			self.handle.background,
+			handle.background,
 		);
 	}
 }

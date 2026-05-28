@@ -1,13 +1,12 @@
 use std::{pin::pin, time::Instant};
 
 use iced::{Animation, Length, Subscription, Task};
-use nmrs::{DeviceState, NetworkManager};
-
-use crate::{
+use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_toggle_button},
 };
+use nmrs::{DeviceState, NetworkManager};
 
 #[derive(Debug, Clone)]
 pub enum Message {
