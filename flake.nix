@@ -11,6 +11,8 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    cargo2nix.url = "github:cargo2nix/cargo2nix";
+
     nvim = {
       url = "github:IcyTv/nvim.nix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -28,6 +30,7 @@
     flake-utils,
     rust-overlay,
     nvim,
+    cargo2nix,
     ...
   }: let
     version = "0.1.0";
@@ -42,7 +45,7 @@
       system: let
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [(import rust-overlay)];
+          overlays = [(import rust-overlay) cargo2nix.overlays.default];
           config.allowUnfreePredicate = pkg:
             builtins.elem (nixpkgs.lib.getName pkg) [
               "cmp-spell"
@@ -53,9 +56,11 @@
           extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
         };
 
-        rustPlatform = pkgs.makeRustPlatform {
-          cargo = rustToolchain;
-          rustc = rustToolchain;
+        rustPkgs = pkgs.rustBuilder.makePackageSet {
+          packageFun = import ./Cargo.nix;
+          workspaceSrc = ./.;
+
+          inherit rustToolchain;
         };
 
         inherit (pkgs) lib;
@@ -101,28 +106,7 @@
         };
       in {
         packages = {
-          subniri-cli = rustPlatform.buildRustPackage {
-            inherit version;
-            pname = "subniri";
-
-            src = ./.;
-
-            inherit (commonArgs) nativeBuildInputs buildInputs RUSTFLAGS;
-
-            cargoHash = "sha256-s0FZWUIV+1ttb6LrxZOl/eMRP3CdVTrclkS82O6N40o=";
-
-            cargoBuildFlags = [
-              "--package"
-              "cli"
-              "--bin"
-              "subniri"
-            ];
-
-            cargoTestFlags = [
-              "--package"
-              "cli"
-            ];
-          };
+          subniri-cli = rustPkgs.workspace.cli {};
         };
 
         apps = {
