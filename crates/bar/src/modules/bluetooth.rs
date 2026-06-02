@@ -1,26 +1,26 @@
 use std::{hash::Hash, pin::pin};
 
-use bluer::{Adapter, AdapterEvent, AdapterProperty, ErrorKind, Session};
+use bluer::{Adapter, AdapterEvent, AdapterProperty, Address, ErrorKind, Session};
 use futures::{Stream, StreamExt};
 use iced::{
-	Font, Length, Subscription,
+	Element, Font, Length, Subscription,
 	advanced::graphics::futures::MaybeSend,
 	alignment::Vertical,
 	font,
-	widget::{row, svg, text},
+	widget::{column, row, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
-	widgets::{NeoButton, neo_button},
+	widgets::{NeoButton, neo_button, neo_card},
 };
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-	DeviceConnected,
-	DeviceDisconnected,
+	DeviceConnected(BtDevice),
+	DeviceDisconnected(Address),
 	AdapterFound,
 	AdapterLost,
 	Power(bool),
@@ -29,7 +29,7 @@ pub enum Message {
 #[derive(Debug, Clone)]
 pub struct Bluetooth {
 	data: BluetoothData,
-	device_count: usize,
+	devices: Vec<BtDevice>,
 	has_adapter: bool,
 	powered_on: bool,
 }
@@ -55,29 +55,31 @@ impl Bluetooth {
 			false
 		};
 
-		let device_count = if let Some(adapter) = &adapter {
-			let mut connected = 0;
-			for addr in adapter
-				.device_addresses()
-				.await
-				.map_err(|e| e.to_string())?
-			{
-				let device = adapter.device(addr).map_err(|e| e.to_string())?;
+		// let device_count = if let Some(adapter) = &adapter {
+		// 	let mut connected = 0;
+		// 	for addr in adapter
+		// 		.device_addresses()
+		// 		.await
+		// 		.map_err(|e| e.to_string())?
+		// 	{
+		// 		let device = adapter.device(addr).map_err(|e| e.to_string())?;
+		//
+		// 		if device.is_connected().await.map_err(|e| e.to_string())? {
+		// 			connected += 1;
+		// 		}
+		// 	}
+		//
+		// 	connected
+		// } else {
+		// 	0
+		// };
 
-				if device.is_connected().await.map_err(|e| e.to_string())? {
-					connected += 1;
-				}
-			}
-
-			connected
-		} else {
-			0
-		};
+		let devices = vec![];
 
 		Ok(Self {
 			powered_on,
 			has_adapter: adapter.is_some(),
-			device_count,
+			devices,
 			data: BluetoothData {
 				session,
 				default_adapter: adapter,
@@ -91,8 +93,8 @@ impl Bluetooth {
 
 	pub fn update(&mut self, message: Message) {
 		match message {
-			Message::DeviceConnected => self.device_count += 1,
-			Message::DeviceDisconnected => self.device_count = self.device_count.saturating_sub(1),
+			Message::DeviceConnected(device) => self.devices.push(device),
+			Message::DeviceDisconnected(addr) => self.devices.retain(|d| d.addr != addr),
 			Message::AdapterFound => {
 				log::trace!("Adapter found");
 				self.has_adapter = true;
@@ -118,7 +120,7 @@ impl Bluetooth {
 		neo_button(
 			row![
 				svg(icon).width(Length::Shrink).height(ICON_HEIGHT),
-				text(format!("{}", self.device_count))
+				text(format!("{}", self.devices.len()))
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Font::DEFAULT
@@ -134,6 +136,25 @@ impl Bluetooth {
 		.radius(MODULE_RADIUS)
 		.background(COLORS.decorative.blue)
 		.into()
+	}
+
+	pub fn view_popup(&self) -> Element<'_, Message> {
+		let mut col = column![];
+
+		for device in &self.devices {
+			let content = neo_button(text(device.name.as_deref().unwrap_or("<No name>")));
+
+			col = col.push(content);
+		}
+
+		if !self.powered_on || !self.has_adapter {
+			col = col.push(text("No adapter"));
+		}
+
+		neo_card(col)
+			.width(200)
+			.background(COLORS.decorative.blue)
+			.into()
 	}
 }
 
@@ -179,8 +200,33 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 					}
 					event = adapter_stream.next() => {
 						match event {
-							Some(AdapterEvent::DeviceAdded(_)) => yield Message::DeviceConnected,
-							Some(AdapterEvent::DeviceRemoved(_)) => yield Message::DeviceDisconnected,
+							Some(AdapterEvent::DeviceAdded(addr)) => {
+								let device = match adapter.device(addr) {
+									Ok(d) => d,
+									Err(e) => {
+										log::warn!("Device not found... {e}");
+										continue;
+									}
+								};
+
+								let name = match device.name().await {
+									Ok(name) => name,
+									Err(e) => {
+										log::warn!("Cannot get bt device name: {e}");
+										continue;
+									}
+								};
+								let is_connected = device.is_connected().await.unwrap_or_default();
+
+								let bt_device = BtDevice {
+									addr,
+									name,
+									is_connected,
+								};
+
+								yield Message::DeviceConnected(bt_device);
+							},
+							Some(AdapterEvent::DeviceRemoved(addr)) => yield Message::DeviceDisconnected(addr),
 							Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(powered))) => yield Message::Power(powered),
 							Some(_) => (),
 							None => break,
@@ -227,4 +273,11 @@ impl Hash for BluetoothData {
 			adapter.name().hash(state);
 		}
 	}
+}
+
+#[derive(Clone, Debug)]
+struct BtDevice {
+	addr: Address,
+	name: Option<String>,
+	is_connected: bool,
 }

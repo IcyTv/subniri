@@ -229,8 +229,12 @@ where
 			viewport,
 		);
 
+		let is_captured = shell.is_event_captured();
+
 		match event {
-			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {
+			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+				if over && !is_captured =>
+			{
 				state.pressed = state.pressed.clone().go(true, Instant::now());
 
 				shell.request_redraw();
@@ -246,7 +250,7 @@ where
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
-				if over {
+				if over && !is_captured {
 					if let Some(message) = self.on_press.clone() {
 						shell.publish(match message {
 							OnPress::Message(message) => message,

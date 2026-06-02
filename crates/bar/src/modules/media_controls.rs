@@ -604,6 +604,14 @@ async fn thumbnail_update_task(ck: impl Into<ThumbnailCacheKey>) -> Message {
 async fn resolve_thumbnail(
 	art_url: Option<&str>, url: Option<&str>,
 ) -> Result<Option<image::Handle>, Box<dyn Error>> {
+	if let Some(art_url) = art_url
+		&& art_url.starts_with("file://")
+	{
+		let path = art_url.strip_prefix("file://").unwrap();
+
+		return Ok(Some(image::Handle::from_path(path)));
+	}
+
 	let client = Client::builder()
 		.user_agent("subniri/0.1")
 		.redirect(redirect::Policy::limited(5))

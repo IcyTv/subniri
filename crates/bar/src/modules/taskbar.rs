@@ -139,6 +139,11 @@ impl Taskbar {
 				}
 				self.windows.sort_by(cmp_windows);
 			}
+			Message::Event(Event::WindowClosed { id }) => {
+				if let Some(index) = self.windows.iter().position(|w| w.id == id) {
+					self.windows.remove(index);
+				}
+			}
 
 			Message::FocusWorkspace(id) => {
 				// TODO: I'm sure we can do better here... Maybe return a Task or sth?
@@ -156,7 +161,10 @@ impl Taskbar {
 	}
 
 	pub fn view(&self, output_name: Option<&str>) -> Element<'_, Message> {
-		let mut row = row![].spacing(4).padding([0, 8]);
+		let mut row = row![]
+			.spacing(4)
+			.padding([0, 8])
+			.align_y(iced::Alignment::Center);
 
 		for (index, workspace) in self.workspaces.iter().enumerate() {
 			if output_name.is_none() || workspace.output.as_deref() != output_name {

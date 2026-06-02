@@ -6,4 +6,16 @@ description.workspace = true
 edition.workspace = true
 documentation.workspace = true
 
+[[bin]]
+name = "snowconf"
+path = "src/main.rs"
+
 [dependencies]
+config.workspace = true
+iced.workspace = true
+iced_runtime.workspace = true
+jiff.workspace = true
+log.workspace = true
+neo-widgets.workspace = true
+num-traits.workspace = true
+pretty_env_logger.workspace = true

@@ -17,6 +17,8 @@ use crate::{style::COLORS, widgets::neo_surface};
 
 use super::NeoSurfaceStyle;
 
+const DEFAULT_INTERACTION_RADIUS: f32 = 10.0;
+
 pub fn neo_slider<T: Num + Clone, Message>(
 	range: std::ops::RangeInclusive<T>, value: T,
 ) -> NeoSlider<T, Message> {
@@ -28,8 +30,10 @@ pub struct NeoSlider<T, Message> {
 	handle: NeoSurfaceStyle,
 	running_color: Color,
 	on_change: Option<Rc<dyn Fn(T) -> Message>>,
+	on_change_live: Option<Rc<dyn Fn(T) -> Message>>,
 	width: Length,
 	height: Length,
+	interaction_radius: f32,
 	enabled: bool,
 	minimum: T,
 	maximum: T,
@@ -56,8 +60,10 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 			},
 			running_color: COLORS.decorative.pink70,
 			on_change: None,
+			on_change_live: None,
 			width: Length::Fill,
 			height: Length::Fixed(18.0),
+			interaction_radius: DEFAULT_INTERACTION_RADIUS,
 			enabled: true,
 			value,
 			minimum,
@@ -81,8 +87,27 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 		self
 	}
 
-	pub fn on_change(mut self, func: impl Fn(T) -> Message + 'static) -> Self {
-		self.on_change = Some(Rc::new(func));
+	pub fn handle_color(mut self, color: impl Into<Color>) -> Self {
+		self.handle.background = color.into();
+		self
+	}
+
+	pub fn on_change(self, func: impl Fn(T) -> Message + 'static) -> Self {
+		self.on_change_maybe(Some(func))
+	}
+
+	pub fn on_change_maybe(mut self, func: Option<impl Fn(T) -> Message + 'static>) -> Self {
+		self.on_change = func.map(|func| Rc::new(func) as Rc<dyn Fn(T) -> Message + 'static>);
+		self
+	}
+
+	pub fn on_change_live(mut self, func: impl Fn(T) -> Message + 'static) -> Self {
+		self.on_change_live = Some(Rc::new(func));
+		self
+	}
+
+	pub fn on_change_live_maybe(mut self, func: Option<impl Fn(T) -> Message + 'static>) -> Self {
+		self.on_change_live = func.map(|func| Rc::new(func) as Rc<dyn Fn(T) -> Message + 'static>);
 		self
 	}
 
@@ -93,6 +118,11 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 
 	pub fn height(mut self, height: impl Into<Length>) -> Self {
 		self.height = height.into();
+		self
+	}
+
+	pub fn interaction_radius(mut self, radius: impl Into<f32>) -> Self {
+		self.interaction_radius = radius.into();
 		self
 	}
 
@@ -122,11 +152,57 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 	}
 }
 
+impl<T, Message> NeoSlider<T, Message>
+where
+	T: Num + NumCast + AsPrimitive<f32> + Clone,
+{
+	fn percentage_from_value(&self, value: T) -> f32 {
+		let range = (self.maximum.clone() - self.minimum.clone()).as_();
+
+		if range == 0.0 {
+			return 0.0;
+		}
+
+		((value - self.minimum.clone()).as_() / range).clamp(0.0, 1.0)
+	}
+
+	fn value_from_percentage(&self, percentage: f32) -> T {
+		let minimum = self.minimum.as_();
+		let maximum = self.maximum.as_();
+		let range = maximum - minimum;
+		let step = self.step.as_();
+
+		let value = minimum + percentage.clamp(0.0, 1.0) * range;
+		let value = if step > 0.0 {
+			minimum + ((value - minimum) / step).round() * step
+		} else {
+			value
+		};
+
+		NumCast::from(value.clamp(minimum, maximum)).unwrap()
+	}
+
+	fn stepped_percentage(&self, percentage: f32) -> f32 {
+		self.percentage_from_value(self.value_from_percentage(percentage))
+	}
+}
+
 #[derive(Debug)]
 struct State {
 	percentage: f32,
 	pressed: Animation<bool>,
 	hovered: bool,
+}
+
+fn expanded_bounds(bounds: Rectangle, radius: f32) -> Rectangle {
+	let radius = radius.max(0.0);
+
+	Rectangle {
+		x: bounds.x - radius,
+		y: bounds.y - radius,
+		width: bounds.width + radius * 2.0,
+		height: bounds.height + radius * 2.0,
+	}
 }
 
 impl<T, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for NeoSlider<T, Message>
@@ -145,7 +221,7 @@ where
 
 	fn state(&self) -> tree::State {
 		tree::State::new(State {
-			percentage: (self.value - self.minimum).as_() / (self.maximum - self.minimum).as_(),
+			percentage: self.percentage_from_value(self.value.clone()),
 			pressed: Animation::new(false).duration(Duration::from_millis(50)),
 			hovered: false,
 		})
@@ -162,11 +238,12 @@ where
 
 		let state = tree.state.downcast_mut::<State>();
 		let bounds = layout.bounds();
-		let over = cursor.is_over(bounds);
+		let interaction_bounds = expanded_bounds(bounds, self.interaction_radius);
+		let over = cursor.is_over(interaction_bounds);
 
 		state.hovered = over;
 
-		let percentage = (self.value - self.minimum).as_() / (self.maximum - self.minimum).as_();
+		let percentage = self.percentage_from_value(self.value.clone());
 		if !state.pressed.value() && state.percentage != percentage {
 			state.percentage = percentage;
 		}
@@ -174,6 +251,15 @@ where
 		match event {
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)) if over => {
 				state.pressed.go_mut(true, Instant::now());
+
+				let cursor_pos = cursor.position().unwrap_or_default();
+				let x = cursor_pos.x;
+				let x = x.clamp(bounds.x, bounds.x + bounds.width) - bounds.x;
+				let percentage = x / bounds.width;
+				state.percentage = self.stepped_percentage(percentage);
+				if let Some(on_change_live) = &self.on_change_live {
+					shell.publish(on_change_live(self.value_from_percentage(state.percentage)));
+				}
 
 				shell.request_redraw();
 				shell.capture_event();
@@ -188,19 +274,11 @@ where
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
-				if over {
-					// TODO send message
-					// state.percentage =
-					//     (self.value - self.minimum).as_() / (self.maximum - self.minimum).as_();
-					log::trace!("percentage after release: {:.04}", state.percentage);
+				let value = self.value_from_percentage(state.percentage);
 
-					let value = T::from(state.percentage).unwrap() * (self.maximum - self.minimum)
-						+ self.minimum;
-
-					if let Some(on_change) = &self.on_change.as_deref() {
-						let msg = on_change(value);
-						shell.publish(msg);
-					}
+				if let Some(on_change) = &self.on_change.as_deref() {
+					let msg = on_change(value);
+					shell.publish(msg);
 				}
 				state.pressed.go_mut(false, Instant::now());
 				shell.request_redraw();
@@ -210,7 +288,13 @@ where
 				let x = position.x;
 				let x = x.clamp(bounds.x, bounds.x + bounds.width) - bounds.x;
 				let percentage = x / bounds.width;
-				state.percentage = percentage;
+				state.percentage = self.stepped_percentage(percentage);
+				if let Some(on_change_live) = &self.on_change_live {
+					shell.publish(on_change_live(self.value_from_percentage(state.percentage)));
+				}
+
+				shell.request_redraw();
+				shell.capture_event();
 			}
 			Event::Window(window::Event::RedrawRequested(now)) => {
 				if state.pressed.is_animating(*now) {
@@ -226,7 +310,10 @@ where
 		_viewport: &Rectangle, _renderer: &Renderer,
 	) -> mouse::Interaction {
 		let state = tree.state.downcast_ref::<State>();
-		if self.enabled && self.on_change.is_some() && cursor.is_over(layout.bounds()) {
+		if self.enabled
+			&& (self.on_change.is_some() || self.on_change_live.is_some())
+			&& cursor.is_over(expanded_bounds(layout.bounds(), self.interaction_radius))
+		{
 			if state.pressed.value() {
 				mouse::Interaction::Grabbing
 			} else {
@@ -252,12 +339,6 @@ where
 			},
 			|limits| layout::atomic(limits, self.width, self.height),
 		)
-		// layout::positioned(limits, self.width, self.height, Padding {
-		//     top: 0.0,
-		//     right: self.track.shadow_width,
-		//     bottopm: self.track.shadow_width,
-		//     left: 0.0,
-		// }, |limits| {}, )
 	}
 
 	fn draw(
@@ -293,11 +374,12 @@ where
 			track.border,
 		);
 
-		let percentage_filled = if state.pressed.value() {
-			state.percentage
-		} else {
-			(self.value - self.minimum).as_() / (self.maximum - self.minimum).as_()
-		};
+		let percentage_filled =
+			if state.pressed.value() && !state.pressed.is_animating(Instant::now()) {
+				state.percentage
+			} else {
+				self.percentage_from_value(self.value.clone())
+			};
 		let percentage_filled = percentage_filled.clamp(0.0, 1.0);
 		// debug_assert!(
 		//     percentage_filled <= 1.0 && percentage_filled >= 0.0,

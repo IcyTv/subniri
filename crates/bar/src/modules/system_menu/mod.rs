@@ -1,6 +1,8 @@
 use std::time::Duration;
 
 use config::{ConfigFile, SystemMenuWidgets};
+use daemon::{NightlightClient, NightlightProxy};
+use futures::Stream;
 use iced::{
 	Element, Font, Length, Subscription, Task,
 	alignment::Vertical,
@@ -14,9 +16,10 @@ use jiff::{
 use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
-	widgets::{NeoButton, neo_button, neo_card, neo_toggle_button},
+	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
+use tokio_stream::StreamExt as _;
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -29,6 +32,12 @@ pub enum Message {
 	Wifi(wifi::Message),
 	Bluetooth(bluetooth::Message),
 	OpenPowerMenu,
+	OpenSettings,
+
+	NightlightEnabled(bool),
+	BrightnessChanged(f64),
+	TemperatureChanged(u32),
+
 	Noop,
 }
 
@@ -40,10 +49,13 @@ pub struct SystemMenu {
 	uptime: jiff::Span,
 	wifi: wifi::Wifi,
 	bluetooth: bluetooth::Bluetooth,
+	nightlight_enabled: bool,
+	temperature: u32,
+	brightness: f64,
 }
 
 impl SystemMenu {
-	pub fn new() -> Self {
+	pub fn new(config: &ConfigFile) -> Self {
 		let username = User::from_uid(Uid::effective())
 			.ok()
 			.flatten()
@@ -61,6 +73,9 @@ impl SystemMenu {
 			uptime,
 			wifi: wifi::Wifi::new(),
 			bluetooth: bluetooth::Bluetooth::new(),
+			nightlight_enabled: config.nightlight.enabled,
+			brightness: config.nightlight.day.brightness as f64,
+			temperature: config.nightlight.day.temperature,
 		}
 	}
 
@@ -72,6 +87,9 @@ impl SystemMenu {
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
+		// TODO: Don't block...
+		let nightlight = Subscription::run(|| futures::executor::block_on(nighlight_stream()));
+
 		Subscription::batch([
 			iced::time::repeat(
 				|| async move {
@@ -85,6 +103,7 @@ impl SystemMenu {
 			),
 			self.wifi.subscription().map(Message::Wifi),
 			self.bluetooth.subscription().map(Message::Bluetooth),
+			nightlight,
 		])
 	}
 
@@ -92,12 +111,24 @@ impl SystemMenu {
 		// FIXME: I absolutely hate this
 		self.widgets = config.system_menu.widgets.clone();
 
+		if matches!(
+			message,
+			Message::NightlightEnabled(_)
+				| Message::TemperatureChanged(_)
+				| Message::BrightnessChanged(_)
+		) {
+			log::trace!("{message:?}");
+		}
+
 		match message {
 			Message::UptimeUpdated(uptime) => self.uptime = uptime,
 			Message::Wifi(message) => return self.wifi.update(message).map(Message::Wifi),
 			Message::Bluetooth(message) => {
 				return self.bluetooth.update(message).map(Message::Bluetooth);
 			}
+			Message::NightlightEnabled(enabled) => self.nightlight_enabled = enabled,
+			Message::TemperatureChanged(temp) => self.temperature = temp,
+			Message::BrightnessChanged(brightness) => self.brightness = brightness,
 			_ => (),
 		}
 
@@ -141,7 +172,8 @@ impl SystemMenu {
 			neo_button(svg(phosphor_icon!("gear")))
 				.width(32)
 				.height(32)
-				.padding(6),
+				.padding(6)
+				.on_press(Message::OpenSettings),
 			neo_button(svg(phosphor_icon!("pencil")))
 				.width(32)
 				.height(32)
@@ -158,6 +190,26 @@ impl SystemMenu {
 		);
 
 		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
+
+		if self.nightlight_enabled {
+			let temp = row![
+				svg(phosphor_icon!("sun")).width(16),
+				neo_slider(1000..=6500, self.temperature)
+			]
+			.align_y(Vertical::Center)
+			.spacing(4);
+
+			grid = grid.push(temp);
+
+			let brightness = row![
+				svg(phosphor_icon!("lightbulb")).width(16),
+				neo_slider(0.0..=1.0, self.brightness),
+			]
+			.align_y(Vertical::Center)
+			.spacing(4);
+
+			grid = grid.push(brightness);
+		}
 
 		for widget in &self.widgets {
 			let widget = match widget {
@@ -249,4 +301,41 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 			.smallest(smallest)
 			.relative(&boot_time),
 	)?)
+}
+
+async fn nighlight_stream() -> impl Stream<Item = Message> {
+	let connection = zbus::Connection::session().await.unwrap();
+
+	log::trace!("Connected");
+
+	let proxy = NightlightProxy::new(&connection).await.unwrap();
+
+	log::trace!("got proxy");
+
+	let enabled_changed = proxy.receive_enabled_changed();
+	let brightness_changed = proxy.receive_brightness_changed();
+	let temperature_changed = proxy.receive_temperature_changed();
+
+	// TODO: Should we just be using receive_state_changed signal?
+	let (enabled, brightness, temperature) =
+		tokio::join!(enabled_changed, brightness_changed, temperature_changed,);
+
+	log::trace!("Got property streams");
+
+	let enabled = enabled.then(|enabled| async move {
+		let value = enabled.get().await.unwrap();
+		Message::NightlightEnabled(value)
+	});
+	let brightness = brightness.then(|brightness| async move {
+		let value = brightness.get().await.unwrap();
+		Message::BrightnessChanged(value)
+	});
+	let temperature = temperature.then(|temperature| async move {
+		log::trace!("Temp changed");
+		let value = temperature.get().await.unwrap();
+		log::trace!("Temp: {value:?}");
+		Message::TemperatureChanged(value)
+	});
+
+	enabled.merge(brightness).merge(temperature)
 }

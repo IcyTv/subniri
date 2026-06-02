@@ -26,6 +26,7 @@ pub struct NeoToggle<Message> {
 	toggled: bool,
 	width: Length,
 	height: Length,
+	enabled: bool,
 }
 
 impl<Message> NeoToggle<Message> {
@@ -41,6 +42,7 @@ impl<Message> NeoToggle<Message> {
 			toggled: false,
 			width: Length::Shrink,
 			height: Length::Shrink,
+			enabled: true,
 		}
 	}
 
@@ -69,19 +71,24 @@ impl<Message> NeoToggle<Message> {
 		self
 	}
 
-	pub fn width(mut self, width: Length) -> Self {
-		self.width = width;
+	pub fn width(mut self, width: impl Into<Length>) -> Self {
+		self.width = width.into();
 		self
 	}
 
-	pub fn height(mut self, height: Length) -> Self {
-		self.height = height;
+	pub fn height(mut self, height: impl Into<Length>) -> Self {
+		self.height = height.into();
 		self
 	}
 
 	pub fn shadow_width(mut self, shadow_width: f32) -> Self {
 		self.track.shadow_width = shadow_width;
 		self.handle.shadow_width = shadow_width;
+		self
+	}
+
+	pub fn enabled(mut self, enabled: bool) -> Self {
+		self.enabled = enabled;
 		self
 	}
 }
@@ -139,6 +146,10 @@ where
 		cursor: mouse::Cursor, _renderer: &Renderer,
 		shell: &mut iced::advanced::Shell<'_, Message>, _viewport: &Rectangle,
 	) {
+		if !self.enabled {
+			return;
+		}
+
 		let state = tree.state.downcast_mut::<State>();
 		let bounds = layout.bounds();
 		let over = cursor.is_over(bounds);
@@ -188,7 +199,7 @@ where
 		&self, _tree: &Tree, layout: layout::Layout<'_>, cursor: mouse::Cursor,
 		_viewport: &Rectangle, _renderer: &Renderer,
 	) -> mouse::Interaction {
-		if cursor.is_over(layout.bounds()) {
+		if self.enabled && cursor.is_over(layout.bounds()) {
 			mouse::Interaction::Pointer
 		} else {
 			mouse::Interaction::None
@@ -308,14 +319,14 @@ where
 	}
 }
 
-impl<'a, Message, Theme, Renderer> Into<Element<'a, Message, Theme, Renderer>>
-	for NeoToggle<Message>
+impl<'a, Message, Theme, Renderer> From<NeoToggle<Message>>
+	for Element<'a, Message, Theme, Renderer>
 where
 	Message: Clone + 'a,
 	Theme: 'a,
 	Renderer: renderer::Renderer,
 {
-	fn into(self) -> Element<'a, Message, Theme, Renderer> {
-		Element::new(self)
+	fn from(value: NeoToggle<Message>) -> Self {
+		Element::new(value)
 	}
 }

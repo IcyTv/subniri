@@ -1,4 +1,5 @@
 use config::ConfigFile;
+use iced::alignment::Vertical;
 use std::{collections::HashMap, path::PathBuf, process::Command, time::Duration};
 
 use iced::Length;
@@ -80,6 +81,7 @@ struct Bar {
 
 	open_popup: Option<(Id, Section, usize)>,
 	layer_heights: HashMap<Id, u32>,
+	window_scales: HashMap<Id, f32>,
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 }
@@ -91,7 +93,7 @@ impl Bar {
 		let _ = connection;
 
 		let bar = Self {
-			left: vec![Module::system_menu(), Module::taskbar()],
+			left: vec![Module::system_menu(&config_file), Module::taskbar()],
 			center: vec![Module::media_controls()],
 			right: vec![
 				Module::volume(),
@@ -101,6 +103,7 @@ impl Bar {
 			],
 			open_popup: None,
 			layer_heights: HashMap::new(),
+			window_scales: HashMap::new(),
 			config_doc,
 			config_file,
 		};
@@ -129,10 +132,18 @@ impl Bar {
 				_ => Task::none(),
 			},
 			BarMessage::WindowClosed(id) => self.window_closed(id),
-			BarMessage::Module(section, index, ModuleMessage::OpenPopup(kind, bounds)) => {
+			BarMessage::Module(
+				source_id,
+				section,
+				index,
+				ModuleMessage::OpenPopup(kind, bounds),
+			) => {
 				let id = Id::unique();
+				let scale = source_id.map_or(1.0, |id| self.scale_factor(id));
+				self.window_scales.insert(id, scale);
 
 				let task = if let Some(open_popup_id) = self.open_popup.take() {
+					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
 						iced_runtime::window::Action::Close(open_popup_id.0),
 					))
@@ -164,8 +175,9 @@ impl Bar {
 				}))
 				.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
-			BarMessage::Module(_, _, ModuleMessage::OpenPowerMenu) => {
+			BarMessage::Module(_, _, _, ModuleMessage::OpenPowerMenu) => {
 				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
+					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
 						iced_runtime::window::Action::Close(open_popup_id.0),
 					))
@@ -174,8 +186,23 @@ impl Bar {
 				};
 
 				close_popup.chain(Task::future(async {
-					std::thread::sleep(Duration::from_millis(100));
+					// std::thread::sleep(Duration::from_millis(100));
 					open_power_menu();
+					BarMessage::Noop
+				}))
+			}
+			BarMessage::Module(_, _, _, ModuleMessage::OpenSettings) => {
+				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
+					self.window_scales.remove(&open_popup_id.0);
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(open_popup_id.0),
+					))
+				} else {
+					Task::none()
+				};
+
+				close_popup.chain(Task::future(async {
+					open_settings();
 					BarMessage::Noop
 				}))
 			}
@@ -187,12 +214,12 @@ impl Bar {
 					Task::done(BarMessage::RemoveWindow(id))
 				}
 			}
-			BarMessage::Module(section, index, message) => {
+			BarMessage::Module(_, section, index, message) => {
 				let cf = self.config_file.clone();
 				if let Some(module) = self.module_mut(section, index) {
 					return module
 						.update(message, &cf)
-						.map(move |msg| BarMessage::Module(section, index, msg));
+						.map(move |msg| BarMessage::Module(None, section, index, msg));
 				}
 
 				Task::none()
@@ -203,6 +230,7 @@ impl Bar {
 
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
 		self.layer_heights.remove(&id);
+		self.window_scales.remove(&id);
 		if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
 			self.open_popup = None;
 		}
@@ -232,6 +260,10 @@ impl Bar {
 	}
 
 	fn scale_factor(&self, id: Id) -> f32 {
+		if let Some(scale) = self.window_scales.get(&id) {
+			return *scale;
+		}
+
 		let Some((_, height)) = iced_layershell::window::output_logical_size(id) else {
 			return 1.0;
 		};
@@ -251,7 +283,7 @@ impl Bar {
 			if let Some(module) = self.module(*section, *index) {
 				module
 					.view_popup()
-					.map(move |message| BarMessage::Module(*section, *index, message))
+					.map(move |message| BarMessage::Module(Some(id), *section, *index, message))
 			} else {
 				neo_card(text("Something went wrong").color(COLORS.text))
 					.background(COLORS.feedback.danger90)
@@ -262,22 +294,29 @@ impl Bar {
 			let output_name = output_name.as_deref();
 
 			stack![
-				container(self.section(Section::Left, &self.left, output_name))
+				container(self.section(id, Section::Left, &self.left, output_name))
 					.align_left(Length::Fill)
+					.align_y(Vertical::Center)
+					.height(Length::Fill)
 					.padding([4, 16]),
-				container(self.section(Section::Center, &self.center, output_name))
+				container(self.section(id, Section::Center, &self.center, output_name))
 					.center_x(Length::Fill)
+					.align_y(Vertical::Center)
+					.height(Length::Fill)
 					.padding([4, 16]),
-				container(self.section(Section::Right, &self.right, output_name))
+				container(self.section(id, Section::Right, &self.right, output_name))
 					.align_right(Length::Fill)
+					.align_y(Vertical::Center)
+					.height(Length::Fill)
 					.padding([4, 16]),
 			]
+			.height(Length::Fill)
 			.into()
 		}
 	}
 
 	fn section<'a>(
-		&self, section: Section, modules: &'a [Module], output_name: Option<&str>,
+		&self, id: Id, section: Section, modules: &'a [Module], output_name: Option<&str>,
 	) -> Element<'a, BarMessage> {
 		modules
 			.iter()
@@ -286,10 +325,11 @@ impl Bar {
 				row.push(
 					module
 						.view(output_name)
-						.map(move |message| BarMessage::Module(section, index, message)),
+						.map(move |message| BarMessage::Module(Some(id), section, index, message)),
 				)
 			})
 			.spacing(10.)
+			.align_y(iced::Alignment::Center)
 			.into()
 	}
 
@@ -337,7 +377,9 @@ impl Bar {
 			module
 				.subscription()
 				.with((section, index))
-				.map(|((section, index), message)| BarMessage::Module(section, index, message))
+				.map(|((section, index), message)| {
+					BarMessage::Module(None, section, index, message)
+				})
 		})
 	}
 
@@ -345,7 +387,7 @@ impl Bar {
 		Task::batch(modules.iter().enumerate().map(move |(index, module)| {
 			module
 				.init_task()
-				.map(move |message| BarMessage::Module(section, index, message))
+				.map(move |message| BarMessage::Module(None, section, index, message))
 		}))
 	}
 }
@@ -362,7 +404,7 @@ enum Section {
 enum BarMessage {
 	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
-	Module(Section, usize, ModuleMessage),
+	Module(Option<Id>, Section, usize, ModuleMessage),
 	SetPopupId(Section, usize, ModuleKind, Id),
 	Noop,
 }
@@ -386,5 +428,27 @@ fn iceout_bin() -> Option<PathBuf> {
 				.ok()?
 				.parent()
 				.map(|p| p.join("iceout"))
+		})
+}
+
+fn open_settings() {
+	let Some(snowconf) = snowconf_bin() else {
+		log::error!("Failed to find snowconf executable");
+		return;
+	};
+
+	if let Err(e) = Command::new(&snowconf).spawn() {
+		log::error!("Failed to launch snowconf at '{}': {e}", snowconf.display());
+	}
+}
+
+fn snowconf_bin() -> Option<PathBuf> {
+	option_env!("SUBNIRI_SNOWCONF_BIN")
+		.map(PathBuf::from)
+		.or_else(|| {
+			std::env::current_exe()
+				.ok()?
+				.parent()
+				.map(|p| p.join("snowconf"))
 		})
 }

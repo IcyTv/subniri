@@ -28,7 +28,9 @@ pub enum Module {
 pub enum ModuleMessage {
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
+
 	OpenPowerMenu,
+	OpenSettings,
 
 	Clock(clock::Message),
 	Network(network::Message),
@@ -80,8 +82,8 @@ impl Module {
 		Self::Taskbar(None)
 	}
 
-	pub fn system_menu() -> Self {
-		Self::SystemMenu(system_menu::SystemMenu::new())
+	pub fn system_menu(config: &ConfigFile) -> Self {
+		Self::SystemMenu(system_menu::SystemMenu::new(config))
 	}
 
 	pub fn set_popup_id(&mut self, id: Id) {
@@ -113,6 +115,10 @@ impl Module {
 			) => {
 				return Task::done(ModuleMessage::OpenPowerMenu);
 			}
+			(
+				Self::SystemMenu(_),
+				ModuleMessage::SystemMenu(system_menu::Message::OpenSettings),
+			) => return Task::done(ModuleMessage::OpenSettings),
 			(Self::Bluetooth(bluetooth), ModuleMessage::BluetoothInitialized(result)) => {
 				match result {
 					Ok(initialized) => *bluetooth = Some(initialized),
@@ -130,7 +136,9 @@ impl Module {
 			(Self::Bluetooth(Some(bluetooth)), ModuleMessage::Bluetooth(message)) => {
 				bluetooth.update(message)
 			}
-			(Self::Volume(Some(volume)), ModuleMessage::Volume(message)) => volume.update(message),
+			(Self::Volume(Some(volume)), ModuleMessage::Volume(message)) => {
+				return volume.update(message).map(ModuleMessage::Volume);
+			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => clock.update(message),
 			(Self::MediaControls(controls), ModuleMessage::MediaControls(message)) => {
 				return controls.update(message).map(ModuleMessage::MediaControls);
@@ -142,7 +150,6 @@ impl Module {
 				return menu.update(message, config).map(ModuleMessage::SystemMenu);
 			}
 			(_, ModuleMessage::Pressed(kind, bounds)) => {
-				println!("{kind:?} pressed");
 				return Task::done(ModuleMessage::OpenPopup(kind, bounds));
 			}
 			_ => {}
@@ -218,6 +225,7 @@ impl Module {
 			}
 			Self::SystemMenu(menu) => menu.view_popup().map(ModuleMessage::SystemMenu),
 			Self::Volume(Some(vol)) => vol.view_popup().map(ModuleMessage::Volume),
+			Self::Bluetooth(Some(bt)) => bt.view_popup().map(ModuleMessage::Bluetooth),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),

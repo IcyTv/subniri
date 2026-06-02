@@ -15,6 +15,7 @@ async-stream = "0.3.6"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 clap = { version = "4.6.1", features = ["derive"] }
 config = { version = "0.0.1", path = "crates/config" }
+daemon = { path = "./crates/daemon" }
 dirs = "6.0.0"
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
@@ -34,10 +35,10 @@ iced = { version = "0.15.0-dev", features = [
   "wgpu-bare",
   "tokio",
   "canvas",
-], git = "https://github.com/IcyTv/iced", default-features = false, rev = "1722750ba7e279cc1661e52bee1c1014e42b167f" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "db62e6ba336feeb37a1297325ad3fc9b66b886e2" }
-iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "1722750ba7e279cc1661e52bee1c1014e42b167f" }
-iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "db62e6ba336feeb37a1297325ad3fc9b66b886e2" }
+], git = "https://github.com/IcyTv/iced", default-features = false, rev = "24d1222aa3809dd39e57b5aa386edd01b03d82ea" }
+iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "24d1222aa3809dd39e57b5aa386edd01b03d82ea" }
+iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6" }
+iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6" }
 icon = "0.2.0"
 image = "0.25.10"
 jiff = "0.2.25"

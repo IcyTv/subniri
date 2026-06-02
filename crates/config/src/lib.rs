@@ -1,18 +1,32 @@
+use std::collections::HashMap;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
+use async_stream::stream;
 use config_macros::{Config, ConfigFile, ConfigFileSerialize, ConfigSerialize};
-use config_traits::ConfigError;
-use config_traits::{ConfigFileSerialize as _, ConfigFileValidateExt as _};
+use config_traits::ConfigFileValidateExt as _;
+use config_traits::{ConfigError, ConfigFileSerialize};
+use futures::Stream;
+use garde::Validate;
 use jiff::civil::Time;
-use kdl::KdlDocument;
+pub use kdl::KdlDocument;
+use notify::{
+	EventKind, RecursiveMode, Watcher,
+	event::{CreateKind, ModifyKind, RemoveKind},
+};
+
+const CONFIG_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+static PROCESS_WRITES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
 
 /// This is the main configuration file for the subniri desktop shell.
 /// If you want to, you can edit settings from here, and they'll be automatically syncronized to
 /// all components in the subniri shell.
 /// You can also edit the settings in a graphical interface (`snowconf`), and they will be
 /// synchronized to this file.
-#[derive(Default, Debug, Clone, ConfigFile, ConfigFileSerialize, garde::Validate)]
+#[derive(Default, Debug, Clone, ConfigFile, ConfigFileSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct ConfigFile {
 	/// Configuration for controlling the behavior of the nightlight.
@@ -49,16 +63,80 @@ pub struct ConfigFile {
 }
 
 impl ConfigFile {
-	pub fn load() -> Result<(KdlDocument, Self), ConfigError> {
-		let path = std::env::var("SUBNIRI_CONFIG_FILE")
+	pub fn path() -> Result<PathBuf, ConfigError> {
+		std::env::var("SUBNIRI_CONFIG_FILE")
 			.map(std::path::PathBuf::from)
 			.ok()
 			.or_else(|| Some(dirs::config_dir()?.join("subniri/config.kdl")))
 			.ok_or_else(|| {
-				std::io::Error::new(std::io::ErrorKind::NotFound, "No config file found")
-			})?;
+				std::io::Error::new(std::io::ErrorKind::NotFound, "No config file found").into()
+			})
+	}
 
-		Self::load_from_file(path)
+	pub fn load() -> Result<(KdlDocument, Self), ConfigError> {
+		Self::load_from_file(Self::path()?)
+	}
+
+	pub fn watch() -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
+		Self::watch_file(Self::path()?)
+	}
+
+	pub fn watch_file(
+		file: impl AsRef<Path>,
+	) -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
+		let config_path = absolute_path(file)?;
+		let watched_dir = config_path
+			.parent()
+			.ok_or_else(|| std::io::Error::other("config path has no parent directory"))?
+			.to_path_buf();
+		let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+		let mut watcher =
+			notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+				let _ = tx.send(event);
+			})
+			.map_err(notify_error)?;
+
+		watcher
+			.watch(&watched_dir, RecursiveMode::NonRecursive)
+			.map_err(notify_error)?;
+
+		Ok(stream! {
+			let _watcher = watcher;
+
+			while let Some(event) = rx.recv().await {
+				match event {
+					Ok(event) if is_config_change(&event, &config_path) => {}
+					Ok(_) => continue,
+					Err(error) => {
+						yield Err(notify_error(error));
+						continue;
+					}
+				}
+
+				tokio::time::sleep(CONFIG_WATCH_DEBOUNCE).await;
+				let mut changed = true;
+
+				while let Ok(event) = rx.try_recv() {
+					match event {
+						Ok(event) => {
+							changed |= is_config_change(&event, &config_path);
+						}
+						Err(error) => yield Err(notify_error(error)),
+					}
+				}
+
+				if !changed {
+					continue;
+				}
+
+				match current_file_contents(&config_path) {
+					Ok(contents) if is_process_write(&config_path, &contents) => continue,
+					Ok(_) => yield Ok(()),
+					Err(error) => yield Err(error),
+				}
+			}
+		})
 	}
 
 	pub fn load_from_file<P: AsRef<Path>>(file: P) -> Result<(KdlDocument, Self), ConfigError> {
@@ -90,9 +168,111 @@ impl ConfigFile {
 			Err(e) => Err(e.into()),
 		}
 	}
+
+	pub fn write(&self, doc: &mut KdlDocument) -> Result<(), ConfigError> {
+		self.write_to_file(doc, Self::path()?)
+	}
+
+	pub fn write_to_file(
+		&self, doc: &mut KdlDocument, file: impl AsRef<Path>,
+	) -> Result<(), ConfigError> {
+		let file = file.as_ref();
+
+		// NOTE: This is mostly a safety net, so we don't do something stupid when programatically
+		// changing the config
+		#[cfg(debug_assertions)]
+		if let Err(e) = self.validate() {
+			return Err(ConfigError::Validation {
+				error: e,
+				src: None,
+				span: None,
+			});
+		}
+
+		self.apply_to_kdl_document(doc)?;
+
+		// TODO: Should we want/need to check for existing edits?
+
+		// TODO: Should we format?
+		doc.autoformat();
+
+		let contents = doc.to_string();
+		std::fs::write(file, &contents)?;
+		record_process_write(file, contents)?;
+
+		Ok(())
+	}
 }
 
-#[derive(Debug, Config, Clone, ConfigSerialize, garde::Validate)]
+fn is_config_change(event: &notify::Event, config_path: &Path) -> bool {
+	let relevant_kind = matches!(
+		event.kind,
+		EventKind::Any
+			| EventKind::Create(CreateKind::Any | CreateKind::File)
+			| EventKind::Modify(ModifyKind::Any | ModifyKind::Data(_) | ModifyKind::Name(_))
+			| EventKind::Remove(RemoveKind::Any | RemoveKind::File)
+	);
+
+	relevant_kind
+		&& event
+			.paths
+			.iter()
+			.filter_map(|path| absolute_path(path).ok())
+			.any(|path| path == config_path)
+}
+
+fn current_file_contents(path: &Path) -> Result<String, ConfigError> {
+	match std::fs::read_to_string(path) {
+		Ok(contents) => Ok(contents),
+		Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(String::new()),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn record_process_write(path: &Path, contents: String) -> Result<(), ConfigError> {
+	let path = absolute_path(path)?;
+	let mut writes = PROCESS_WRITES
+		.get_or_init(|| Mutex::new(HashMap::new()))
+		.lock()
+		.map_err(|_| std::io::Error::other("config write tracking lock poisoned"))?;
+
+	writes.insert(path, contents);
+	Ok(())
+}
+
+fn is_process_write(path: &Path, contents: &str) -> bool {
+	let Ok(mut writes) = PROCESS_WRITES
+		.get_or_init(|| Mutex::new(HashMap::new()))
+		.lock()
+	else {
+		return false;
+	};
+
+	if writes
+		.get(path)
+		.is_some_and(|last_write| last_write == contents)
+	{
+		writes.remove(path);
+		true
+	} else {
+		false
+	}
+}
+
+fn absolute_path(path: impl AsRef<Path>) -> std::io::Result<PathBuf> {
+	let path = path.as_ref();
+	if path.is_absolute() {
+		Ok(path.to_path_buf())
+	} else {
+		Ok(std::env::current_dir()?.join(path))
+	}
+}
+
+fn notify_error(error: notify::Error) -> ConfigError {
+	std::io::Error::other(error).into()
+}
+
+#[derive(Debug, Config, Clone, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Nightlight {
 	/// If the nightlight integration should be enabled.
@@ -125,6 +305,12 @@ pub struct Nightlight {
 	#[config(default = NightlightSetting::night())]
 	#[garde(dive)]
 	pub night: NightlightSetting,
+
+	/// Debounce delay for applying gamma table changes, in milliseconds.
+	/// This prevents rapid slider updates from overwhelming the compositor.
+	#[config(default = 500)]
+	#[garde(range(min = 0, max = 10_000))]
+	pub debounce_ms: u64,
 }
 
 fn verify_use_location_dusk_dawn<'a>(
@@ -168,17 +354,18 @@ impl Default for Nightlight {
 			dusk: Some(jiff::civil::Time::new(20, 0, 0, 0).unwrap()),
 			night: NightlightSetting::night(),
 			day: NightlightSetting::day(),
+			debounce_ms: 500,
 		}
 	}
 }
 
-#[derive(Debug, Config, Clone, ConfigSerialize, garde::Validate)]
+#[derive(Debug, Config, Clone, ConfigSerialize, Validate)]
 pub struct NightlightSetting {
 	/// Temperature of the light in [K]elvin. Basically the lower the number, the redder the light.
 	/// Normal daytime temperature is 6500.
 	/// Range [1000-10000]
 	#[garde(range(min = 1000, max = 10000))]
-	pub temperature: i32,
+	pub temperature: u32,
 	/// Brightness of the light.
 	/// Range [0.1-1.0]
 	#[garde(range(min = 0.1, max = 1.0))]
@@ -207,7 +394,7 @@ impl NightlightSetting {
 	}
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, garde::Validate)]
+#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Homeassistant {
 	/// Should the homeassistant integration be enabled? If it's disabled, you won't be able to
@@ -223,7 +410,7 @@ pub struct Homeassistant {
 	pub tracked_devices: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, garde::Validate)]
+#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Spotify {
 	/// Whether to enable the spotify integration or not.
@@ -240,7 +427,7 @@ pub enum SystemMenuWidgets {
 	Nightlight,
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, garde::Validate)]
+#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct SystemMenu {
 	/// Widgets to be displayed in the system menu. These put into 2 columns by the order they
