@@ -1,17 +1,19 @@
 use clap::{Parser, Subcommand};
-use daemon::{NightlightClient, NightlightCommand};
-use modern_terminal::{
-	components::{
-		table::{Size, Table},
-		text::{Text, TextAlignment},
-	},
-	core::{console::Console, style::Style},
-};
+use cliclack::{confirm, intro, log, note, outro, outro_cancel, spinner};
+use comfy_table::{Cell, Color, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
+use daemon::NightlightProxy;
+use zbus::{Connection, names::BusName, proxy::Defaults, zvariant::ObjectPath};
 
 #[derive(Parser)]
 struct Args {
 	#[clap(subcommand)]
 	command: Command,
+
+	#[clap(long, global = true)]
+	/// Accept any prompts with yes by default.
+	///
+	/// This is mainly for usage with non-TTY terminals and/or tools
+	yes: bool,
 }
 
 #[derive(Subcommand)]
@@ -19,6 +21,10 @@ enum Command {
 	Nightlight {
 		#[clap(subcommand)]
 		command: NightlightSubcommand,
+	},
+	Launcher {
+		#[clap(subcommand)]
+		command: LauncherCommand,
 	},
 }
 
@@ -31,7 +37,7 @@ enum NightlightPreset {
 
 #[derive(Subcommand)]
 enum NightlightSubcommand {
-	SetBrightness { brightness: f32 },
+	SetBrightness { brightness: f64 },
 	SetTemperature { temperature: u32 },
 	Preset { preset: NightlightPreset },
 	Enable,
@@ -39,93 +45,191 @@ enum NightlightSubcommand {
 	Toggle,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Control the application launcher (avalaunch)
+#[derive(Subcommand)]
+enum LauncherCommand {
+	/// Open avalanch
+	Open,
+	/// Close avalaunch
+	Close,
+	/// Exit the avalaunch daemon. This will not allow you to relaunch it using dbus!
+	Exit,
+}
+
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 
-	match args.command {
-		Command::Nightlight { command } => nightlight(&command)?,
+	let res = match args.command {
+		Command::Nightlight { command } => nightlight(&command).await,
+		Command::Launcher { ref command } => launcher(&args, command).await,
+	};
+
+	if let Err(e) = res {
+		outro_cancel(e)?;
+	} else {
+		outro("Done")?;
 	}
 
 	Ok(())
 }
 
-fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error::Error>> {
-	let send_cmd = match cmd {
+async fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error::Error>> {
+	intro("Nightlight")?;
+	let spinner = spinner();
+	spinner.start("Connecting to permafrostd");
+
+	let conn = Connection::session().await?;
+
+	if !is_proxy_ready(
+		&conn,
+		NightlightProxy::DESTINATION.as_ref().unwrap(),
+		NightlightProxy::PATH.as_ref().unwrap(),
+	)
+	.await?
+	{
+		spinner.error("The daemon `permafrostd` isn't running");
+		outro_cancel("Run `permafrostd` in a console or as a startup service.")?;
+		std::process::exit(-1);
+	}
+
+	let proxy = NightlightProxy::new(&conn).await?;
+
+	spinner.set_message("Sending command");
+
+	match cmd {
 		NightlightSubcommand::SetBrightness { brightness } => {
-			NightlightCommand::SetBrightness(*brightness)
+			// NightlightCommand::SetBrightness(*brightness)
+			proxy.set_brightness(*brightness).await?
 		}
 		NightlightSubcommand::SetTemperature { temperature } => {
-			NightlightCommand::SetTemperature(*temperature)
+			proxy.set_temperature(*temperature).await?;
 		}
 		NightlightSubcommand::Preset { preset } => match preset {
-			NightlightPreset::Day => {
-				NightlightCommand::SetNightlight(daemon::NightlightPreset::Day)
-			}
-			NightlightPreset::Night => {
-				NightlightCommand::SetNightlight(daemon::NightlightPreset::Night)
-			}
+			NightlightPreset::Day => proxy.set_preset("day").await?,
+			NightlightPreset::Night => proxy.set_preset("night").await?,
 		},
-		NightlightSubcommand::Enable => NightlightCommand::SetEnabled(true),
-		NightlightSubcommand::Disable => NightlightCommand::SetEnabled(false),
-		NightlightSubcommand::Toggle => NightlightCommand::ToggleNightlight,
-	};
+		NightlightSubcommand::Enable => proxy.set_enabled(true).await?,
+		NightlightSubcommand::Disable => proxy.set_enabled(false).await?,
+		NightlightSubcommand::Toggle => proxy.toggle().await?,
+	}
 
-	let client = NightlightClient::new()?;
-	let response = client.send(send_cmd)?;
+	spinner.set_message("Getting current nightlight state");
+
+	let response = proxy.state().await;
 
 	match response {
-		daemon::NightlightResponse::State(state) => {
-			let mut writer = std::io::stdout();
-			let mut console = Console::from_fd(&mut writer);
+		Ok((active, _, brightness, temperature, preset)) => {
+			let mut table = Table::new();
 
-			let component = Table {
-				column_sizes: vec![Size::Cells(20), Size::Cells(8)],
-				rows: vec![
-					vec![
-						name("Brightness"),
-						value(format!("{:.2}", state.brightness)),
-					],
-					vec![
-						name("Color Temperature"),
-						value(format!("{}K", state.temperature)),
-					],
-					vec![name("Preset"), value(format!("{:?}", state.preset))],
-				],
-			};
+			table
+				.load_preset(UTF8_FULL)
+				.apply_modifier(UTF8_ROUND_CORNERS);
 
-			console.render(&component)?;
+			table.add_row(vec![
+				Cell::new("Enabled").fg(Color::Yellow),
+				Cell::new(format!("{}", active)),
+			]);
+
+			table.add_row(vec![
+				Cell::new("Brightness").fg(Color::Yellow),
+				Cell::new(format!("{:.2}", brightness)),
+			]);
+
+			table.add_row(vec![
+				Cell::new("Temperature").fg(Color::Yellow),
+				Cell::new(format!("{}", temperature)),
+			]);
+
+			table.add_row(vec![
+				Cell::new("Preset").fg(Color::Yellow),
+				Cell::new(format!("{}", preset)),
+			]);
+
+			note("New nightlight settings", table)?;
 		}
-		daemon::NightlightResponse::Error(e) => {
-			let mut writer = std::io::stderr();
-			let mut console = Console::from_fd(&mut writer);
-
-			let component = Text {
-				align: TextAlignment::Left,
-				text: format!("Error: {e}"),
-				styles: vec![Style::Foreground("red".to_string())],
-			};
-
-			console.render(&component)?;
+		Err(e) => {
+			spinner.error(&e);
+			outro_cancel(e)?;
 
 			std::process::exit(-1);
 		}
 	}
 
+	spinner.clear();
+
 	Ok(())
 }
 
-fn name(text: &str) -> Box<Text> {
-	Box::new(Text {
-		align: TextAlignment::Left,
-		text: String::from(text),
-		styles: vec![Style::Bold, Style::Foreground("yellow".to_string())],
-	})
+async fn launcher(
+	args: &Args, command: &LauncherCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let conn = zbus::Connection::session().await?;
+
+	intro("Launcher")?;
+
+	let spinner = spinner();
+	spinner.start("Connecting to Launcher");
+
+	{
+		if !is_proxy_ready(
+			&conn,
+			launcher::LauncherProxy::DESTINATION.as_ref().unwrap(),
+			launcher::LauncherProxy::PATH.as_ref().unwrap(),
+		)
+		.await?
+		{
+			spinner.error("The launcher daemon isn't running!");
+			outro_cancel(
+				"Run `avalaunch` in a console or as a startup service to use the launcher",
+			)?;
+
+			std::process::exit(-1);
+		}
+
+		let proxy = launcher::LauncherProxy::new(&conn).await?;
+
+		spinner.set_message("Sending Message");
+
+		match command {
+			LauncherCommand::Open => {
+				proxy.open().await?;
+				log::info("Opened Launcher")?;
+			}
+			LauncherCommand::Close => {
+				proxy.close().await?;
+				log::info("Closed Launcher")?;
+			}
+			LauncherCommand::Exit => {
+				let answer = args.yes
+					|| confirm("Are you sure you want to exit the launcher daemon?")
+						.initial_value(args.yes)
+						.interact()?;
+
+				if answer {
+					proxy.exit().await?;
+				}
+
+				log::info("Killed launcher")?;
+			}
+		}
+	}
+
+	conn.graceful_shutdown().await;
+
+	spinner.clear();
+
+	Ok(())
 }
 
-fn value(text: impl Into<String>) -> Box<Text> {
-	Box::new(Text {
-		align: TextAlignment::Left,
-		text: text.into(),
-		styles: vec![],
-	})
+async fn is_proxy_ready(
+	conn: &Connection, dest: &BusName<'_>, path: &ObjectPath<'_>,
+) -> zbus::Result<bool> {
+	let peer = zbus::fdo::PeerProxy::builder(conn)
+		.destination(dest)?
+		.path(path)?
+		.build()
+		.await?;
+
+	Ok(peer.ping().await.is_ok())
 }

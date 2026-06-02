@@ -44,6 +44,7 @@ image = "0.25.10"
 jiff = "0.2.25"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
 lazy-regex = "3.6.0"
+launcher = { path = "./crates/launcher" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
 log = "0.4.29"

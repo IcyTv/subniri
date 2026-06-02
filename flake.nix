@@ -4,8 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
-    crane.url = "github:ipetkov/crane";
-
     flake-utils.url = "github:numtide/flake-utils";
 
     rust-overlay = {
@@ -13,8 +11,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    nvim.url = "github:IcyTv/nvim.nix";
-    nvim.inputs.nixpkgs.follows = "nixpkgs";
+    nvim = {
+      url = "github:IcyTv/nvim.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   nixConfig = {
@@ -25,7 +25,6 @@
   outputs = {
     self,
     nixpkgs,
-    crane,
     flake-utils,
     rust-overlay,
     nvim,
@@ -50,36 +49,16 @@
             ];
         };
 
-        rustToolchain = p:
-          p.rust-bin.stable.latest.default.override {
-            extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
-          };
-
-        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
-
-        inherit (pkgs) lib;
-        rustSrc = lib.fileset.toSource {
-          root = ./.;
-          fileset = lib.fileset.unions [
-            # ./CMakeLists.txt
-            # (craneLib.fileset.commonCargoSources ./crates/niri)
-            # (craneLib.fileset.commonCargoSources ./crates/location_provider)
-            # (craneLib.fileset.commonCargoSources ./crates/gammarelay)
-            # (craneLib.fileset.commonCargoSources ./crates/login_manager)
-            # (craneLib.fileset.commonCargoSources ./crates/spotify)
-            # (craneLib.fileset.commonCargoSources ./crates/homeassistant)
-            # (craneLib.fileset.commonCargoSources ./crates/kdl_adapter)
-            # (craneLib.fileset.commonCargoSources ./crates/oauth)
-            # (craneLib.fileset.commonCargoSources ./crates/secret_store)
-            # (craneLib.fileset.commonCargoSources ./crates/workspace-hack)
-            # ./Cargo.toml
-            # ./Cargo.lock
-          ];
+        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
+          extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
         };
 
-        # cargoVendorDir = craneLib.vendorCargoDeps {
-        #   src = rustSrc;
-        # };
+        rustPlatform = pkgs.makeRustPlatform {
+          cargo = rustToolchain;
+          rustc = rustToolchain;
+        };
+
+        inherit (pkgs) lib;
 
         # Common arguments can be set here to avoid repeating them later
         # Note: changes here will rebuild all dependency crates
@@ -102,18 +81,12 @@
           nativeBuildInputs = with pkgs; [
             pkg-config
             rustPlatform.bindgenHook
+            rustToolchain
           ];
-          # Disable all checks; otherwise pytestCheckHook from dependencies runs
-          # and fails because there are no Python tests here.
-          doCheck = false;
-          doInstallCheck = false;
-          checkPhase = "true";
-          installCheckPhase = "true";
-          nativeCheckInputs = [];
         };
 
         phosphorIcons = pkgs.stdenv.mkDerivation {
-          name = "phosphor-icons-qt";
+          name = "phosphor-icons";
 
           src = pkgs.fetchzip {
             url = "https://phosphoricons.com/assets/phosphor-icons.zip";
@@ -122,91 +95,40 @@
           };
 
           installPhase = ''
-              mkdir -p $out
-              cp -r SVGs\ Flat/* $out/
-
-              cd $out
-
-              find . -type f -name "*.svg" | sort | \
-            awk '
-            BEGIN {
-              print "<RCC>"
-              print "  <qresource prefix=\"icons\">"
-            }
-            {
-              gsub(/^\.\//, "", $0)
-              print "    <file>" $0 "</file>"
-            }
-            END {
-              print "  </qresource>"
-              print "</RCC>"
-            }
-            ' > icons.qrc
+            mkdir -p $out
+            cp -r SVGs\ Flat/* $out/
           '';
         };
-        # subniri-cxxqt-modules = pkgs.stdenv.mkDerivation (commonArgs
-        #   // {
-        #     pname = "subniri-cxxqt-modules";
-        #     inherit version;
-        #     src = rustSrc;
-        #
-        #     nativeBuildInputs =
-        #       commonArgs.nativeBuildInputs
-        #       ++ [
-        #         (rustToolchain pkgs)
-        #       ];
-        #
-        #     postPatch = ''
-        #       mkdir -p .cargo
-        #       cp ${cargoVendorDir}/config.toml .cargo/config.toml
-        #     '';
-        #
-        #     CARGO_NET_OFFLINE = "true";
-        #   });
       in {
-        checks = {
-          # inherit subniri-cxxqt-modules;
-
-          #   subniri-workspace-hakari = craneLib.mkCargoDerivation {
-          #     src = rustSrc;
-          #     pname = "subniri-workspace-hakari";
-          #     version = "0.1.0";
-          #     cargoArtifacts = null;
-          #     doInstallCargoArtifacts = false;
-          #
-          #     buildPhaseCargoCommand = ''
-          #       cargo hakari generate --diff
-          #       cargo hakari manage-deps --dry-run
-          #     '';
-          #
-          #     nativeBuildInputs = [
-          #       pkgs.cargo-hakari
-          #     ];
-          #   };
-        };
-
         packages = {
-          # inherit subniri-cxxqt-modules;
-          # subniri-cargo-vendor = cargoVendorDir;
+          subniri-cli = rustPlatform.buildRustPackage {
+            inherit version;
+            pname = "subniri";
 
-          # default = subniri-shell;
+            src = ./.;
+
+            inherit (commonArgs) nativeBuildInputs buildInputs RUSTFLAGS;
+
+            cargoHash = "sha256-s0FZWUIV+1ttb6LrxZOl/eMRP3CdVTrclkS82O6N40o=";
+
+            cargoBuildFlags = [
+              "--package"
+              "cli"
+              "--bin"
+              "subniri"
+            ];
+
+            cargoTestFlags = [
+              "--package"
+              "cli"
+            ];
+          };
         };
 
         apps = {
-          default = flake-utils.lib.mkApp {
-            # drv = subniri-shell;
-            name = "subniri-shell";
-          };
-
-          # subniri-shell = flake-utils.lib.mkApp {
-          #   drv = subniri-shell;
-          #   name = "subniri-shell";
-          # };
         };
 
-        devShells.default = craneLib.devShell {
-          # Inherit inputs from checks.
-          checks = self.checks.${system};
+        devShells.default = pkgs.mkShell {
           inherit (commonArgs) RUSTFLAGS;
 
           LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
@@ -231,7 +153,7 @@
                 inherit pkgs system;
                 languages.rust = {
                   enable = true;
-                  toolchain = rustToolchain pkgs;
+                  toolchain = rustToolchain;
                 };
                 languages.slint.enable = true;
                 # languages.qml.enable = true;
@@ -244,8 +166,5 @@
     systems
     // {
       overlays.default = overlay;
-      # homeModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
-      # homeManagerModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
-      # homeManagerModules.default = self.homeManagerModules.subniri;
     };
 }

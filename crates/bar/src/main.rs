@@ -175,7 +175,12 @@ impl Bar {
 				}))
 				.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
-			BarMessage::Module(_, _, _, ModuleMessage::OpenPowerMenu) => {
+			BarMessage::Module(
+				_,
+				_,
+				_,
+				msg @ ModuleMessage::OpenSettings | msg @ ModuleMessage::OpenPowerMenu,
+			) => {
 				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
 					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
@@ -185,26 +190,18 @@ impl Bar {
 					Task::none()
 				};
 
-				close_popup.chain(Task::future(async {
-					// std::thread::sleep(Duration::from_millis(100));
-					open_power_menu();
-					BarMessage::Noop
-				}))
-			}
-			BarMessage::Module(_, _, _, ModuleMessage::OpenSettings) => {
-				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
-					self.window_scales.remove(&open_popup_id.0);
-					iced_runtime::task::effect(iced_runtime::Action::Window(
-						iced_runtime::window::Action::Close(open_popup_id.0),
-					))
-				} else {
-					Task::none()
-				};
-
-				close_popup.chain(Task::future(async {
-					open_settings();
-					BarMessage::Noop
-				}))
+				match msg {
+					ModuleMessage::OpenPowerMenu => close_popup.chain(Task::future(async {
+						// std::thread::sleep(Duration::from_millis(100));
+						open_power_menu();
+						BarMessage::Noop
+					})),
+					ModuleMessage::OpenSettings => close_popup.chain(Task::future(async {
+						open_settings();
+						BarMessage::Noop
+					})),
+					_ => unreachable!(),
+				}
 			}
 			BarMessage::SetPopupId(section, index, _kind, id) => {
 				if let Some(module) = self.module_mut(section, index) {

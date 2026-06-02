@@ -1,0 +1,23 @@
+[package]
+name = "launcher"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+documentation.workspace = true
+
+[[bin]]
+name = "avalaunch"
+path = "src/main.rs"
+
+[dependencies]
+async-channel.workspace = true
+async-stream.workspace = true
+clap = { workspace = true, features = ["derive"] }
+iced.workspace = true
+iced_layershell.workspace = true
+log.workspace = true
+neo-widgets.workspace = true
+pretty_env_logger.workspace = true
+tokio.workspace = true
+zbus = { workspace = true, features = ["tokio"] }

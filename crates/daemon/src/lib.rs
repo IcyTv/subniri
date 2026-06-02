@@ -53,13 +53,23 @@ impl NightlightClient {
 		})
 	}
 
+	pub async fn new_async() -> Result<Self, Box<dyn std::error::Error>> {
+		Ok(Self {
+			connection: zbus::Connection::session().await?,
+		})
+	}
+
+	pub fn from_connection(connection: zbus::Connection) -> Self {
+		Self { connection }
+	}
+
 	pub fn send(
 		&self, command: NightlightCommand,
 	) -> Result<NightlightResponse, Box<dyn std::error::Error>> {
 		futures::executor::block_on(self.send_async(command))
 	}
 
-	async fn send_async(
+	pub async fn send_async(
 		&self, command: NightlightCommand,
 	) -> Result<NightlightResponse, Box<dyn std::error::Error>> {
 		let proxy = NightlightProxy::new(&self.connection).await?;
