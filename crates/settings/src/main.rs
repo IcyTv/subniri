@@ -26,7 +26,7 @@ fn main() -> Result<(), iced::Error> {
 	app.run()
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum Message {
 	SelectSetting(usize),
 	Setting(usize, setting::Message),

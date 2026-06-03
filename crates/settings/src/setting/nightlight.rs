@@ -12,7 +12,7 @@ use neo_widgets::{
 };
 use num_traits::{AsPrimitive, Num, NumCast};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Message {
 	IncreaseDawn,
 	DecreaseDawn,

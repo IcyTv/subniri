@@ -9,7 +9,7 @@ use neo_widgets::{phosphor_icon, style::COLORS};
 
 mod nightlight;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Message {
 	Nightlight(nightlight::Message),
 }

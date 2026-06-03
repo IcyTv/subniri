@@ -6,6 +6,7 @@ use syn::DeriveInput;
 
 #[derive(deluxe::ExtractAttributes)]
 #[deluxe(attributes(config))]
+#[deluxe(crate = deluxe)]
 struct ConfigOpts {
 	#[deluxe(default)]
 	children: Option<bool>,
@@ -15,6 +16,7 @@ struct ConfigOpts {
 
 #[derive(deluxe::ExtractAttributes, Default)]
 #[deluxe(attributes(config))]
+#[deluxe(crate = deluxe)]
 struct VariantAttrs {
 	#[deluxe(default)]
 	name: Option<String>,
@@ -22,6 +24,7 @@ struct VariantAttrs {
 
 #[derive(deluxe::ExtractAttributes, Default)]
 #[deluxe(attributes(config))]
+#[deluxe(crate = deluxe)]
 struct FieldAttrs {
 	#[deluxe(default)]
 	parameter: bool,
