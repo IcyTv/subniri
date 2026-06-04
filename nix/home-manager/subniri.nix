@@ -5,157 +5,320 @@
   ...
 }: let
   cfg = config.services.subniri;
-in {
-  options.services.subniri = {
-    enable = lib.mkEnableOption "Enable Subniri desktop shell";
+  inherit (lib) mkEnableOption mkIf mkOption types;
 
+  system = pkgs.stdenv.hostPlatform.system;
+  packages = self.packages.${system};
+
+  configPath = "${config.xdg.configHome}/${cfg.config.target}";
+
+  componentDefinitions = {
     polarbar = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to enable the Polarbar systemd service.";
-      };
-
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.polarbar;
-        description = "The Polarbar package to use.";
-      };
+      package = packages.polarbar;
+      description = "Polarbar systemd service";
+      bin = "polarbar";
+      systemd = true;
     };
-
     permafrostd = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to enable the Permafrostd service.";
-      };
-
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.permafrostd;
-        description = "The Permafrostd package to use.";
-      };
+      package = packages.permafrostd;
+      description = "Permafrostd service";
+      bin = "permafrostd";
+      systemd = true;
     };
-
     avalaunch = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to enable the Avalaunch application launcher.";
-      };
-
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.avalaunch;
-        description = "The Avalaunch package to use.";
-      };
+      package = packages.avalaunch;
+      description = "Avalaunch application launcher";
+      bin = "avalaunch";
+      systemd = true;
     };
-
     iceout = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to install the iceout (logout) application.";
-      };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.iceout;
-        description = "The Iceout package to use.";
-      };
+      package = packages.iceout;
+      description = "iceout (logout) application";
     };
-
     snowconf = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to enable the Snowconf settings application.";
-      };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.snowconf;
-        description = "The Snowconf package to use.";
-      };
+      package = packages.snowconf;
+      description = "Snowconf settings application";
     };
-
     cli = {
-      enable = lib.mkOption {
-        type = lib.types.bool;
-        default = true;
-        description = "Whether to enable the Subniri CLI tool.";
-      };
-      package = lib.mkOption {
-        type = lib.types.package;
-        default = self.packages.${pkgs.stdenv.hostPlatform.system}.subniri-cli;
-        description = "The Subniri CLI package to use.";
-      };
-    };
-
-    systemd.enable = lib.mkOption {
-      type = lib.types.bool;
-      default = true;
-      description = "Whether to enable systemd services for Subniri components.";
+      package = packages.subniri-cli;
+      description = "Subniri CLI tool";
     };
   };
 
-  config = lib.mkIf cfg.enable {
-    home.packages =
-      lib.optionals cfg.polarbar.enable [cfg.polarbar.package]
-      ++ lib.optionals cfg.permafrostd.enable [cfg.permafrostd.package]
-      ++ lib.optionals cfg.avalaunch.enable [cfg.avalaunch.package]
-      ++ lib.optionals cfg.iceout.enable [cfg.iceout.package]
-      ++ lib.optionals cfg.snowconf.enable [cfg.snowconf.package]
-      ++ lib.optionals cfg.cli.enable [cfg.cli.package];
+  mkComponentOption = name: component: {
+    enable = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Whether to enable the ${component.description}.";
+    };
 
-    systemd.user.services = lib.mkIf cfg.systemd.enable {
-      polarbar = lib.mkIf cfg.polarbar.enable {
-        Unit = {
-          Description = "Polarbar systemd service";
-          After = ["graphical-session.target"];
-          PartOf = ["graphical-session.target"];
+    package = mkOption {
+      type = types.package;
+      default = component.package;
+      description = "The ${name} package to use.";
+    };
+  };
+
+  configuredComponents = lib.genAttrs (builtins.attrNames componentDefinitions) (name: cfg.${name});
+  enabledComponents = lib.filterAttrs (_: component: component.enable) configuredComponents;
+
+  systemdComponents =
+    lib.filterAttrs (
+      name: component:
+        componentDefinitions.${name}.systemd or false
+        && component.enable
+    )
+    enabledComponents;
+
+  mkService = name: component: {
+    Unit = {
+      Description = componentDefinitions.${name}.description;
+      After = ["graphical-session.target"];
+      PartOf = ["graphical-session.target"];
+    };
+
+    Service = {
+      ExecStart = "${component.package}/bin/${componentDefinitions.${name}.bin}";
+      Environment = lib.optionals cfg.config.enable [
+        "SUBNIRI_CONFIG_FILE=${configPath}"
+      ];
+      Restart = "on-failure";
+      RestartSec = 5;
+    };
+
+    Install = {
+      WantedBy = ["graphical-session.target"];
+    };
+  };
+
+  quote = builtins.toJSON;
+  bool = value:
+    if value
+    then "true"
+    else "false";
+  nullableString = value:
+    if value == null
+    then "null"
+    else quote value;
+
+  indent = text:
+    lib.concatMapStringsSep "\n" (line: "  ${line}")
+    (lib.splitString "\n" (lib.removeSuffix "\n" text));
+
+  renderBlock = name: lines: "${name} {\n${indent (lib.concatStringsSep "\n" lines)}\n}";
+
+  renderNightlightSetting = name: value:
+    renderBlock name [
+      "temperature ${toString value.temperature}"
+      "brightness ${toString value.brightness}"
+    ];
+
+  renderStringList = name: values:
+    if values == []
+    then "${name}"
+    else renderBlock name (map (value: ''- ${quote value}'') values);
+
+  renderConfig = settings: let
+    dawn =
+      if settings.nightlight.useLocation
+      then null
+      else if settings.nightlight.dawn == null
+      then "07:00"
+      else settings.nightlight.dawn;
+    dusk =
+      if settings.nightlight.useLocation
+      then null
+      else if settings.nightlight.dusk == null
+      then "20:00"
+      else settings.nightlight.dusk;
+  in
+    lib.concatStringsSep "\n" [
+      (renderBlock "nightlight" [
+        "enabled ${bool settings.nightlight.enable}"
+        "use_location ${bool settings.nightlight.useLocation}"
+        "dawn ${nullableString dawn}"
+        "dusk ${nullableString dusk}"
+        (renderNightlightSetting "day" settings.nightlight.day)
+        (renderNightlightSetting "night" settings.nightlight.night)
+        "debounce_ms ${toString settings.nightlight.debounceMs}"
+      ])
+      (renderBlock "homeassistant" [
+        "enabled ${bool settings.homeassistant.enable}"
+        "url ${nullableString settings.homeassistant.url}"
+        (renderStringList "tracked_devices" settings.homeassistant.trackedDevices)
+      ])
+      (renderBlock "spotify" [
+        "enabled ${bool settings.spotify.enable}"
+      ])
+      (renderBlock "system_menu" [
+        (renderStringList "widgets" settings.systemMenu.widgets)
+      ])
+    ];
+
+  nightlightSettingType = types.submodule {
+    options = {
+      temperature = mkOption {
+        type = types.ints.between 1000 10000;
+        description = "Color temperature in Kelvin.";
+      };
+
+      brightness = mkOption {
+        type = types.float;
+        description = "Screen brightness multiplier, between 0.1 and 1.0.";
+      };
+    };
+  };
+in {
+  options.services.subniri =
+    (lib.mapAttrs mkComponentOption componentDefinitions)
+    // {
+      enable = mkEnableOption "Subniri desktop shell";
+
+      systemd.enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = "Whether to enable systemd services for Subniri components.";
+      };
+
+      config = {
+        enable = mkOption {
+          type = types.bool;
+          default = true;
+          description = "Whether Home Manager should generate Subniri's KDL config file.";
         };
 
-        Service = {
-          ExecStart = "${cfg.polarbar.package}/bin/polarbar";
-          Restart = "on-failure";
-          RestartSec = 5;
-        };
-
-        Install = {
-          WantedBy = ["graphical-session.target"];
+        target = mkOption {
+          type = types.str;
+          default = "subniri/config.kdl";
+          description = "Path below XDG_CONFIG_HOME for the generated Subniri config file.";
         };
       };
 
-      permafrostd = lib.mkIf cfg.permafrostd.enable {
-        Unit = {
-          Description = "Permafrostd systemd service";
-          After = ["graphical-session.target"];
-          PartOf = ["graphical-session.target"];
-        };
-        Service = {
-          ExecStart = "${cfg.permafrostd.package}/bin/permafrostd";
-          Restart = "on-failure";
-          RestartSec = 5;
-        };
-        Install = {
-          WantedBy = ["graphical-session.target"];
-        };
-      };
+      settings = {
+        nightlight = {
+          enable = mkOption {
+            type = types.bool;
+            default = false;
+            description = "Whether to enable the nightlight integration.";
+          };
 
-      avalaunch = lib.mkIf cfg.avalaunch.enable {
-        Unit = {
-          Description = "Avalaunch systemd service";
-          After = ["graphical-session.target"];
-          PartOf = ["graphical-session.target"];
+          useLocation = mkOption {
+            type = types.bool;
+            default = false;
+            description = "Whether to use location data for dawn and dusk.";
+          };
+
+          dawn = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "07:00";
+            description = "Time when nightlight switches to day settings. Defaults to 07:00 when useLocation is false.";
+          };
+
+          dusk = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "20:00";
+            description = "Time when nightlight switches to night settings. Defaults to 20:00 when useLocation is false.";
+          };
+
+          day = mkOption {
+            type = nightlightSettingType;
+            default = {
+              temperature = 6500;
+              brightness = 1.0;
+            };
+            description = "Daytime nightlight settings.";
+          };
+
+          night = mkOption {
+            type = nightlightSettingType;
+            default = {
+              temperature = 2500;
+              brightness = 0.7;
+            };
+            description = "Nighttime nightlight settings.";
+          };
+
+          debounceMs = mkOption {
+            type = types.ints.between 0 10000;
+            default = 500;
+            description = "Debounce delay for gamma table changes, in milliseconds.";
+          };
         };
-        Service = {
-          ExecStart = "${cfg.avalaunch.package}/bin/avalaunch";
-          Restart = "on-failure";
-          RestartSec = 5;
+
+        homeassistant = {
+          enable = mkOption {
+            type = types.bool;
+            default = false;
+            description = "Whether to enable the Home Assistant integration.";
+          };
+
+          url = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            example = "http://homeassistant.local:8123";
+            description = "URL of the Home Assistant instance.";
+          };
+
+          trackedDevices = mkOption {
+            type = types.listOf types.str;
+            default = [];
+            description = "Home Assistant device IDs to expose in Subniri.";
+          };
         };
-        Install = {
-          WantedBy = ["graphical-session.target"];
+
+        spotify.enable = mkOption {
+          type = types.bool;
+          default = false;
+          description = "Whether to enable the Spotify integration.";
+        };
+
+        systemMenu.widgets = mkOption {
+          type = types.listOf (types.enum [
+            "Wifi"
+            "Bluetooth"
+            "Speaker"
+            "Microphone"
+            "Vpn"
+            "Nightlight"
+          ]);
+          default = [];
+          description = "Widgets to display in the system menu.";
         };
       };
     };
+
+  config = mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = cfg.settings.nightlight.useLocation -> cfg.settings.nightlight.dawn == null;
+        message = "services.subniri.settings.nightlight.dawn must be null when useLocation is true.";
+      }
+      {
+        assertion = cfg.settings.nightlight.useLocation -> cfg.settings.nightlight.dusk == null;
+        message = "services.subniri.settings.nightlight.dusk must be null when useLocation is true.";
+      }
+      {
+        assertion = cfg.settings.nightlight.day.brightness >= 0.1 && cfg.settings.nightlight.day.brightness <= 1.0;
+        message = "services.subniri.settings.nightlight.day.brightness must be between 0.1 and 1.0.";
+      }
+      {
+        assertion = cfg.settings.nightlight.night.brightness >= 0.1 && cfg.settings.nightlight.night.brightness <= 1.0;
+        message = "services.subniri.settings.nightlight.night.brightness must be between 0.1 and 1.0.";
+      }
+    ];
+
+    home.packages = map (component: component.package) (lib.attrValues enabledComponents);
+
+    home.sessionVariables = mkIf cfg.config.enable {
+      SUBNIRI_CONFIG_FILE = configPath;
+    };
+
+    xdg.configFile.${cfg.config.target} = mkIf cfg.config.enable {
+      text = renderConfig cfg.settings;
+    };
+
+    systemd.user.services = mkIf cfg.systemd.enable (lib.mapAttrs mkService systemdComponents);
   };
 }
