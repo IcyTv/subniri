@@ -2430,7 +2430,7 @@ dependencies = [
 [[package]]
 name = "iced"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_core",
  "iced_debug",
@@ -2446,7 +2446,7 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "bitflags 2.12.1",
  "bytes",
@@ -2463,7 +2463,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -2473,7 +2473,7 @@ dependencies = [
 [[package]]
 name = "iced_devtools"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_debug",
  "iced_program",
@@ -2484,7 +2484,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -2496,7 +2496,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "futures",
  "iced_core",
@@ -2510,7 +2510,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "bitflags 2.12.1",
  "bytemuck",
@@ -2531,7 +2531,7 @@ dependencies = [
 [[package]]
 name = "iced_layershell"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "enumflags2",
  "futures",
@@ -2558,7 +2558,7 @@ dependencies = [
 [[package]]
 name = "iced_layershell_macros"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "darling",
  "manyhow",
@@ -2570,7 +2570,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -2579,7 +2579,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -2591,7 +2591,7 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "bytes",
  "iced_core",
@@ -2603,7 +2603,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -2620,7 +2620,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "futures",
  "iced",
@@ -2632,7 +2632,7 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "bitflags 2.12.1",
  "bytemuck",
@@ -2653,7 +2653,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "iced_renderer",
  "log",
@@ -2667,7 +2667,7 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?rev=24d1222aa3809dd39e57b5aa386edd01b03d82ea#24d1222aa3809dd39e57b5aa386edd01b03d82ea"
+source = "git+https://github.com/IcyTv/iced?rev=1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad#1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad"
 dependencies = [
  "arboard",
  "iced_debug",
@@ -3233,7 +3233,7 @@ dependencies = [
 [[package]]
 name = "layershellev"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
@@ -6941,7 +6941,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6#35fdee79aa3a88ee71e06338f2a5ae74b0e8b2c6"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=df1ce650d2d9b300b40a2148ee2b8229b0369a90#df1ce650d2d9b300b40a2148ee2b8229b0369a90"
 dependencies = [
  "calloop 0.14.4",
  "log",
