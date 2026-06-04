@@ -35,7 +35,7 @@ iced = { version = "0.15.0-dev", features = [
   "wgpu-bare",
   "tokio",
   "canvas",
-], git = "https://github.com/IcyTv/iced", default-features = false, rev = "1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad" }
+], git = "https://github.com/IcyTv/iced", default-features = false, rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
 # iced = { version = "0.15.0-dev", features = [
 #   "advanced",
 #   "crisp",
@@ -52,11 +52,11 @@ iced = { version = "0.15.0-dev", features = [
 #   "tokio",
 #   "canvas",
 # ], path = "../iced", default-features = false }
-iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "1e55579c2c75a0a3dc8cd2e7aa4f54c6080fd3ad" }
+iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
 # iced_runtime = { version = "0.15.0-dev", path = "../iced/runtime" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "df1ce650d2d9b300b40a2148ee2b8229b0369a90" }
+iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
 # iced_layershell = { version = "0.18.1", path = "../exwlshelleventloop/iced_layershell" }
-iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "df1ce650d2d9b300b40a2148ee2b8229b0369a90" }
+iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
 # iced_wayland_subscriber = { version = "0.18.1", path = "../exwlshelleventloop/iced_wayland_subscriber" }
 icon = "0.2.0"
 image = "0.25.10"
@@ -91,3 +91,6 @@ zbus = "5.15.0"
 [profile.release]
 codegen-units = 1
 lto = true
+
+[patch.crates-io]
+softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }

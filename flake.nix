@@ -382,6 +382,7 @@
             libxkbcommon
             fontconfig
             vulkan-loader
+            libGL
           ]);
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
@@ -399,6 +400,7 @@
                 })
               pkgs.cargo-hakari
               pkgs.cargo-expand
+              pkgs.libGL
               (nvim.lib.makeNeovimWithLanguages {
                 inherit pkgs system;
                 languages.rust = {
