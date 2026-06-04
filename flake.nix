@@ -418,5 +418,8 @@
     systems
     // {
       overlays.default = overlay;
+      homeManagerModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
+      homeManagerModules.default = self.homeManagerModules.subniri;
+      homeModules.subniri = self.homeManagerModules.subniri;
     };
 }
