@@ -165,10 +165,23 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 	} = data;
 
 	let session_stream = async_stream::stream! {
-		let mut session_stream = pin!(session.events().await.unwrap());
+		let session_events = match session.events().await {
+			Ok(events) => events,
+			Err(error) => {
+				log::warn!("Failed to subscribe to Bluetooth session events: {error}");
+				return;
+			}
+		};
+		let mut session_stream = pin!(session_events);
 
 		while let Some(_ev) = session_stream.next().await {
-			let adapter = get_default_adapter(&session).await.unwrap();
+			let adapter = match get_default_adapter(&session).await {
+				Ok(adapter) => adapter,
+				Err(error) => {
+					log::warn!("Failed to get default Bluetooth adapter: {error}");
+					None
+				}
+			};
 			yield adapter;
 		}
 	};
@@ -190,7 +203,15 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 				}
 			};
 
-			let mut adapter_stream = pin!(adapter.events().await.unwrap());
+			let adapter_events = match adapter.events().await {
+				Ok(events) => events,
+				Err(error) => {
+					log::warn!("Failed to subscribe to Bluetooth adapter events: {error}");
+					maybe_adapter = session_stream.next().await;
+					continue;
+				}
+			};
+			let mut adapter_stream = pin!(adapter_events);
 
 			loop {
 				tokio::select! {
@@ -217,11 +238,13 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 									}
 								};
 								let is_connected = device.is_connected().await.unwrap_or_default();
+								if !is_connected {
+									continue;
+								}
 
 								let bt_device = BtDevice {
 									addr,
 									name,
-									is_connected,
 								};
 
 								yield Message::DeviceConnected(bt_device);
@@ -276,8 +299,7 @@ impl Hash for BluetoothData {
 }
 
 #[derive(Clone, Debug)]
-struct BtDevice {
+pub(crate) struct BtDevice {
 	addr: Address,
 	name: Option<String>,
-	is_connected: bool,
 }

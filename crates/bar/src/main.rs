@@ -1,7 +1,8 @@
 use config::ConfigFile;
 use iced::alignment::Vertical;
-use std::{collections::HashMap, path::PathBuf, process::Command, time::Duration};
+use std::{collections::HashMap, env, path::PathBuf, process::Command, time::Duration};
 
+use futures::StreamExt;
 use iced::Length;
 use iced::widget::{container, row, stack, text};
 use iced::window::Id;
@@ -123,6 +124,11 @@ impl Bar {
 
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
+			BarMessage::Resumed => Task::future(async {
+				tokio::time::sleep(Duration::from_millis(500)).await;
+				BarMessage::RestartAfterResume
+			}),
+			BarMessage::RestartAfterResume => restart_bar_process(),
 			BarMessage::WindowEvent(id, event) => match event {
 				iced::window::Event::Opened { .. }
 				| iced::window::Event::Resized(_)
@@ -358,6 +364,7 @@ impl Bar {
 		let mut subscriptions = vec![
 			iced::window::events().map(|(id, event)| BarMessage::WindowEvent(id, event)),
 			iced::window::close_events().map(BarMessage::WindowClosed),
+			resume_events(),
 		];
 
 		subscriptions.extend(Self::module_subscriptions(Section::Left, &self.left));
@@ -401,9 +408,81 @@ enum Section {
 enum BarMessage {
 	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
+	Resumed,
+	RestartAfterResume,
 	Module(Option<Id>, Section, usize, ModuleMessage),
 	SetPopupId(Section, usize, ModuleKind, Id),
 	Noop,
+}
+
+fn resume_events() -> Subscription<BarMessage> {
+	Subscription::run(|| {
+		async_stream::stream! {
+			let connection = match zbus::Connection::system().await {
+				Ok(connection) => connection,
+				Err(error) => {
+					log::error!("Failed to connect to system bus for resume events: {error}");
+					return;
+				}
+			};
+
+			let proxy = match zbus::Proxy::new(
+				&connection,
+				"org.freedesktop.login1",
+				"/org/freedesktop/login1",
+				"org.freedesktop.login1.Manager",
+			)
+			.await
+			{
+				Ok(proxy) => proxy,
+				Err(error) => {
+					log::error!("Failed to connect to login manager for resume events: {error}");
+					return;
+				}
+			};
+
+			let mut sleep_signals = match proxy.receive_signal("PrepareForSleep").await {
+				Ok(sleep_signals) => sleep_signals,
+				Err(error) => {
+					log::error!("Failed to listen for sleep preparation: {error}");
+					return;
+				}
+			};
+
+			while let Some(signal) = sleep_signals.next().await {
+				match signal.body().deserialize::<bool>() {
+					Ok(false) => yield BarMessage::Resumed,
+					Ok(true) => (),
+					Err(error) => log::warn!("Failed to read sleep preparation signal: {error}"),
+				}
+			}
+		}
+	})
+}
+
+fn restart_bar_process() -> Task<BarMessage> {
+	let exe = match env::current_exe() {
+		Ok(exe) => exe,
+		Err(error) => {
+			log::error!("Failed to find current executable for resume restart: {error}");
+			return Task::none();
+		}
+	};
+
+	let mut command = Command::new(exe);
+	command.args(env::args_os().skip(1));
+
+	if let Ok(current_dir) = env::current_dir() {
+		command.current_dir(current_dir);
+	}
+
+	match command.spawn() {
+		Ok(_) => iced_runtime::exit(),
+		Err(error) => {
+			log::error!("Failed to restart bar after resume: {error}");
+			Task::none()
+		}
+	}
 }
 
 fn open_power_menu() {
