@@ -36,34 +36,15 @@ iced = { version = "0.15.0-dev", features = [
   "tokio",
   "canvas",
 ], git = "https://github.com/IcyTv/iced", default-features = false, rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
-# iced = { version = "0.15.0-dev", features = [
-#   "advanced",
-#   "crisp",
-#   "hinting",
-#   "image",
-#   "lazy",
-#   "linux-theme-detection",
-#   "svg",
-#   "sysinfo",
-#   "thread-pool",
-#   "wayland",
-#   "wgpu",
-#   "wgpu-bare",
-#   "tokio",
-#   "canvas",
-# ], path = "../iced", default-features = false }
 iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
-# iced_runtime = { version = "0.15.0-dev", path = "../iced/runtime" }
 iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
-# iced_layershell = { version = "0.18.1", path = "../exwlshelleventloop/iced_layershell" }
 iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
-# iced_wayland_subscriber = { version = "0.18.1", path = "../exwlshelleventloop/iced_wayland_subscriber" }
 icon = "0.2.0"
 image = "0.25.10"
 jiff = "0.2.25"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
+launcher-common = { path = "./crates/launcher-common" }
 lazy-regex = "3.6.0"
-launcher = { path = "./crates/launcher" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
 log = "0.4.29"

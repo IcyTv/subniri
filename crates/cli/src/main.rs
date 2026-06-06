@@ -174,8 +174,8 @@ async fn launcher(
 	{
 		if !is_proxy_ready(
 			&conn,
-			launcher::LauncherProxy::DESTINATION.as_ref().unwrap(),
-			launcher::LauncherProxy::PATH.as_ref().unwrap(),
+			launcher_common::LauncherProxy::DESTINATION.as_ref().unwrap(),
+			launcher_common::LauncherProxy::PATH.as_ref().unwrap(),
 		)
 		.await?
 		{
@@ -187,7 +187,7 @@ async fn launcher(
 			std::process::exit(-1);
 		}
 
-		let proxy = launcher::LauncherProxy::new(&conn).await?;
+		let proxy = launcher_common::LauncherProxy::new(&conn).await?;
 
 		spinner.set_message("Sending Message");
 

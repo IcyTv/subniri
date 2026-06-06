@@ -237,12 +237,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
-name = "as-raw-xcb-connection"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "175571dd1d178ced59193a6fc02dde1b972eb0bc56c892cde9beeceac5bf0f6b"
-
-[[package]]
 name = "as-slice"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -854,7 +848,7 @@ dependencies = [
  "cliclack",
  "comfy-table",
  "daemon",
- "launcher",
+ "launcher-common",
  "tokio",
  "zbus",
 ]
@@ -1223,15 +1217,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ctor"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83cf0d42651b16c6dfe68685716d18480d18a9c39c62d76e8cf3eb6ed5d8bcbf"
-dependencies = [
- "dtor",
-]
-
-[[package]]
 name = "cursor-icon"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1273,7 +1258,6 @@ dependencies = [
  "rustix 1.1.4",
  "tokio",
  "tokio-cron-scheduler",
- "tokio-debouncer",
  "wayrs-client",
  "wayrs-protocols",
  "zbus",
@@ -1518,12 +1502,6 @@ name = "dpi"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
-
-[[package]]
-name = "dtor"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edf234dd1594d6dd434a8fb8cada51ddbbc593e40e4a01556a0b31c62da2775b"
 
 [[package]]
 name = "dunce"
@@ -2618,18 +2596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "iced_wayland_subscriber"
-version = "0.18.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=25c23e727634def0e1e4dda9b48d083bc9151b90#25c23e727634def0e1e4dda9b48d083bc9151b90"
-dependencies = [
- "futures",
- "iced",
- "thiserror 2.0.18",
- "wayland-client",
- "wayland-protocols",
-]
-
-[[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
 source = "git+https://github.com/IcyTv/iced?rev=45e9c2cebd53363e93b6a2382f7dadb1d38c7f27#45e9c2cebd53363e93b6a2382f7dadb1d38c7f27"
@@ -3231,6 +3197,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "launcher-common"
+version = "0.0.1"
+dependencies = [
+ "zbus",
+]
+
+[[package]]
 name = "layershellev"
 version = "0.18.1"
 source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=25c23e727634def0e1e4dda9b48d083bc9151b90#25c23e727634def0e1e4dda9b48d083bc9151b90"
@@ -3249,29 +3222,6 @@ dependencies = [
  "wayland-protocols",
  "wayland-protocols-misc",
  "wayland-protocols-wlr",
-]
-
-[[package]]
-name = "lazy-regex"
-version = "3.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bae91019476d3ec7147de9aa291cadb6d870abf2f3015d2da73a90325ac1496"
-dependencies = [
- "lazy-regex-proc_macros",
- "once_cell",
- "regex",
-]
-
-[[package]]
-name = "lazy-regex-proc_macros"
-version = "3.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4de9c1e1439d8b7b3061b2d209809f447ca33241733d9a3c01eabf2dc8d94358"
-dependencies = [
- "proc-macro2",
- "quote",
- "regex",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -4776,40 +4726,31 @@ dependencies = [
  "bluer",
  "config",
  "daemon",
- "dirs",
  "float-ord",
  "futures",
  "iced",
  "iced_layershell",
  "iced_runtime",
- "iced_wayland_subscriber",
  "image",
  "jiff",
  "kdl 6.5.0",
- "lazy-regex",
  "libpulse-binding",
  "libpulse-tokio",
  "log",
  "lru 0.18.0",
- "lyon_algorithms",
- "mime",
  "mprizzle",
  "neo-widgets",
  "niri-ipc",
  "nix 0.31.3",
  "nmrs",
- "num-traits",
- "paste",
  "pipewire-native",
  "pipewire-native-spa",
  "pretty_env_logger",
  "reqwest",
- "rgb",
  "serde_json",
  "small-map",
  "tokio",
  "tokio-stream",
- "tracing",
  "url",
  "wayland-client",
  "zbus",
@@ -5952,7 +5893,6 @@ name = "softbuffer"
 version = "0.4.8"
 source = "git+https://github.com/rust-windowing/softbuffer?rev=840683cfce68a04d20cfb75b2976d009d3ba77d8#840683cfce68a04d20cfb75b2976d009d3ba77d8"
 dependencies = [
- "as-raw-xcb-connection",
  "fastrand",
  "js-sys",
  "libc",
@@ -5966,7 +5906,6 @@ dependencies = [
  "raw-window-handle",
  "redox_syscall 0.7.5",
  "rustix 1.1.4",
- "tiny-xlib",
  "tracing",
  "wasm-bindgen",
  "wayland-backend",
@@ -5974,7 +5913,6 @@ dependencies = [
  "wayland-sys",
  "web-sys",
  "windows-sys 0.61.2",
- "x11rb",
 ]
 
 [[package]]
@@ -6332,19 +6270,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiny-xlib"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a90a0ca3ee6a69f2ad28fd11621a4c3f03b371f366be500b64df260c4ffbafb4"
-dependencies = [
- "as-raw-xcb-connection",
- "ctor",
- "libloading",
- "pkg-config",
- "tracing",
-]
-
-[[package]]
 name = "tinyjson"
 version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6407,16 +6332,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "tokio-debouncer"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "782293a35cec30b905eebe98b2c9235b6ff71ee2be5c7b6a95cf56019514bb4f"
-dependencies = [
- "parking_lot",
- "tokio",
 ]
 
 [[package]]
@@ -7809,7 +7724,6 @@ dependencies = [
  "atomic-waker",
  "bitflags 2.12.1",
  "block2 0.5.1",
- "bytemuck",
  "calloop 0.13.0",
  "cfg_aliases",
  "concurrent-queue",
@@ -7826,7 +7740,6 @@ dependencies = [
  "objc2-foundation 0.2.2",
  "objc2-ui-kit",
  "orbclient",
- "percent-encoding",
  "pin-project",
  "raw-window-handle",
  "redox_syscall 0.4.1",
@@ -7845,8 +7758,6 @@ dependencies = [
  "web-sys",
  "web-time",
  "windows-sys 0.52.0",
- "x11-dl",
- "x11rb",
  "xkbcommon-dl",
 ]
 
@@ -8024,27 +7935,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 
 [[package]]
-name = "x11-dl"
-version = "2.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38735924fedd5314a6e548792904ed8c6de6636285cb9fec04d5b1db85c1516f"
-dependencies = [
- "libc",
- "once_cell",
- "pkg-config",
-]
-
-[[package]]
 name = "x11rb"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9993aa5be5a26815fe2c3eacfc1fde061fc1a1f094bf1ad2a18bf9c495dd7414"
 dependencies = [
- "as-raw-xcb-connection",
  "gethostname",
- "libc",
- "libloading",
- "once_cell",
  "rustix 1.1.4",
  "x11rb-protocol",
 ]

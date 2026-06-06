@@ -474,30 +474,31 @@
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           PHOSPHOR_ICONS = "${phosphorIcons}";
-          LATO_FONTS = "${pkgs.lato}/share/fonts/lato";
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages =
             commonArgs.buildInputs
             ++ commonArgs.nativeBuildInputs
-            ++ [
-              (pkgs.rust-bin.stable.latest.default.override
+            ++ (with pkgs; [
+              (rust-bin.stable.latest.default.override
                 {
                   extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
                 })
-              pkgs.cargo-hakari
-              pkgs.cargo-expand
-              pkgs.libGL
+              cargo-hakari
+              cargo-expand
+              cargo-machete
+              prek
+              uv
+              python314
+              libGL
               (nvim.lib.makeNeovimWithLanguages {
                 inherit pkgs system;
                 languages.rust = {
                   enable = true;
                   toolchain = rustToolchain;
                 };
-                languages.slint.enable = true;
-                # languages.qml.enable = true;
               })
-            ];
+            ]);
         };
       }
     );
