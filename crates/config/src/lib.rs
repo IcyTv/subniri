@@ -316,7 +316,7 @@ pub struct Nightlight {
 fn verify_use_location_dusk_dawn<'a>(
 	dusk: &'a Option<Time>, dawn: &'a Option<Time>,
 ) -> impl FnOnce(&bool, &()) -> garde::Result + 'a {
-	move |value, _| {
+	move |value, ()| {
 		if *value && dusk.is_some() {
 			Err(garde::Error::new(
 				"`use_location` and `dusk` are mutually exclusive",
@@ -334,7 +334,7 @@ fn verify_use_location_dusk_dawn<'a>(
 fn verify_dusk_dawn_use_location(
 	name: &'static str, use_location: bool,
 ) -> impl FnOnce(&Option<Time>, &()) -> garde::Result {
-	move |value, _| {
+	move |value, ()| {
 		if use_location && value.is_some() {
 			Err(garde::Error::new(format!(
 				"`use_location` and `{name}` are mutually exclusive"
@@ -379,6 +379,7 @@ impl Default for NightlightSetting {
 }
 
 impl NightlightSetting {
+	#[must_use] 
 	pub const fn day() -> Self {
 		Self {
 			temperature: 6500,
@@ -386,6 +387,7 @@ impl NightlightSetting {
 		}
 	}
 
+	#[must_use] 
 	pub const fn night() -> Self {
 		Self {
 			temperature: 2500,
@@ -401,7 +403,7 @@ pub struct Homeassistant {
 	/// control your homeassistant-controlled devices from subniri.
 	pub enabled: bool,
 	/// The url of your homeassistant instance.
-	/// Format "http://homeassistant.local:8123"
+	/// Format "<http://homeassistant.local:8123>"
 	pub url: Option<url::Url>,
 	/// A list of device id's that you want to be able to control from subniri. If you go to the
 	/// settings (`snowconf`), you'll be able to add all devices. But be aware, that this might

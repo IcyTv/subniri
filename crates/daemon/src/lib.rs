@@ -59,6 +59,7 @@ impl NightlightClient {
 		})
 	}
 
+	#[must_use] 
 	pub fn from_connection(connection: zbus::Connection) -> Self {
 		Self { connection }
 	}
@@ -76,7 +77,7 @@ impl NightlightClient {
 
 		let result = match command {
 			NightlightCommand::SetBrightness(brightness) => {
-				proxy.set_brightness(brightness as f64).await
+				proxy.set_brightness(f64::from(brightness)).await
 			}
 			NightlightCommand::SetTemperature(temperature) => {
 				proxy.set_temperature(temperature).await
@@ -123,6 +124,7 @@ pub enum NightlightPreset {
 }
 
 impl NightlightPreset {
+	#[must_use] 
 	pub const fn as_str(self) -> &'static str {
 		match self {
 			Self::Day => "day",

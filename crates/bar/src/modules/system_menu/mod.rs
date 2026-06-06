@@ -58,9 +58,7 @@ impl SystemMenu {
 	pub fn new(config: &ConfigFile) -> Self {
 		let username = User::from_uid(Uid::effective())
 			.ok()
-			.flatten()
-			.map(|u| u.name)
-			.unwrap_or_else(|| "<unknown>".to_string());
+			.flatten().map_or_else(|| "<unknown>".to_string(), |u| u.name);
 		let avatar = image::Handle::from_bytes(
 			include_bytes!("../../../../../assets/avatar.gif").as_slice(),
 		);
@@ -99,7 +97,7 @@ impl SystemMenu {
 						Message::Noop
 					}
 				},
-				Duration::from_secs(60),
+				Duration::from_mins(1),
 			),
 			self.wifi.subscription().map(Message::Wifi),
 			self.bluetooth.subscription().map(Message::Bluetooth),

@@ -183,7 +183,7 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 				SliderCardArgs::new()
 					.name("DAY TEMP")
 					.value(day_temp)
-					.display(format!("{}K", day_temp))
+					.display(format!("{day_temp}K"))
 					.range(1000..=10_000)
 					.step(10)
 					.accent(COLORS.decorative.yellow)
@@ -209,7 +209,7 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 					SliderCardArgs::new()
 						.name("NIGHT TEMP")
 						.value(night_temp)
-						.display(format!("{}K", night_temp))
+						.display(format!("{night_temp}K"))
 						.range(1000..=10_000)
 						.step(10)
 						.accent(COLORS.decorative.purple70)
@@ -323,7 +323,7 @@ struct SliderCardArgs<'a, T, D, F, L> {
 	on_change_live: Option<L>,
 }
 
-impl<'a, T: Default, D: Default, F, L> SliderCardArgs<'a, T, D, F, L> {
+impl<T: Default, D: Default, F, L> SliderCardArgs<'_, T, D, F, L> {
 	pub fn new() -> Self {
 		Self {
 			name: "<not set>",
@@ -444,9 +444,9 @@ fn slider_card<'a, T: Num + NumCast + AsPrimitive<f32> + Clone>(
 	.into()
 }
 
-fn time_container<'a>(
-	name: &'a str, time: jiff::civil::Time, color: Color, decrease: Message, increase: Message,
-) -> Element<'a, Message> {
+fn time_container(
+	name: &str, time: jiff::civil::Time, color: Color, decrease: Message, increase: Message,
+) -> Element<'_, Message> {
 	container(
 		row![
 			text(name)

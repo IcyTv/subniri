@@ -86,7 +86,7 @@ async fn activate_current_preset(service: NightlightDbus, config: &config::Night
 fn start_preset_reconciler(service: NightlightDbus, config: config::Nightlight) -> JoinHandle<()> {
 	tokio::spawn(async move {
 		let mut last_preset = current_preset(&config);
-		let mut interval = tokio::time::interval(Duration::from_secs(60));
+		let mut interval = tokio::time::interval(Duration::from_mins(1));
 		interval.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
 		loop {
@@ -174,7 +174,7 @@ async fn schedule_presets(
 						.await
 					{
 						log::warn!("Error activating day preset: {e}");
-					};
+					}
 				})
 			}
 		})?)
@@ -196,7 +196,7 @@ async fn schedule_presets(
 						.await
 					{
 						log::warn!("Error activating night preset: {e}");
-					};
+					}
 				})
 			}
 		})?)
@@ -320,7 +320,7 @@ impl NightlightDbus {
 
 	#[zbus(property, name = "Brightness")]
 	async fn brightness(&self) -> f64 {
-		self.state().await.brightness as f64
+		f64::from(self.state().await.brightness)
 	}
 
 	#[zbus(property, name = "Brightness")]
@@ -507,7 +507,7 @@ impl DesiredState {
 		(
 			self.active,
 			available,
-			self.brightness as f64,
+			f64::from(self.brightness),
 			self.temperature,
 			self.preset.as_str().to_string(),
 		)
@@ -776,7 +776,7 @@ impl NightlightControllerTask {
 
 		let file = std::fs::File::from(fd);
 
-		file.set_len(size as u64 * 3 * 2)?;
+		file.set_len(u64::from(size) * 3 * 2)?;
 
 		let mut mmap = unsafe { memmap2::MmapMut::map_mut(&file)? };
 
@@ -785,7 +785,7 @@ impl NightlightControllerTask {
 		let mut push_col = |channel: f32| {
 			for i in 0..size {
 				let x = i as f32 / (size - 1) as f32;
-				let wchar = (x * channel * brightness * u16::MAX as f32).clamp(0.0, 65535.0) as u16;
+				let wchar = (x * channel * brightness * f32::from(u16::MAX)).clamp(0.0, 65535.0) as u16;
 				let bytes = wchar.to_ne_bytes();
 				mmap[idx..idx + 2].copy_from_slice(&bytes);
 

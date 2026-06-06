@@ -184,9 +184,7 @@ impl Wifi {
 	fn subtitle(&self) -> String {
 		if let Some(connection) = &self.active_connection {
 			let strength = connection
-				.strength
-				.map(|strength| format!("{strength}%"))
-				.unwrap_or_else(|| "-- %".to_string());
+				.strength.map_or_else(|| "-- %".to_string(), |strength| format!("{strength}%"));
 
 			if self.extra_active_connections > 0 {
 				format!(

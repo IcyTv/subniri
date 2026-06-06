@@ -154,7 +154,7 @@ struct PwEventReceiverHashable(pub async_channel::Receiver<PwEvent>);
 
 impl Hash for PwEventReceiverHashable {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdeadbeefu32.hash(state)
+		0xdeadbeefu32.hash(state);
 	}
 }
 
@@ -310,7 +310,7 @@ impl PwConnection {
 
 					if let Err(e) = node.subscribe_params(&[ParamType::Props]) {
 						log::warn!("Failed to subscribe to node props: {e}");
-					};
+					}
 				} else if ty == pipewire_native::types::interface::DEVICE {
 					let device = match registry.bind(id, ty, version) {
 						Ok(d) => d,
@@ -898,8 +898,7 @@ impl Volume {
 		let (sink_name, sink_volume) = self
 			.default_sink
 			.and_then(|id| self.devices.get(&id))
-			.map(|d| (d.label.as_str(), d.volume.clone()))
-			.unwrap_or(("<unknown>", PwVolume::default()));
+			.map_or(("<unknown>", PwVolume::default()), |d| (d.label.as_str(), d.volume.clone()));
 
 		let speaker_icon = if sink_volume.mute {
 			phosphor_icon!("speaker-x")
@@ -932,8 +931,7 @@ impl Volume {
 		let (source_name, source_volume) = self
 			.default_source
 			.and_then(|id| self.devices.get(&id))
-			.map(|d| (d.label.as_str(), d.volume.clone()))
-			.unwrap_or(("<unknown>", PwVolume::default()));
+			.map_or(("<unknown>", PwVolume::default()), |d| (d.label.as_str(), d.volume.clone()));
 
 		let mic_icon = if source_volume.mute {
 			phosphor_icon!("microphone-slash")
@@ -1029,16 +1027,16 @@ impl PwVolume {
 	}
 
 	fn linear(&self) -> f32 {
-		if !self.channel_volums.is_empty() {
-			self.channel_volums
-				.iter()
-				.copied()
-				.map(|v| v.max(0.0).cbrt())
-				.sum::<f32>()
-				/ self.channel_volums.len() as f32
-		} else {
-			self.volume.max(0.0).cbrt()
-		}
+		if self.channel_volums.is_empty() {
+  			self.volume.max(0.0).cbrt()
+  		} else {
+  			self.channel_volums
+  				.iter()
+  				.copied()
+  				.map(|v| v.max(0.0).cbrt())
+  				.sum::<f32>()
+  				/ self.channel_volums.len() as f32
+  		}
 	}
 
 	fn channel_count(&self) -> usize {

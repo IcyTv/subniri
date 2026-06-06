@@ -323,40 +323,40 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
                         return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
                     }
                 }
-            })
+            });
 		} else if attrs.argument {
 			let parse = parse_field(&field.ty);
-			if !attrs.argument {
-				let fallback =
-					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-				initializer.push(quote! {
-                    {
-                        if let Some(value) = doc.get(current_property) {
-                            out.#field_ident = #parse;
-                            current_property += 1;
-                        } else if #allow_missing {
-                            out.#field_ident = #fallback;
-                        } else {
-                            return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
-                        }
-                    }
-                });
-			} else {
-				let fallback =
-					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-				initializer.push(quote! {
-                    {
-                        if let Some(value) = doc.get(current_property) {
-                            out.#field_ident = #parse;
-                            current_property += 1;
-                        } else if #allow_missing {
-                            out.#field_ident = #fallback;
-                        } else {
-                            return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
-                        }
-                    }
-                })
-			}
+			if attrs.argument {
+   				let fallback =
+   					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
+   				initializer.push(quote! {
+                       {
+                           if let Some(value) = doc.get(current_property) {
+                               out.#field_ident = #parse;
+                               current_property += 1;
+                           } else if #allow_missing {
+                               out.#field_ident = #fallback;
+                           } else {
+                               return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
+                           }
+                       }
+                   });
+   			} else {
+   				let fallback =
+   					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
+   				initializer.push(quote! {
+                       {
+                           if let Some(value) = doc.get(current_property) {
+                               out.#field_ident = #parse;
+                               current_property += 1;
+                           } else if #allow_missing {
+                               out.#field_ident = #fallback;
+                           } else {
+                               return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
+                           }
+                       }
+                   });
+   			}
 		} else {
 			let seen_ident = seen_ident(field_ident, &field.ty);
 			if let Some(seen_ident) = seen_ident.as_ref() {
@@ -609,7 +609,7 @@ const KDL_VALUE_TYPES: &[&str] = &[
 ];
 
 fn parse_field(ty: &syn::Type) -> TokenStream {
-	use syn::Type::*;
+	use syn::Type::Path;
 	match ty {
 		Path(_) if option_inner_ty(ty).is_none() => {
 			quote! { <#ty as ::config_traits::ConfigValue>::from_kdl_value(value)? }

@@ -70,7 +70,7 @@ impl Clock {
 		.background(COLORS.decorative.purple)
 	}
 
-	fn text<'a>(label: &'a str) -> Element<'a, Message> {
+	fn text(label: &str) -> Element<'_, Message> {
 		text(label)
 			.font(Font {
 				weight: font::Weight::Bold,

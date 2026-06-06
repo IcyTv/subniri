@@ -64,7 +64,7 @@ impl Tab {
 		}
 	}
 
-	pub fn icon<'a>(&'a self) -> Svg<'a> {
+	pub fn icon(&self) -> Svg<'_> {
 		self.kind.icon()
 	}
 
@@ -112,7 +112,7 @@ pub enum SettingKind {
 }
 
 impl SettingKind {
-	pub fn icon<'a>(&'a self) -> Svg<'a> {
+	pub fn icon(&self) -> Svg<'_> {
 		match self {
 			Self::Nightlight => nightlight::icon(),
 			Self::Homeassistant => svg(phosphor_icon!("question-mark")),

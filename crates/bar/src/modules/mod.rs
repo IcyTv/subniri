@@ -134,7 +134,7 @@ impl Module {
 				Err(error) => log::warn!("Failed to initialize Niri taskbar: {error}"),
 			},
 			(Self::Bluetooth(Some(bluetooth)), ModuleMessage::Bluetooth(message)) => {
-				bluetooth.update(message)
+				bluetooth.update(message);
 			}
 			(Self::Volume(Some(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
@@ -144,7 +144,7 @@ impl Module {
 				return controls.update(message).map(ModuleMessage::MediaControls);
 			}
 			(Self::Taskbar(Some(taskbar)), ModuleMessage::Taskbar(message)) => {
-				taskbar.update(message)
+				taskbar.update(message);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
 				return menu.update(message, config).map(ModuleMessage::SystemMenu);

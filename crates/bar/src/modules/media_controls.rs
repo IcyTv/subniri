@@ -132,7 +132,7 @@ impl MediaControls {
 				if !self.thumbnail_cache.borrow().contains(&ck) {
 					let fetch_thumbnail_task =
 						Task::future(async move { thumbnail_update_task(ck).await });
-					tasks.push(fetch_thumbnail_task)
+					tasks.push(fetch_thumbnail_task);
 				}
 
 				return Task::batch(tasks);
@@ -151,11 +151,11 @@ impl MediaControls {
 					|| snapshot.url != active_player.1.url
 				{
 					let ck = (snapshot.art_url.clone(), snapshot.url.clone()).into();
-					if !self.thumbnail_cache.borrow().contains(&ck) {
-						Some(ck)
-					} else {
-						None
-					}
+					if self.thumbnail_cache.borrow().contains(&ck) {
+     						None
+     					} else {
+     						Some(ck)
+     					}
 				} else {
 					None
 				};
@@ -222,12 +222,11 @@ impl MediaControls {
 		neo_button(
 			container(
 				row![
-					icon.map(|_| Message::Noop),
+					icon.map(|()| Message::Noop),
 					text(
 						self.active_player
 							.as_ref()
-							.map(|p| p.1.title.as_str())
-							.unwrap_or("<nothing>")
+							.map_or("<nothing>", |p| p.1.title.as_str())
 							.to_string()
 					)
 					.font(Font {
@@ -528,7 +527,7 @@ async fn handle_player_command(
 
 			if let Err(e) = res {
 				log::warn!("Failed to execute action on player '{}': {e}", pid.bus());
-			};
+			}
 
 			None
 		}
@@ -564,8 +563,8 @@ async fn manage_mpris_event(
 			players.remove(&identity);
 			Some(Message::PlayerDetached(identity))
 		}
-		Ok(MprisEvent::PlayerPropertiesChanged(identity))
-		| Ok(MprisEvent::PlayerSeeked(identity)) => {
+		Ok(MprisEvent::PlayerPropertiesChanged(identity) |
+MprisEvent::PlayerSeeked(identity)) => {
 			if let Some(player) = players.get(&identity) {
 				let snapshot = read_player_snapshot(player).await;
 				Some(Message::PlayerUpdated(identity, snapshot))
@@ -815,7 +814,7 @@ async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
 
 	let desktop_entry = desktop_entry.unwrap_or_else(|e| {
 		log::warn!("Failed to get desktop entry for player '{name}': {e}");
-		"".to_string()
+		String::new()
 	});
 
 	let can_control = can_control.unwrap_or_else(|e| {

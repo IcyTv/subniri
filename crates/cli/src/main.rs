@@ -100,7 +100,7 @@ async fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error
 	match cmd {
 		NightlightSubcommand::SetBrightness { brightness } => {
 			// NightlightCommand::SetBrightness(*brightness)
-			proxy.set_brightness(*brightness).await?
+			proxy.set_brightness(*brightness).await?;
 		}
 		NightlightSubcommand::SetTemperature { temperature } => {
 			proxy.set_temperature(*temperature).await?;
@@ -128,22 +128,22 @@ async fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error
 
 			table.add_row(vec![
 				Cell::new("Enabled").fg(Color::Yellow),
-				Cell::new(format!("{}", active)),
+				Cell::new(format!("{active}")),
 			]);
 
 			table.add_row(vec![
 				Cell::new("Brightness").fg(Color::Yellow),
-				Cell::new(format!("{:.2}", brightness)),
+				Cell::new(format!("{brightness:.2}")),
 			]);
 
 			table.add_row(vec![
 				Cell::new("Temperature").fg(Color::Yellow),
-				Cell::new(format!("{}", temperature)),
+				Cell::new(format!("{temperature}")),
 			]);
 
 			table.add_row(vec![
 				Cell::new("Preset").fg(Color::Yellow),
-				Cell::new(preset.to_string()),
+				Cell::new(preset.clone()),
 			]);
 
 			note("New nightlight settings", table)?;

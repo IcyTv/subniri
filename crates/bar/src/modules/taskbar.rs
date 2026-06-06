@@ -200,17 +200,17 @@ impl Taskbar {
 }
 
 fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element<'a, Message> {
-	let content: Element<Message> = if !workspace.is_active {
-		let windows = windows
-			.iter()
-			.filter(|w| w.workspace_id == Some(workspace.id))
-			.take(4)
-			.collect::<Vec<_>>();
+	let content: Element<Message> = if workspace.is_active {
+ 		"".into()
+ 	} else {
+ 		let windows = windows
+ 			.iter()
+ 			.filter(|w| w.workspace_id == Some(workspace.id))
+ 			.take(4)
+ 			.collect::<Vec<_>>();
 
-		workspace_preview(&windows)
-	} else {
-		"".into()
-	};
+ 		workspace_preview(&windows)
+ 	};
 
 	neo_button(content)
 		.style(NeoButtonStyle {
@@ -349,7 +349,7 @@ impl Taskbar {
 
 		serde_json::from_str::<'_, Reply>(&buf)
 			.map_err(|e| format!("{e}"))?
-			.map_err(|e| e.to_string())
+			.map_err(|e| e.clone())
 	}
 }
 
@@ -382,7 +382,7 @@ async fn open_event_stream() -> Result<impl Stream<Item = Result<Event, io::Erro
 
 	let reply = serde_json::from_str::<'_, Reply>(&buf)
 		.map_err(|e| format!("{e}"))?
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| e.clone())?;
 
 	match reply {
 		Response::Handled => (),

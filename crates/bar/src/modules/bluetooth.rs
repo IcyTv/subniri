@@ -190,17 +190,14 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 		let mut maybe_adapter = Some(default_adapter);
 
 		while let Some(ref ma) = maybe_adapter {
-			let adapter = match ma {
-				Some(adapter) => {
-					yield Message::AdapterFound;
-					adapter
-				}
-				None => {
-					yield  Message::AdapterLost;
-					maybe_adapter = session_stream.next().await;
-					continue;
-				}
-			};
+			let adapter = if let Some(adapter) = ma {
+   					yield Message::AdapterFound;
+   					adapter
+   				} else {
+   					yield  Message::AdapterLost;
+   					maybe_adapter = session_stream.next().await;
+   					continue;
+   				};
 
 			let adapter_events = match adapter.events().await {
 				Ok(events) => events,
@@ -252,7 +249,7 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 							Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(powered))) => yield Message::Power(powered),
 							Some(_) => (),
 							None => break,
-						};
+						}
 					}
 				}
 			}
@@ -284,8 +281,8 @@ impl PartialEq for BluetoothData {
 	fn eq(&self, other: &Self) -> bool {
 		self.default_adapter
 			.as_ref()
-			.map(|a| a.name())
-			.eq(&other.default_adapter.as_ref().map(|a| a.name()))
+			.map(bluer::Adapter::name)
+			.eq(&other.default_adapter.as_ref().map(bluer::Adapter::name))
 	}
 }
 
