@@ -10,6 +10,9 @@ documentation.workspace = true
 name = "avalaunch"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 async-channel.workspace = true
 async-stream.workspace = true

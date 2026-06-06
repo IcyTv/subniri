@@ -166,6 +166,7 @@ pub const COLORS: Colors = Colors {
 	black: rgb(0x000000),
 };
 
+#[must_use]
 pub fn neo_theme() -> iced::Theme {
 	iced::Theme::custom(
 		"Subniri Neo",

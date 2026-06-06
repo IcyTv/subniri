@@ -101,11 +101,10 @@ impl deluxe::ParseMetaItem for RenameRule {
 			"SCREAMING_SNAKE_CASE" | "screaming_snake_case" => Ok(Self::ScreamingSnake),
 			"lowercase" | "lower" => Ok(Self::Lower),
 			"UPPERCASE" | "uppercase" | "upper" => Ok(Self::Upper),
-			_ => Err(syn::Error::new(
+			_ => Err(Into::into(syn::Error::new(
 				span,
 				"Expected a serde-style rename_all rule",
-			))
-			.map_err(Into::into),
+			))),
 		}
 	}
 }
@@ -126,9 +125,10 @@ impl deluxe::ParseMetaItem for ListStyle {
 			"children" => Ok(Self::Children),
 			"inline" => Ok(Self::Inline),
 			"auto" => Ok(Self::Auto),
-			_ => {
-				Err(syn::Error::new(span, "Expected children, inline, or auto")).map_err(Into::into)
-			}
+			_ => Err(Into::into(syn::Error::new(
+				span,
+				"Expected children, inline, or auto",
+			))),
 		}
 	}
 }
@@ -584,7 +584,7 @@ fn generate_serialize_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -
 		};
 		let field_name = attrs.name.unwrap_or_else(|| field_ident.to_string());
 
-		if let Some(tokens) = serialize_document_update(
+		let tokens = serialize_document_update(
 			&field.ty,
 			&field_name,
 			field_ident,
@@ -592,9 +592,8 @@ fn generate_serialize_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -
 			attrs.list_cutoff,
 			attrs.key.as_deref(),
 			doc_comment(&field.attrs).as_deref(),
-		) {
-			initializer.push(tokens);
-		}
+		);
+		initializer.push(tokens);
 	}
 
 	quote! {
@@ -604,7 +603,7 @@ fn generate_serialize_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -
 	}
 }
 
-const KDL_VALUE_TYPES: &[&'static str] = &[
+const KDL_VALUE_TYPES: &[&str] = &[
 	"String", "f32", "f64", "bool", "i8", "i16", "i32", "i64", "i128", "u8", "u16", "u32", "u64",
 	"u128",
 ];
@@ -966,7 +965,7 @@ fn serialize_child_update(
 	ty: &syn::Type, field_name: &str, field_ident: &syn::Ident, list_style: Option<ListStyle>,
 	list_cutoff: Option<usize>, key: Option<&str>, doc_comment: Option<&str>,
 ) -> Option<TokenStream> {
-	let apply_doc_comment = apply_doc_comment(doc_comment, quote! { new_node });
+	let apply_doc_comment = apply_doc_comment(doc_comment, &quote! { new_node });
 	if is_option(ty) {
 		return Some(quote! {
 			{
@@ -1111,13 +1110,14 @@ fn serialize_child_update(
 	})
 }
 
+#[allow(clippy::too_many_lines)]
 fn serialize_document_update(
 	ty: &syn::Type, field_name: &str, field_ident: &syn::Ident, list_style: Option<ListStyle>,
 	list_cutoff: Option<usize>, key: Option<&str>, doc_comment: Option<&str>,
-) -> Option<TokenStream> {
-	let apply_doc_comment = apply_doc_comment(doc_comment, quote! { new_node });
+) -> TokenStream {
+	let apply_doc_comment = apply_doc_comment(doc_comment, &quote! { new_node });
 	if is_option(ty) {
-		return Some(quote! {
+		return quote! {
 			{
 				let node_index = doc.nodes().iter().position(|n| n.name().value() == #field_name);
 				let node = match node_index {
@@ -1131,14 +1131,14 @@ fn serialize_document_update(
 				};
 				::config_traits::ConfigSerialize::apply_to_kdl_node(&self.#field_ident, node)?;
 			}
-		});
+		};
 	}
 
 	if let Some(_inner) = vec_inner_ty(ty) {
 		if key.is_none() {
 			let len_ident = syn::Ident::new("__len", proc_macro2::Span::call_site());
 			let use_children = list_style_bool(list_style, list_cutoff, &len_ident);
-			return Some(quote! {
+			return quote! {
 				{
 					let node_index = doc.nodes().iter().position(|n| n.name().value() == #field_name);
 					let node = match node_index {
@@ -1183,7 +1183,7 @@ fn serialize_document_update(
 						node.clear_children();
 					}
 				}
-			});
+			};
 		}
 
 		let update_items = if let Some(key) = key {
@@ -1216,7 +1216,7 @@ fn serialize_document_update(
 			}
 		};
 
-		return Some(quote! {
+		return quote! {
 			{
 				let node_index = doc.nodes().iter().position(|n| n.name().value() == #field_name);
 				let node = match node_index {
@@ -1231,10 +1231,10 @@ fn serialize_document_update(
 				let children = node.ensure_children();
 				#update_items
 			}
-		});
+		};
 	}
 
-	Some(quote! {
+	quote! {
 		{
 			let node_index = doc.nodes().iter().position(|n| n.name().value() == #field_name);
 			let node = match node_index {
@@ -1248,14 +1248,15 @@ fn serialize_document_update(
 			};
 			::config_traits::ConfigSerialize::apply_to_kdl_node(&self.#field_ident, node)?;
 		}
-	})
+	}
 }
 
 fn is_value_type(ty: &syn::Type) -> bool {
 	match ty {
-		syn::Type::Path(p) => p.path.get_ident().map_or(false, |id| {
-			KDL_VALUE_TYPES.contains(&id.to_string().as_str())
-		}),
+		syn::Type::Path(p) => p
+			.path
+			.get_ident()
+			.is_some_and(|id| KDL_VALUE_TYPES.contains(&id.to_string().as_str())),
 		_ => false,
 	}
 }
@@ -1310,20 +1311,20 @@ fn seen_ident(field_ident: &syn::Ident, ty: &syn::Type) -> Option<syn::Ident> {
 
 	if is_bool(ty) {
 		return Some(syn::Ident::new(
-			&format!("__seen_{}", field_ident),
+			&format!("__seen_{field_ident}"),
 			field_ident.span(),
 		));
 	}
 
 	if is_value_type(ty) || !matches!(ty, syn::Type::Path(_)) {
 		return Some(syn::Ident::new(
-			&format!("__seen_{}", field_ident),
+			&format!("__seen_{field_ident}"),
 			field_ident.span(),
 		));
 	}
 
 	Some(syn::Ident::new(
-		&format!("__seen_{}", field_ident),
+		&format!("__seen_{field_ident}"),
 		field_ident.span(),
 	))
 }
@@ -1417,7 +1418,7 @@ fn doc_comment(attrs: &[syn::Attribute]) -> Option<String> {
 	Some(comment)
 }
 
-fn apply_doc_comment(doc_comment: Option<&str>, node: TokenStream) -> TokenStream {
+fn apply_doc_comment(doc_comment: Option<&str>, node: &TokenStream) -> TokenStream {
 	let Some(comment) = doc_comment else {
 		return TokenStream::new();
 	};

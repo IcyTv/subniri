@@ -33,7 +33,6 @@ pub fn network<'a>() -> NeoButton<'a, Message> {
 	.height(MODULE_HEIGHT)
 	.radius(MODULE_RADIUS)
 	.background(COLORS.decorative.green)
-	.into()
 }
 
 #[derive(Debug, Clone)]

@@ -135,7 +135,6 @@ impl Bluetooth {
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
 		.background(COLORS.decorative.blue)
-		.into()
 	}
 
 	pub fn view_popup(&self) -> Element<'_, Message> {
@@ -266,11 +265,11 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 
 async fn get_default_adapter(session: &Session) -> bluer::Result<Option<Adapter>> {
 	match session.default_adapter().await {
-		Ok(a) => return Ok(Some(a)),
+		Ok(a) => Ok(Some(a)),
 		Err(bluer::Error {
 			kind: ErrorKind::NotFound,
 			..
-		}) => return Ok(None),
+		}) => Ok(None),
 		Err(error) => Err(error),
 	}
 }

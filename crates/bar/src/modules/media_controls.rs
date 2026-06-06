@@ -138,10 +138,7 @@ impl MediaControls {
 				return Task::batch(tasks);
 			}
 			Message::PlayerDetached(identity)
-				if self
-					.active_player
-					.as_ref()
-					.map_or(false, |p| p.0 == identity) =>
+				if self.active_player.as_ref().is_some_and(|p| p.0 == identity) =>
 			{
 				self.active_player = None;
 				let _ = self.cmd_tx.send_blocking(PlayerCommand::CyclePlayer);
@@ -174,7 +171,7 @@ impl MediaControls {
 				if self
 					.active_player
 					.as_ref()
-					.map_or(false, |(aid, _)| *aid == id) =>
+					.is_some_and(|(aid, _)| *aid == id) =>
 			{
 				self.active_player_position = pos.as_secs_f32();
 			}
@@ -193,12 +190,10 @@ impl MediaControls {
 			Message::UpdateThumbnail(identity, thumbnail) => {
 				self.thumbnail_cache.borrow_mut().put(identity, thumbnail);
 			}
-			Message::Redraw => {
-				if self.is_playing.is_animating(Instant::now()) {
-					return iced_runtime::task::effect(iced_runtime::Action::Window(
-						iced_runtime::window::Action::RedrawAll,
-					));
-				}
+			Message::Redraw if self.is_playing.is_animating(Instant::now()) => {
+				return iced_runtime::task::effect(iced_runtime::Action::Window(
+					iced_runtime::window::Action::RedrawAll,
+				));
 			}
 			_ => (),
 		}
@@ -228,13 +223,13 @@ impl MediaControls {
 			container(
 				row![
 					icon.map(|_| Message::Noop),
-					text(format!(
-						"{}",
+					text(
 						self.active_player
 							.as_ref()
 							.map(|p| p.1.title.as_str())
 							.unwrap_or("<nothing>")
-					))
+							.to_string()
+					)
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Font::DEFAULT
@@ -263,7 +258,6 @@ impl MediaControls {
 			COLORS.decorative.pink,
 			Instant::now(),
 		))
-		.into()
 	}
 
 	// pub fn view_popup<'a>(&'a self) -> Element<'a, Message> {
@@ -335,7 +329,7 @@ impl MediaControls {
 					.on_change(|_| Message::Noop),
 			);
 
-			let position_text = text(format!("00:41")).color(COLORS.text).size(12);
+			let position_text = text("00:41".to_string()).color(COLORS.text).size(12);
 			let length_text = text(format!(
 				"{:0>2}:{:0>2}",
 				snap.length.as_secs() / 60,
@@ -505,7 +499,7 @@ async fn handle_player_command(
 
 			return Some(Message::PlayerChanged(
 				next_player.0.clone(),
-				read_player_snapshot(&next_player.1).await,
+				read_player_snapshot(next_player.1).await,
 			));
 		}
 		PlayerCommand::PlayPause | PlayerCommand::SkipNext | PlayerCommand::SkipPrevious => {
@@ -622,7 +616,7 @@ async fn resolve_thumbnail(
 	let mut urls = vec![];
 
 	if let Some(art_url) = art_url {
-		return Ok(load_image_url(&client, art_url).await.map(Some)?);
+		return load_image_url(&client, art_url).await.map(Some);
 	}
 
 	let Some(url) = url else {
@@ -630,7 +624,7 @@ async fn resolve_thumbnail(
 		return Ok(None);
 	};
 
-	let url = match url::Url::parse(&url) {
+	let url = match url::Url::parse(url) {
 		Ok(url) => url,
 		Err(e) => {
 			return Err(e.into());
@@ -663,10 +657,7 @@ async fn resolve_thumbnail(
 		};
 
 		if res.status().is_success() {
-			return load_image_url(&client, url)
-				.await
-				.map(Some)
-				.map_err(Into::into);
+			return load_image_url(&client, url).await.map(Some);
 		}
 	}
 
@@ -769,7 +760,7 @@ async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
 			log::warn!("Failed to get artists for player '{name}': {e}");
 			Some(vec![])
 		})
-		.unwrap_or_else(|| vec![]);
+		.unwrap_or_else(std::vec::Vec::new);
 
 	let art_url = metadata.art_url().unwrap_or_else(|e| {
 		log::warn!("Failed to get player thumbnail for player '{name}': {e}");

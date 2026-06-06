@@ -6,6 +6,9 @@ authors.workspace = true
 description = "Reusable neo widgets for subniri"
 documentation.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 freedesktop-desktop-entry.workspace = true
 iced.workspace = true

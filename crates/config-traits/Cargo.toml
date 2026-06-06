@@ -6,6 +6,9 @@ description.workspace = true
 edition.workspace = true
 documentation.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.102"
 dateparser = "0.3.1"

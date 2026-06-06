@@ -183,7 +183,7 @@ impl ConfigFile {
 		#[cfg(debug_assertions)]
 		if let Err(e) = self.validate() {
 			return Err(ConfigError::Validation {
-				error: e,
+				error: Box::new(e),
 				src: None,
 				span: None,
 			});
@@ -442,7 +442,6 @@ pub struct SystemMenu {
 #[cfg(test)]
 mod test {
 	use super::*;
-	use config_traits::{ConfigFileSerialize as _, ConfigFileValidateExt as _};
 
 	#[test]
 	fn test() {
@@ -482,7 +481,7 @@ spotify {
 
 		println!("\nRESULTING CONFIG:\n");
 
-		println!("{}", doc.to_string());
+		println!("{}", doc);
 	}
 
 	#[test]

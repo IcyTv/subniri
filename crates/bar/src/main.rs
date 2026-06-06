@@ -83,6 +83,7 @@ struct Bar {
 	open_popup: Option<(Id, Section, usize)>,
 	layer_heights: HashMap<Id, u32>,
 	window_scales: HashMap<Id, f32>,
+	#[expect(dead_code)]
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 }
@@ -234,14 +235,14 @@ impl Bar {
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
 		self.layer_heights.remove(&id);
 		self.window_scales.remove(&id);
-		if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
+		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
 			self.open_popup = None;
 		}
 		Task::none()
 	}
 
 	fn sync_layer_scale(&mut self, id: Id) -> Task<BarMessage> {
-		if self.open_popup.as_ref().map_or(false, |oid| oid.0 == id) {
+		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
 			return Task::none();
 		}
 

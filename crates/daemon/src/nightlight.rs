@@ -828,20 +828,20 @@ fn temperature_to_rgb_normalized(temperature: u32) -> (f32, f32, f32) {
 }
 
 fn raw_temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
-	debug_assert!(temperature >= 1000 && temperature <= 40_000);
+	debug_assert!((1000..=40_000).contains(&temperature));
 
 	let t = temperature as f32 / 100.0;
 
 	let r = if t <= 66.0 {
 		255.0
 	} else {
-		329.698727446 * (t - 60.0).powf(-0.1332047592)
+		329.698_73 * (t - 60.0).powf(-0.133_204_76)
 	};
 
 	let g = if t <= 66.0 {
-		99.4708025861 * t.ln() - 161.1195681661
+		99.470_8 * t.ln() - 161.119_57
 	} else {
-		288.1221695283 * (t - 60.0).powf(-0.0755148492)
+		288.122_16 * (t - 60.0).powf(-0.075_514_846)
 	};
 
 	let b = if t >= 66.0 {
@@ -849,7 +849,7 @@ fn raw_temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
 	} else if t <= 19.0 {
 		0.0
 	} else {
-		138.5177312231 * (t - 10.0).ln() - 305.0447927307
+		138.517_73 * (t - 10.0).ln() - 305.044_8
 	};
 
 	let r = r.clamp(0.0, 255.0) / 255.0;

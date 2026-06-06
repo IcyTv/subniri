@@ -16,6 +16,7 @@ pub fn neo_card<'a, Message, Theme, Renderer>(
 	NeoCard::new(content)
 }
 
+#[must_use]
 pub struct NeoCard<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
 	content: Element<'a, Message, Theme, Renderer>,
 	style: NeoCardStyle,

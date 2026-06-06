@@ -73,5 +73,10 @@ zbus = "5.15.0"
 codegen-units = 1
 lto = true
 
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+cast_precision_loss = "allow"
+
 [patch.crates-io]
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }

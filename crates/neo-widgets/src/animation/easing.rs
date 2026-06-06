@@ -53,6 +53,7 @@ impl Easing {
 		Builder::new()
 	}
 
+	#[must_use]
 	pub fn y_at_x(&self, x: f32) -> f32 {
 		let mut sampler = self
 			.measurements
@@ -63,6 +64,7 @@ impl Easing {
 	}
 }
 
+#[must_use]
 pub struct Builder(NoAttributes<BuilderImpl>);
 
 impl Builder {
@@ -98,6 +100,7 @@ impl Builder {
 		self
 	}
 
+	#[must_use]
 	pub fn build(mut self) -> Easing {
 		self.0.line_to(lyon_algorithms::geom::point(1.0, 1.0));
 		self.0.end(false);

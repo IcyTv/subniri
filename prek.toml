@@ -1,0 +1,43 @@
+[[repos]]
+repo = "https://github.com/pre-commit/pre-commit-hooks"
+rev = "v6.0.0"
+hooks = [{ id = "end-of-file-fixer" }, { id = "trailing-whitespace" }]
+
+[[repos]]
+repo = "local"
+
+[[repos.hooks]]
+id = "rustfmt"
+name = "rustfmt"
+description = "Check rust code formatting"
+entry = "cargo fmt --all -- --check"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "clippy"
+name = "clippy"
+description = "Lint rust code"
+entry = "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features -- -D warnings"
+language = "system"
+types = ["rust"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "alejandra"
+name = "alejandra"
+description = "Format Nix files"
+entry = "alejandra --check"
+language = "system"
+types = ["nix"]
+pass_filenames = false
+
+[[repos.hooks]]
+id = "nix-build"
+name = "nix-build"
+description = "Ensure nix build succeeds"
+entry = "nix build . --no-link"
+language = "system"
+always_run = true
+pass_filenames = false

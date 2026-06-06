@@ -1,5 +1,7 @@
 #![allow(non_upper_case_globals)]
+#![allow(dead_code)] // TODO: Remove
 use std::{
+	collections::HashMap,
 	fmt,
 	hash::Hash,
 	time::{Duration, Instant},
@@ -42,20 +44,6 @@ use pipewire_native_spa::{
 		types::{Id as SpaPodId, ObjectType, PropertyFlags, Type},
 	},
 };
-// use pipewire_native::{
-// 	context::ContextRc,
-// 	main_loop::MainLoopRc,
-// 	node::{Node, NodeChangeMask, NodeListener},
-// 	spa::{
-// 		param::ParamType,
-// 		pod::{Pod, Value, ValueArray, deserialize::PodDeserializer},
-// 		sys::{
-// 			SPA_PROP_channelVolumes, SPA_PROP_mute, SPA_PROP_volume, SPA_PROP_volumeBase,
-// 			SPA_PROP_volumeStep,
-// 		},
-// 	},
-// };
-use small_map::SmallMap;
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -176,9 +164,9 @@ pub struct Volume {
 	event_tx: async_channel::Sender<PwEvent>,
 	event_rx: async_channel::Receiver<PwEvent>,
 
-	devices: SmallMap<64, Id, PwNode>,
-	node_proxies: SmallMap<64, Id, Node>,
-	device_routes: SmallMap<64, Id, PwDeviceState>,
+	devices: HashMap<Id, PwNode>,
+	node_proxies: HashMap<Id, Node>,
+	device_routes: HashMap<Id, PwDeviceState>,
 	default_source: Option<Id>,
 	default_sink: Option<Id>,
 	reconnect_attempt: u32,
@@ -205,7 +193,7 @@ impl PwConnection {
 		props.set("config.name", "null".to_string());
 
 		let main_loop =
-			ThreadLoop::new(&props).ok_or_else(|| format!("Could not create pw main loop"))?;
+			ThreadLoop::new(&props).ok_or_else(|| "Could not create pw main loop".to_string())?;
 
 		log::trace!("Created thread loop");
 
@@ -222,10 +210,10 @@ impl PwConnection {
 		core_events.done = Some(Box::new({
 			let event_tx = event_tx.clone();
 			move |id, seq| {
-				if id == 0 {
-					if let Err(e) = event_tx.send_blocking(PwEvent::CoreSyncDone(seq)) {
-						log::warn!("Failed to dispatch PipeWire core done event: {e}");
-					}
+				if id == 0
+					&& let Err(e) = event_tx.send_blocking(PwEvent::CoreSyncDone(seq))
+				{
+					log::warn!("Failed to dispatch PipeWire core done event: {e}");
 				}
 			}
 		}));
@@ -482,9 +470,9 @@ impl Volume {
 			event_tx,
 			event_rx,
 
-			devices: SmallMap::new(),
-			node_proxies: SmallMap::new(),
-			device_routes: SmallMap::new(),
+			devices: HashMap::new(),
+			node_proxies: HashMap::new(),
+			device_routes: HashMap::new(),
 			default_source: None,
 			default_sink: None,
 			reconnect_attempt: 0,
@@ -776,8 +764,7 @@ impl Volume {
 				Task::none()
 			}
 			Err(error) => {
-				return self
-					.handle_connection_lost(format!("PipeWire health check failed: {error}"));
+				self.handle_connection_lost(format!("PipeWire health check failed: {error}"))
 			}
 		}
 	}
@@ -851,8 +838,7 @@ impl Volume {
 				return neo_button("loading")
 					.height(MODULE_HEIGHT)
 					.radius(MODULE_RADIUS)
-					.background(COLORS.decorative.yellow)
-					.into();
+					.background(COLORS.decorative.yellow);
 			}
 		};
 
@@ -893,20 +879,16 @@ impl Volume {
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
 		.background(COLORS.decorative.yellow)
-		.into()
 	}
 
 	fn on_scroll(delta: ScrollDelta) -> Message {
 		let delta = match delta {
-			ScrollDelta::Pixels { y, .. } => {
-				let step = (y / 120.0) * 0.01;
-				step
-			}
+			ScrollDelta::Pixels { y, .. } => (y / 120.0) * 0.01,
 			ScrollDelta::Lines { y, .. } => y * 0.01,
 		};
 
 		if (delta.abs() * 100.0).round() > f32::EPSILON {
-			Message::DefaultSinkVolumeChangeRequest(delta as f32)
+			Message::DefaultSinkVolumeChangeRequest(delta)
 		} else {
 			Message::Noop
 		}

@@ -25,6 +25,7 @@ pub fn spinner<'a>() -> Spinner<'a> {
 	Spinner::new()
 }
 
+#[must_use]
 pub struct Spinner<'a> {
 	size: f32,
 	bar_height: f32,
@@ -33,6 +34,12 @@ pub struct Spinner<'a> {
 	easing: &'a Easing,
 	cycle_duration: Duration,
 	rotation_duration: Duration,
+}
+
+impl Default for Spinner<'_> {
+	fn default() -> Self {
+		Self::new()
+	}
 }
 
 impl<'a> Spinner<'a> {
@@ -129,8 +136,9 @@ impl Animation {
 			Self::Contracting { rotation, .. } => Self::Expanding {
 				start: now,
 				progress: 0.0,
+				#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 				rotation: rotation.wrapping_add(BASE_ROTATION_SPEED.wrapping_add(
-					(f64::from(WRAP_ANGLE / (2.0 * Radians::PI)) * u32::MAX as f64) as u32,
+					(f64::from(WRAP_ANGLE / (2.0 * Radians::PI)) * f64::from(u32::MAX)) as u32,
 				)),
 				last: now,
 			},
@@ -153,8 +161,8 @@ impl Animation {
 		&self, cycle_duration: Duration, rotation_duration: Duration, now: Instant,
 	) -> Self {
 		let elapsed = now.duration_since(self.start());
-		let additional_rotation = ((now - self.last()).as_secs_f32()
-			/ rotation_duration.as_secs_f32()
+		#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+		let additional_rotation = ((now - self.last()).as_secs_f32() / rotation_duration.as_secs_f32()
 			* (u32::MAX) as f32) as u32;
 
 		match elapsed {

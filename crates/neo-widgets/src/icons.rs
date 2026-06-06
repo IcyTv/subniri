@@ -48,6 +48,8 @@ pub enum ResolvedIcon {
 }
 
 impl ResolvedIcon {
+	#[allow(clippy::needless_pass_by_value)]
+	#[must_use]
 	pub fn from_icon_file(icon: IconFile) -> Self {
 		match icon.file_type() {
 			FileType::Svg => Self::Svg(svg::Handle::from_path(icon.path())),
@@ -67,6 +69,7 @@ impl ResolvedIcon {
 	}
 }
 
+#[must_use]
 pub fn default_icon() -> ResolvedIcon {
 	ResolvedIcon::Svg(phosphor_icon!("question", "bold"))
 }
@@ -81,6 +84,7 @@ pub fn resolve_from_desktop_entry(
 	resolve_with(|resolver| resolver.get_icon_by_desktop_entry(desktop_entry, size, scale))
 }
 
+#[must_use]
 pub fn resolve_from_window(window: &niri_ipc::Window, size: u32, scale: u32) -> ResolvedIcon {
 	resolve_with(|resolver| resolver.get_icon_by_window(window, size, scale))
 }
@@ -91,11 +95,15 @@ fn resolve_with(
 	let resolver = icon_resolver();
 	let mut resolver = resolver.lock().unwrap();
 
-	lookup(&mut resolver)
-		.map(ResolvedIcon::from_icon_file)
-		.unwrap_or_else(default_icon)
+	lookup(&mut resolver).map_or_else(default_icon, ResolvedIcon::from_icon_file)
 }
 
+/// Resolve an icon from the phosphor icon set at runtime
+///
+/// # Panics
+///
+/// When the environment variable `PHOSPHOR_ICONS` isn't set.
+#[must_use]
 pub fn phosphor_icon(icon: &str, variant: &str) -> svg::Handle {
 	let path = if icon.contains('/') {
 		PathBuf::from(icon)
@@ -155,7 +163,7 @@ impl ApplicationIconResolver {
 		};
 
 		if let Some(icon) = self.cache.get(&lookup) {
-			return icon.clone().to_opt();
+			return icon.clone().into_opt();
 		}
 
 		let icon = find_app_by_id(&self.desktop_entries, Ascii::new(app_id.as_ref()))
@@ -185,7 +193,7 @@ impl ApplicationIconResolver {
 		};
 
 		if let Some(icon) = self.cache.get(&lookup) {
-			return icon.clone().to_opt();
+			return icon.clone().into_opt();
 		}
 
 		let id = desktop_entry
@@ -303,7 +311,7 @@ enum IconLookupResult {
 }
 
 impl IconLookupResult {
-	fn to_opt(self) -> Option<IconFile> {
+	fn into_opt(self) -> Option<IconFile> {
 		match self {
 			Self::Found(icon) => Some(icon),
 			Self::Missing => None,
@@ -338,9 +346,7 @@ fn nix_store_dir() -> &'static Path {
 	static STORE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 	STORE_PATH.get_or_init(|| {
-		std::env::var_os("NIX_STORE_DIR")
-			.map(PathBuf::from)
-			.unwrap_or_else(|| PathBuf::from("/nix/store"))
+		std::env::var_os("NIX_STORE_DIR").map_or_else(|| PathBuf::from("/nix/store"), PathBuf::from)
 	})
 }
 

@@ -25,6 +25,7 @@ pub fn neo_slider<T: Num + Clone, Message>(
 	NeoSlider::new(range.start().clone(), range.end().clone(), value)
 }
 
+#[must_use]
 pub struct NeoSlider<T, Message> {
 	track: NeoSurfaceStyle,
 	handle: NeoSurfaceStyle,
@@ -157,13 +158,13 @@ where
 	T: Num + NumCast + AsPrimitive<f32> + Clone,
 {
 	fn percentage_from_value(&self, value: T) -> f32 {
-		let range = (self.maximum.clone() - self.minimum.clone()).as_();
+		let range = (self.maximum - self.minimum).as_();
 
 		if range == 0.0 {
 			return 0.0;
 		}
 
-		((value - self.minimum.clone()).as_() / range).clamp(0.0, 1.0)
+		((value - self.minimum).as_() / range).clamp(0.0, 1.0)
 	}
 
 	fn value_from_percentage(&self, percentage: f32) -> T {
@@ -184,6 +185,114 @@ where
 
 	fn stepped_percentage(&self, percentage: f32) -> f32 {
 		self.percentage_from_value(self.value_from_percentage(percentage))
+	}
+
+	fn render_track(
+		&self, bounds: Rectangle, renderer: &mut impl renderer::Renderer, state: &State,
+	) {
+		let s = self.track.shadow_width;
+
+		let shadow = Rectangle {
+			x: bounds.x + s,
+			y: bounds.y + s,
+			width: bounds.width - s,
+			height: bounds.height - s,
+		};
+
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: shadow,
+				border: iced::Border {
+					radius: self.track.radius.into(),
+					..Default::default()
+				},
+				snap: true,
+				..Default::default()
+			},
+			self.track.border,
+		);
+
+		let percentage_filled =
+			if state.pressed.value() && !state.pressed.is_animating(Instant::now()) {
+				state.percentage
+			} else {
+				self.percentage_from_value(self.value)
+			};
+		let percentage_filled = percentage_filled.clamp(0.0, 1.0);
+		// debug_assert!(
+		//     percentage_filled <= 1.0 && percentage_filled >= 0.0,
+		//     "Percentage {percentage_filled} not between 0 and 1"
+		// );
+
+		let filled_width = (bounds.width - s) * percentage_filled;
+		let unfilled_width = (bounds.width - s) * (1.0 - percentage_filled);
+
+		let track_filled = Rectangle {
+			x: bounds.x,
+			y: bounds.y,
+			width: filled_width,
+			height: bounds.height - s,
+		};
+		let track_unfilled = Rectangle {
+			x: bounds.x + filled_width,
+			y: bounds.y,
+			width: unfilled_width,
+			height: bounds.height - s,
+		};
+
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: track_filled,
+				border: iced::Border {
+					radius: border::Radius {
+						top_left: self.track.radius,
+						bottom_left: self.track.radius,
+						..Default::default()
+					},
+					..Default::default()
+				},
+				snap: true,
+				..Default::default()
+			},
+			self.running_color,
+		);
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: track_unfilled,
+				border: iced::Border {
+					radius: border::Radius {
+						top_right: self.track.radius,
+						bottom_right: self.track.radius,
+						..Default::default()
+					},
+					..Default::default()
+				},
+				snap: true,
+				..Default::default()
+			},
+			self.track.background,
+		);
+
+		let border = Rectangle {
+			x: bounds.x,
+			y: bounds.y,
+			width: bounds.width - s,
+			height: bounds.height - s,
+		};
+
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: border,
+				border: iced::Border {
+					radius: self.track.radius.into(),
+					color: self.track.border,
+					width: self.track.border_width,
+				},
+				snap: true,
+				..Default::default()
+			},
+			Color::TRANSPARENT,
+		);
 	}
 }
 
@@ -221,7 +330,7 @@ where
 
 	fn state(&self) -> tree::State {
 		tree::State::new(State {
-			percentage: self.percentage_from_value(self.value.clone()),
+			percentage: self.percentage_from_value(self.value),
 			pressed: Animation::new(false).duration(Duration::from_millis(50)),
 			hovered: false,
 		})
@@ -243,8 +352,8 @@ where
 
 		state.hovered = over;
 
-		let percentage = self.percentage_from_value(self.value.clone());
-		if !state.pressed.value() && state.percentage != percentage {
+		let percentage = self.percentage_from_value(self.value);
+		if !state.pressed.value() && (state.percentage - percentage).abs() > f32::EPSILON {
 			state.percentage = percentage;
 		}
 
@@ -296,10 +405,10 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
-			Event::Window(window::Event::RedrawRequested(now)) => {
-				if state.pressed.is_animating(*now) {
-					shell.request_redraw();
-				}
+			Event::Window(window::Event::RedrawRequested(now))
+				if state.pressed.is_animating(*now) =>
+			{
+				shell.request_redraw();
 			}
 			_ => (),
 		}
@@ -350,112 +459,18 @@ where
 		let bounds = layout.bounds();
 		let track = self.track;
 		let handle = self.handle;
-		let running_color = self.running_color;
 
 		let s = track.shadow_width;
 
-		let shadow = Rectangle {
-			x: bounds.x + s,
-			y: bounds.y + s,
-			width: bounds.width - s,
-			height: bounds.height - s,
-		};
-
-		renderer.fill_quad(
-			renderer::Quad {
-				bounds: shadow,
-				border: iced::Border {
-					radius: track.radius.into(),
-					..Default::default()
-				},
-				snap: true,
-				..Default::default()
-			},
-			track.border,
-		);
+		self.render_track(bounds, renderer, state);
 
 		let percentage_filled =
 			if state.pressed.value() && !state.pressed.is_animating(Instant::now()) {
 				state.percentage
 			} else {
-				self.percentage_from_value(self.value.clone())
+				self.percentage_from_value(self.value)
 			};
 		let percentage_filled = percentage_filled.clamp(0.0, 1.0);
-		// debug_assert!(
-		//     percentage_filled <= 1.0 && percentage_filled >= 0.0,
-		//     "Percentage {percentage_filled} not between 0 and 1"
-		// );
-
-		let filled_width = (bounds.width - s) * percentage_filled;
-		let unfilled_width = (bounds.width - s) * (1.0 - percentage_filled);
-
-		let track_filled = Rectangle {
-			x: bounds.x,
-			y: bounds.y,
-			width: filled_width,
-			height: bounds.height - s,
-		};
-		let track_unfilled = Rectangle {
-			x: bounds.x + filled_width,
-			y: bounds.y,
-			width: unfilled_width,
-			height: bounds.height - s,
-		};
-
-		renderer.fill_quad(
-			renderer::Quad {
-				bounds: track_filled,
-				border: iced::Border {
-					radius: border::Radius {
-						top_left: track.radius,
-						bottom_left: track.radius,
-						..Default::default()
-					},
-					..Default::default()
-				},
-				snap: true,
-				..Default::default()
-			},
-			running_color,
-		);
-		renderer.fill_quad(
-			renderer::Quad {
-				bounds: track_unfilled,
-				border: iced::Border {
-					radius: border::Radius {
-						top_right: track.radius,
-						bottom_right: track.radius,
-						..Default::default()
-					},
-					..Default::default()
-				},
-				snap: true,
-				..Default::default()
-			},
-			track.background,
-		);
-
-		let border = Rectangle {
-			x: bounds.x,
-			y: bounds.y,
-			width: bounds.width - s,
-			height: bounds.height - s,
-		};
-
-		renderer.fill_quad(
-			renderer::Quad {
-				bounds: border,
-				border: iced::Border {
-					radius: track.radius.into(),
-					color: track.border,
-					width: track.border_width,
-					..Default::default()
-				},
-				snap: true,
-				..Default::default()
-			},
-			Color::TRANSPARENT,
-		);
 
 		let handle_size = bounds.height * 1.25;
 		let track_width = bounds.width - s;
@@ -500,7 +515,6 @@ where
 					radius: handle.radius.into(),
 					width: handle.border_width,
 					color: handle.border,
-					..Default::default()
 				},
 				snap: true,
 				..Default::default()

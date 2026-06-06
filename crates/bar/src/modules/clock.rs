@@ -68,7 +68,6 @@ impl Clock {
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
 		.background(COLORS.decorative.purple)
-		.into()
 	}
 
 	fn text<'a>(label: &'a str) -> Element<'a, Message> {

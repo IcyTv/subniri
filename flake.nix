@@ -447,6 +447,10 @@
           }:
             lib.nameValuePair name package)
           workspacePackageList);
+
+        rustDevshellToolchain = rustToolchain.override {
+          extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src" "clippy"];
+        };
       in {
         packages =
           workspacePackages
@@ -480,10 +484,7 @@
             commonArgs.buildInputs
             ++ commonArgs.nativeBuildInputs
             ++ (with pkgs; [
-              (rust-bin.stable.latest.default.override
-                {
-                  extensions = ["rustfmt" "rustc" "rust-analyzer" "cargo" "rust-src"];
-                })
+              rustDevshellToolchain
               cargo-hakari
               cargo-expand
               cargo-machete
@@ -495,7 +496,7 @@
                 inherit pkgs system;
                 languages.rust = {
                   enable = true;
-                  toolchain = rustToolchain;
+                  toolchain = rustDevshellToolchain;
                 };
               })
             ]);

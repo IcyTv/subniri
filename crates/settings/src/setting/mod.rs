@@ -15,19 +15,19 @@ pub enum Message {
 }
 
 #[derive(Clone)]
-pub struct Setting {
+pub struct Tab {
 	pub kind: SettingKind,
 	pub selected: Animation<bool>,
 	nightlight: nightlight::State,
 }
 
-impl Hash for Setting {
+impl Hash for Tab {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
 		self.kind.hash(state);
 	}
 }
 
-impl Setting {
+impl Tab {
 	fn default_animation() -> Animation<bool> {
 		Animation::new(false).quick()
 	}
@@ -163,9 +163,7 @@ impl SettingKind {
 	) -> Element<'a, Message> {
 		match self {
 			Self::Nightlight => nightlight::view(config, nightlight_state).map(Message::Nightlight),
-			Self::Homeassistant => "".into(),
-			Self::Spotify => "".into(),
-			Self::MoreSoon => "".into(),
+			Self::Homeassistant | Self::Spotify | Self::MoreSoon => "".into(),
 		}
 	}
 }

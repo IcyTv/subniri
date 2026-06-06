@@ -18,6 +18,7 @@ pub fn neo_toggle<Message>() -> NeoToggle<Message> {
 	NeoToggle::new()
 }
 
+#[must_use]
 pub struct NeoToggle<Message> {
 	track: NeoSurfaceStyle,
 	fill_color: Color,
@@ -29,10 +30,16 @@ pub struct NeoToggle<Message> {
 	enabled: bool,
 }
 
+impl<Message> Default for NeoToggle<Message> {
+	fn default() -> Self {
+		Self::new()
+	}
+}
+
 impl<Message> NeoToggle<Message> {
 	pub fn new() -> Self {
 		Self {
-			track: Default::default(),
+			track: NeoSurfaceStyle::default(),
 			fill_color: COLORS.decorative.green70,
 			handle: NeoSurfaceStyle {
 				background: COLORS.decorative.yellow,
@@ -167,12 +174,10 @@ where
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
-				if over {
-					if let Some(on_toggled) = &self.on_toggled {
-						self.toggled = !self.toggled;
-						state.toggled.go_mut(self.toggled, Instant::now());
-						shell.publish(on_toggled(self.toggled));
-					}
+				if over && let Some(on_toggled) = &self.on_toggled {
+					self.toggled = !self.toggled;
+					state.toggled.go_mut(self.toggled, Instant::now());
+					shell.publish(on_toggled(self.toggled));
 				}
 
 				state.pressed.go_mut(false, Instant::now());
@@ -186,10 +191,10 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
-			Event::Window(window::Event::RedrawRequested(now)) => {
-				if state.pressed.is_animating(*now) || state.toggled.is_animating(*now) {
-					shell.request_redraw();
-				}
+			Event::Window(window::Event::RedrawRequested(now))
+				if (state.pressed.is_animating(*now) || state.toggled.is_animating(*now)) =>
+			{
+				shell.request_redraw();
 			}
 			_ => (),
 		}
@@ -280,7 +285,6 @@ where
 					radius: track_style.radius.into(),
 					color: track_style.border,
 					width: track_style.border_width,
-					..Default::default()
 				},
 				snap: true,
 				..Default::default()
@@ -309,7 +313,6 @@ where
 					radius: handle_style.radius.into(),
 					width: handle_style.border_width,
 					color: handle_style.border,
-					..Default::default()
 				},
 				snap: true,
 				..Default::default()

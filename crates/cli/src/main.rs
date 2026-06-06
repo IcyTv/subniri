@@ -143,7 +143,7 @@ async fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error
 
 			table.add_row(vec![
 				Cell::new("Preset").fg(Color::Yellow),
-				Cell::new(format!("{}", preset)),
+				Cell::new(preset.to_string()),
 			]);
 
 			note("New nightlight settings", table)?;

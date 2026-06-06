@@ -1,6 +1,9 @@
 pub use kdl;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
+use std::sync::Arc;
+
+type ConfigSource = Arc<NamedSource<String>>;
 
 #[derive(thiserror::Error, Diagnostic, Debug)]
 pub enum ConfigError {
@@ -11,7 +14,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 	},
 	#[error("Wrong type")]
 	#[diagnostic(code(config::wrong_type))]
@@ -19,7 +22,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 	},
 	#[error("Wrong type, expected: {expected}")]
 	#[diagnostic(code(config::wrong_type))]
@@ -27,7 +30,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 		expected: String,
 	},
 	#[error("Unknown field {name}")]
@@ -37,7 +40,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 	},
 	#[error("Duplicate field {name}")]
 	#[diagnostic(code(config::duplicate_field))]
@@ -46,7 +49,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 	},
 	#[error("Out of range")]
 	#[diagnostic(code(config::out_of_range))]
@@ -54,7 +57,7 @@ pub enum ConfigError {
 		#[label]
 		span: Option<SourceSpan>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 	},
 	#[error(transparent)]
 	#[diagnostic(transparent)]
@@ -67,7 +70,7 @@ pub enum ConfigError {
 		#[source]
 		error: jiff::Error,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 		#[label]
 		span: Option<SourceSpan>,
 	},
@@ -77,7 +80,7 @@ pub enum ConfigError {
 		#[source]
 		error: anyhow::Error,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 		#[label]
 		span: Option<SourceSpan>,
 	},
@@ -87,7 +90,7 @@ pub enum ConfigError {
 		#[source]
 		error: url::ParseError,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 		#[label]
 		span: Option<SourceSpan>,
 	},
@@ -95,9 +98,9 @@ pub enum ConfigError {
 	#[diagnostic(code(config::validation_failed))]
 	Validation {
 		#[source]
-		error: garde::error::Report,
+		error: Box<garde::error::Report>,
 		#[source_code]
-		src: Option<NamedSource<String>>,
+		src: Option<ConfigSource>,
 		#[label]
 		span: Option<SourceSpan>,
 	},
@@ -172,7 +175,7 @@ impl ConfigError {
 		Self::Validation {
 			src: None,
 			span,
-			error,
+			error: Box::new(error),
 		}
 	}
 
@@ -250,54 +253,55 @@ impl ConfigError {
 	}
 
 	pub fn with_source(self, source: impl Into<String>) -> Self {
-		let source = NamedSource::new("config", source.into());
+		let source = source.into();
+		let source = || Arc::new(NamedSource::new("config", source.clone()));
 		match self {
 			Self::MissingField { name, span, .. } => Self::MissingField {
 				name,
 				span,
-				src: Some(source),
+				src: Some(source()),
 			},
 			Self::WrongType { span, .. } => Self::WrongType {
 				span,
-				src: Some(source),
+				src: Some(source()),
 			},
 			Self::WrongTypeExpected { span, expected, .. } => Self::WrongTypeExpected {
 				span,
-				src: Some(source),
+				src: Some(source()),
 				expected,
 			},
 			Self::UnknownField { name, span, .. } => Self::UnknownField {
 				name,
 				span,
-				src: Some(source),
+				src: Some(source()),
 			},
 			Self::DuplicateField { name, span, .. } => Self::DuplicateField {
 				name,
 				span,
-				src: Some(source),
+				src: Some(source()),
 			},
 			Self::OutOfRange { span, .. } => Self::OutOfRange {
 				span,
-				src: Some(source),
+				src: Some(source()),
 			},
 			Self::InvalidDateTime { error, span, .. } => Self::InvalidDateTime {
 				error,
-				src: Some(source),
+				src: Some(source()),
 				span,
 			},
 			Self::DateTimeParse { error, span, .. } => Self::DateTimeParse {
 				error,
-				src: Some(source),
+				src: Some(source()),
 				span,
 			},
 			Self::InvalidUrl { error, span, .. } => Self::InvalidUrl {
 				error,
-				src: Some(source),
+				src: Some(source()),
 				span,
 			},
 			Self::Validation { error, span, .. } => Self::Validation {
 				error,
-				src: Some(source),
+				src: Some(source()),
 				span,
 			},
 			err @ Self::ParseError(_) => err,
@@ -391,7 +395,7 @@ impl<T: ConfigValue> Config for T {
 			return Err(ConfigError::wrong_type(None).expected("no children"));
 		}
 
-		if node.entries().len() < 1 {
+		if node.entries().is_empty() {
 			return Err(ConfigError::missing_field("value", None));
 		}
 
@@ -523,7 +527,7 @@ config_value_for_kdl_ty!(Integer; i8, i16, i32, i64, i128, u8, u16, u32, u64, u1
 impl ConfigValue for url::Url {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
 		match value {
-			kdl::KdlValue::String(url) => url::Url::parse(&*url).map_err(Into::into),
+			kdl::KdlValue::String(url) => url::Url::parse(url).map_err(Into::into),
 			_ => Err(ConfigError::wrong_type(None)),
 		}
 	}
@@ -614,7 +618,7 @@ impl ConfigValue for std::path::PathBuf {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
 		match value {
 			kdl::KdlValue::String(s) => Ok(std::path::PathBuf::from(s)),
-			_ => return Err(ConfigError::wrong_type(None)),
+			_ => Err(ConfigError::wrong_type(None)),
 		}
 	}
 

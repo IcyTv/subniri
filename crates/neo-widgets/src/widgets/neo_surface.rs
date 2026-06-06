@@ -41,8 +41,8 @@ impl Default for NeoContentSurfaceStyle {
 	}
 }
 
-pub fn layout<'a, Message, Theme, Renderer>(
-	content: &mut Element<'a, Message, Theme, Renderer>, tree: &mut widget::Tree,
+pub fn layout<Message, Theme, Renderer>(
+	content: &mut Element<'_, Message, Theme, Renderer>, tree: &mut widget::Tree,
 	renderer: &Renderer, limits: &layout::Limits, width: Length, height: Length,
 	style: NeoContentSurfaceStyle,
 ) -> layout::Node

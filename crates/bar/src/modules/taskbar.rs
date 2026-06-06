@@ -105,14 +105,13 @@ impl Taskbar {
 			Message::Event(Event::WindowOpenedOrChanged { window }) => {
 				let index = self.windows.iter().position(|w| w.id == window.id);
 
-				if window.is_focused {
-					if let Some(current_focus) = self
+				if window.is_focused
+					&& let Some(current_focus) = self
 						.windows
 						.iter_mut()
 						.find(|w| w.is_focused && w.id != window.id)
-					{
-						current_focus.is_focused = false;
-					}
+				{
+					current_focus.is_focused = false;
 				}
 
 				if let Some(index) = index {
@@ -120,7 +119,7 @@ impl Taskbar {
 				} else {
 					let insert_idx = self
 						.windows
-						.binary_search_by(|w| cmp_windows(&w, &window))
+						.binary_search_by(|w| cmp_windows(w, &window))
 						.unwrap_or_else(|e| e);
 
 					self.windows.insert(insert_idx, window);
@@ -172,23 +171,23 @@ impl Taskbar {
 			}
 
 			if workspace.is_active {
-				row = row.push(workspace_btn(&workspace, &[]));
+				row = row.push(workspace_btn(workspace, &[]));
 
 				row = row.push(space().width(1));
 
 				for window in &self.windows {
-					if window.workspace_id.map_or(true, |wid| wid != workspace.id) {
+					if window.workspace_id != Some(workspace.id) {
 						continue;
 					}
 
-					row = row.push(window_btn(&window));
+					row = row.push(window_btn(window));
 				}
 
 				if index != self.workspaces.len() - 1 {
 					row = row.push(space().width(1));
 				}
 			} else {
-				row = row.push(workspace_btn(&workspace, &self.windows));
+				row = row.push(workspace_btn(workspace, &self.windows));
 			}
 		}
 
@@ -350,13 +349,12 @@ impl Taskbar {
 
 		serde_json::from_str::<'_, Reply>(&buf)
 			.map_err(|e| format!("{e}"))?
-			.map_err(|e| format!("{e}"))
+			.map_err(|e| e.to_string())
 	}
 }
 
 async fn get_stream() -> Result<BufReader<UnixStream>, String> {
-	let socket_path =
-		std::env::var_os(SOCKET_PATH_ENV).ok_or_else(|| "failed to get niri socket path")?;
+	let socket_path = std::env::var_os(SOCKET_PATH_ENV).ok_or("failed to get niri socket path")?;
 
 	let stream = UnixStream::connect(socket_path)
 		.await
@@ -384,7 +382,7 @@ async fn open_event_stream() -> Result<impl Stream<Item = Result<Event, io::Erro
 
 	let reply = serde_json::from_str::<'_, Reply>(&buf)
 		.map_err(|e| format!("{e}"))?
-		.map_err(|e| format!("{e}"))?;
+		.map_err(|e| e.to_string())?;
 
 	match reply {
 		Response::Handled => (),
@@ -407,7 +405,7 @@ async fn open_event_stream() -> Result<impl Stream<Item = Result<Event, io::Erro
 }
 
 fn cmp_windows(a: &Window, b: &Window) -> Ordering {
-	win_sort_key(&a).cmp(&win_sort_key(b))
+	win_sort_key(a).cmp(&win_sort_key(b))
 }
 
 fn win_sort_key(w: &Window) -> impl Ord {

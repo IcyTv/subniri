@@ -127,7 +127,7 @@ impl Launcher {
 	}
 
 	fn view(&self, id: Id) -> Element<'_, Message> {
-		if self.open.map_or(true, |i| i != id) {
+		if self.open != Some(id) {
 			return "".into();
 		}
 

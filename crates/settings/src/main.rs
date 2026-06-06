@@ -5,14 +5,14 @@ use iced::{
 	Alignment, Background, Border, Element, Font, Length, Subscription, Task, Theme, font,
 	futures::StreamExt,
 	theme,
-	widget::{column, container, row, space, svg, text},
+	widget::{column, container, row, space, text},
 };
 use neo_widgets::{
 	style::COLORS,
 	widgets::{neo_button, neo_card},
 };
 
-use crate::setting::Setting;
+use crate::setting::Tab;
 
 mod setting;
 
@@ -37,25 +37,25 @@ enum Message {
 
 struct Settings {
 	selected_setting: usize,
-	settings: Vec<Setting>,
+	tabs: Vec<Tab>,
 	config: ConfigFile,
 	doc: KdlDocument,
 }
 
 impl Settings {
 	fn new() -> Self {
-		let mut first = Setting::nightlight();
+		let mut first = Tab::nightlight();
 		first.selected.go_mut(true, Instant::now());
 
 		let (doc, config) = ConfigFile::load().unwrap();
 
 		Self {
 			selected_setting: 0,
-			settings: vec![
+			tabs: vec![
 				first,
-				Setting::spotify(),
-				Setting::homeassistant(),
-				Setting::more_soon(),
+				Tab::spotify(),
+				Tab::homeassistant(),
+				Tab::more_soon(),
 			],
 			config,
 			doc,
@@ -76,8 +76,8 @@ impl Settings {
 		let mut subs = vec![config_watch];
 
 		let at = Instant::now();
-		if self.settings.iter().any(|setting| setting.is_animating(at)) {
-			subs.push(iced::window::frames().map(|_| Message::Redraw))
+		if self.tabs.iter().any(|setting| setting.is_animating(at)) {
+			subs.push(iced::window::frames().map(|_| Message::Redraw));
 		}
 
 		Subscription::batch(subs)
@@ -106,7 +106,7 @@ impl Settings {
 			Message::Redraw => iced_runtime::task::effect(iced_runtime::Action::Window(
 				iced::window::Action::RedrawAll,
 			)),
-			Message::Setting(index, msg) => self.settings[index]
+			Message::Setting(index, msg) => self.tabs[index]
 				.update(&mut self.config, &mut self.doc, msg)
 				.map(move |msg| Message::Setting(index, msg)),
 			Message::Noop => Task::none(),
@@ -141,7 +141,7 @@ impl Settings {
 
 		let at = Instant::now();
 
-		for (index, setting) in self.settings.iter().enumerate() {
+		for (index, setting) in self.tabs.iter().enumerate() {
 			let widget = neo_button(
 				row![
 					container(setting.icon())
@@ -193,7 +193,7 @@ impl Settings {
 		.spacing(18)
 		.padding(18);
 
-		if let Some(setting) = self.settings.get(self.selected_setting) {
+		if let Some(setting) = self.tabs.get(self.selected_setting) {
 			content = content.push(
 				setting
 					.view(&self.config)
@@ -204,6 +204,7 @@ impl Settings {
 		content.into()
 	}
 
+	#[allow(clippy::unused_self)]
 	fn style(&self, _theme: &Theme) -> theme::Style {
 		theme::Style {
 			background_color: COLORS.decorative.pink70,
@@ -216,7 +217,7 @@ impl Settings {
 
 		let now = Instant::now();
 
-		for (i, item) in self.settings.iter_mut().enumerate() {
+		for (i, item) in self.tabs.iter_mut().enumerate() {
 			item.selected.go_mut(i == index, now);
 		}
 	}

@@ -6,6 +6,9 @@ description = "Config helpers for the subniri shell"
 edition.workspace = true
 documentation.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 async-stream.workspace = true
 config-macros = { version = "0.0.1", path = "../config-macros" }

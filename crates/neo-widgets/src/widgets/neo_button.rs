@@ -37,6 +37,7 @@ pub fn neo_button<'a, Message, Theme, Renderer>(
 	NeoButton::new(content)
 }
 
+#[must_use]
 pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
 	content: Element<'a, Message, Theme, Renderer>,
 	on_press: Option<OnPress<'a, Message>>,
@@ -250,23 +251,23 @@ where
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
 				if state.pressed.value() =>
 			{
-				if over && !is_captured {
-					if let Some(message) = self.on_press.clone() {
-						shell.publish(match message {
-							OnPress::Message(message) => message,
-							OnPress::WithBounds(callback) => callback(bounds),
-						});
-					}
+				if over
+					&& !is_captured && let Some(message) = self.on_press.clone()
+				{
+					shell.publish(match message {
+						OnPress::Message(message) => message,
+						OnPress::WithBounds(callback) => callback(bounds),
+					});
 				}
 				// state.pressed = false;
 				state.pressed = state.pressed.clone().go(false, Instant::now());
 				shell.request_redraw();
 				shell.capture_event();
 			}
-			Event::Window(window::Event::RedrawRequested(now)) => {
-				if state.pressed.is_animating(*now) {
-					shell.request_redraw();
-				}
+			Event::Window(window::Event::RedrawRequested(now))
+				if state.pressed.is_animating(*now) =>
+			{
+				shell.request_redraw();
 			}
 			_ => (),
 		}

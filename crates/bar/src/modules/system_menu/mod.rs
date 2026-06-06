@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use config::{ConfigFile, SystemMenuWidgets};
-use daemon::{NightlightClient, NightlightProxy};
+use daemon::NightlightProxy;
 use futures::Stream;
 use iced::{
 	Element, Font, Length, Subscription, Task,
@@ -47,8 +47,8 @@ pub struct SystemMenu {
 	username: String,
 	avatar: image::Handle,
 	uptime: jiff::Span,
-	wifi: wifi::Wifi,
-	bluetooth: bluetooth::Bluetooth,
+	wifi: Box<wifi::Wifi>,
+	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight_enabled: bool,
 	temperature: u32,
 	brightness: f64,
@@ -71,10 +71,10 @@ impl SystemMenu {
 			username,
 			avatar,
 			uptime,
-			wifi: wifi::Wifi::new(),
-			bluetooth: bluetooth::Bluetooth::new(),
+			wifi: Box::new(wifi::Wifi::new()),
+			bluetooth: Box::new(bluetooth::Bluetooth::new()),
 			nightlight_enabled: config.nightlight.enabled,
-			brightness: config.nightlight.day.brightness as f64,
+			brightness: config.nightlight.day.brightness,
 			temperature: config.nightlight.day.temperature,
 		}
 	}
@@ -141,7 +141,6 @@ impl SystemMenu {
 			.height(MODULE_HEIGHT)
 			.background(COLORS.decorative.blue)
 			.radius(MODULE_RADIUS)
-			.into()
 	}
 
 	pub fn view_popup(&self) -> Element<'_, Message> {
