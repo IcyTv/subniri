@@ -174,7 +174,9 @@ async fn launcher(
 	{
 		if !is_proxy_ready(
 			&conn,
-			launcher_common::LauncherProxy::DESTINATION.as_ref().unwrap(),
+			launcher_common::LauncherProxy::DESTINATION
+				.as_ref()
+				.unwrap(),
 			launcher_common::LauncherProxy::PATH.as_ref().unwrap(),
 		)
 		.await?
