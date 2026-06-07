@@ -492,6 +492,7 @@
               uv
               python314
               libGL
+              (cargo2nix.packages.${system}.cargo2nix)
               (nvim.lib.makeNeovimWithLanguages {
                 inherit pkgs system;
                 languages.rust = {

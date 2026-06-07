@@ -293,9 +293,8 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
 	for field in &mut s.fields {
 		let attrs: FieldAttrs = deluxe::extract_attributes_optional(&mut field.attrs, &errors);
 
-		let field_ident = match field.ident.as_ref() {
-			Some(field) => field,
-			None => abort!(field, "Field without a name"),
+		let Some(field_ident) = field.ident.as_ref() else {
+			abort!(field, "Field without a name");
 		};
 		let field_name = attrs.name.unwrap_or_else(|| field_ident.to_string());
 
@@ -326,37 +325,19 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
             });
 		} else if attrs.argument {
 			let parse = parse_field(&field.ty);
-			if attrs.argument {
-   				let fallback =
-   					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-   				initializer.push(quote! {
-                       {
-                           if let Some(value) = doc.get(current_property) {
-                               out.#field_ident = #parse;
-                               current_property += 1;
-                           } else if #allow_missing {
-                               out.#field_ident = #fallback;
-                           } else {
-                               return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
-                           }
-                       }
-                   });
-   			} else {
-   				let fallback =
-   					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-   				initializer.push(quote! {
-                       {
-                           if let Some(value) = doc.get(current_property) {
-                               out.#field_ident = #parse;
-                               current_property += 1;
-                           } else if #allow_missing {
-                               out.#field_ident = #fallback;
-                           } else {
-                               return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
-                           }
-                       }
-                   });
-   			}
+			let fallback = default_fallback(default_expr, &field.ty, is_option, has_default_attr);
+			initializer.push(quote! {
+			   {
+				   if let Some(value) = doc.get(current_property) {
+					   out.#field_ident = #parse;
+					   current_property += 1;
+				   } else if #allow_missing {
+					   out.#field_ident = #fallback;
+				   } else {
+					   return Err(::config_traits::ConfigError::missing_field(#field_name.to_string(), Some(doc.span())));
+				   }
+			   }
+		   });
 		} else {
 			let seen_ident = seen_ident(field_ident, &field.ty);
 			if let Some(seen_ident) = seen_ident.as_ref() {
@@ -374,7 +355,7 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
                     }
                 });
 			}
-			if let Some(parse_child) = parse_child_field(
+			let parse_child = parse_child_field(
 				&field.ty,
 				&field_name,
 				field_ident,
@@ -382,9 +363,8 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
 				default_expr,
 				is_option,
 				attrs.key.as_deref(),
-			) {
-				child_match.push(parse_child);
-			}
+			);
+			child_match.push(parse_child);
 		}
 	}
 
@@ -432,9 +412,8 @@ fn generate_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStr
 			abort!(field, "ConfigFile fields cannot be parameters or arguments");
 		}
 
-		let field_ident = match field.ident.as_ref() {
-			Some(field) => field,
-			None => abort!(field, "Field without a name"),
+		let Some(field_ident) = field.ident.as_ref() else {
+			abort!(field, "Field without a name");
 		};
 		let field_name = attrs.name.unwrap_or_else(|| field_ident.to_string());
 
@@ -462,15 +441,14 @@ fn generate_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStr
             });
 		}
 
-		if let Some(parse_node) = parse_document_field(
+		let parse_node = parse_document_field(
 			&field.ty,
 			&field_name,
 			field_ident,
 			seen_ident.as_ref(),
 			attrs.key.as_deref(),
-		) {
-			node_match.push(parse_node);
-		}
+		);
+		node_match.push(parse_node);
 	}
 
 	quote! {
@@ -498,9 +476,8 @@ fn generate_serialize_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) ->
 	for field in &mut s.fields {
 		let attrs: FieldAttrs = deluxe::extract_attributes_optional(&mut field.attrs, &errors);
 
-		let field_ident = match field.ident.as_ref() {
-			Some(field) => field,
-			None => abort!(field, "Field without a name"),
+		let Some(field_ident) = field.ident.as_ref() else {
+			abort!(field, "Field without a name");
 		};
 		let field_name = attrs.name.unwrap_or_else(|| field_ident.to_string());
 
@@ -538,7 +515,7 @@ fn generate_serialize_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) ->
 			});
 		} else {
 			let docs = doc_comment(&field.attrs);
-			if let Some(tokens) = serialize_child_update(
+			let tokens = serialize_child_update(
 				&field.ty,
 				&field_name,
 				field_ident,
@@ -546,9 +523,8 @@ fn generate_serialize_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) ->
 				attrs.list_cutoff,
 				attrs.key.as_deref(),
 				docs.as_deref(),
-			) {
-				initializer.push(tokens);
-			}
+			);
+			initializer.push(tokens);
 		}
 	}
 
@@ -578,9 +554,8 @@ fn generate_serialize_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -
 			abort!(field, "ConfigFile fields cannot be parameters or arguments");
 		}
 
-		let field_ident = match field.ident.as_ref() {
-			Some(field) => field,
-			None => abort!(field, "Field without a name"),
+		let Some(field_ident) = field.ident.as_ref() else {
+			abort!(field, "Field without a name");
 		};
 		let field_name = attrs.name.unwrap_or_else(|| field_ident.to_string());
 
@@ -626,10 +601,11 @@ fn parse_field(ty: &syn::Type) -> TokenStream {
 	}
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_child_field(
 	ty: &syn::Type, field_name: &str, field_ident: &syn::Ident, seen_ident: Option<&syn::Ident>,
 	_default_expr: Option<&syn::Expr>, _is_option: bool, key: Option<&str>,
-) -> Option<TokenStream> {
+) -> TokenStream {
 	if is_option(ty) {
 		let inner = option_inner_ty(ty).unwrap();
 		let parse = parse_child_value_or_config(inner, field_name);
@@ -641,7 +617,7 @@ fn parse_child_field(
                 #ident = true;
             }
         });
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				if child.entries().len() == 1
 					&& child.entries()[0].name().is_none()
@@ -656,7 +632,7 @@ fn parse_child_field(
 					out.#field_ident = Some(value);
 				}
 			}
-		});
+		};
 	}
 
 	if is_bool(ty) {
@@ -668,7 +644,7 @@ fn parse_child_field(
                 #ident = true;
             }
         });
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				let entries = child.entries();
 				let value = if entries.is_empty() {
@@ -691,12 +667,12 @@ fn parse_child_field(
 				#seen
 				out.#field_ident = value;
 			}
-		});
+		};
 	}
 
 	if let Some(inner) = vec_inner_ty(ty) {
 		if key.is_none() {
-			return Some(quote! {
+			return quote! {
 				#field_name => {
 					let entries = child.entries();
 					for entry in entries {
@@ -730,16 +706,16 @@ fn parse_child_field(
 						}
 					}
 				}
-			});
+			};
 		}
 
 		let parse = parse_child_value_or_config(inner, field_name);
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				#parse
 				out.#field_ident.push(value);
 			}
-		});
+		};
 	}
 
 	let parse = parse_child_value_or_config(ty, field_name);
@@ -751,13 +727,13 @@ fn parse_child_field(
             #ident = true;
         }
     });
-	Some(quote! {
+	quote! {
 		#field_name => {
 			#parse
 			#seen
 			out.#field_ident = value;
 		}
-	})
+	}
 }
 
 fn parse_child_value_or_config(ty: &syn::Type, field_name: &str) -> TokenStream {
@@ -774,10 +750,11 @@ fn parse_child_value_or_config(ty: &syn::Type, field_name: &str) -> TokenStream 
 	}
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_document_field(
 	ty: &syn::Type, field_name: &str, field_ident: &syn::Ident, seen_ident: Option<&syn::Ident>,
 	key: Option<&str>,
-) -> Option<TokenStream> {
+) -> TokenStream {
 	if is_option(ty) {
 		let inner = option_inner_ty(ty).unwrap();
 		let parse = parse_node_value_or_config(inner, field_name);
@@ -789,7 +766,7 @@ fn parse_document_field(
                 #ident = true;
             }
         });
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				if node.entries().len() == 1
 					&& node.entries()[0].name().is_none()
@@ -804,7 +781,7 @@ fn parse_document_field(
 					out.#field_ident = Some(value);
 				}
 			}
-		});
+		};
 	}
 
 	if is_bool(ty) {
@@ -816,7 +793,7 @@ fn parse_document_field(
                 #ident = true;
             }
         });
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				let entries = node.entries();
 				let value = if entries.is_empty() {
@@ -839,12 +816,12 @@ fn parse_document_field(
 				#seen
 				out.#field_ident = value;
 			}
-		});
+		};
 	}
 
 	if let Some(inner) = vec_inner_ty(ty) {
 		if key.is_none() {
-			return Some(quote! {
+			return quote! {
 				#field_name => {
 					let entries = node.entries();
 					for entry in entries {
@@ -876,16 +853,16 @@ fn parse_document_field(
 						}
 					}
 				}
-			});
+			};
 		}
 
 		let parse = parse_node_value_or_config(inner, field_name);
-		return Some(quote! {
+		return quote! {
 			#field_name => {
 				#parse
 				out.#field_ident.push(value);
 			}
-		});
+		};
 	}
 
 	let parse = parse_node_value_or_config(ty, field_name);
@@ -897,13 +874,13 @@ fn parse_document_field(
             #ident = true;
         }
     });
-	Some(quote! {
+	quote! {
 		#field_name => {
 			#parse
 			#seen
 			out.#field_ident = value;
 		}
-	})
+	}
 }
 
 fn list_style_bool(
@@ -961,13 +938,14 @@ fn parameter_value_tokens(ty: &syn::Type, field_ident: &syn::Ident) -> TokenStre
 	}
 }
 
+#[allow(clippy::too_many_lines)]
 fn serialize_child_update(
 	ty: &syn::Type, field_name: &str, field_ident: &syn::Ident, list_style: Option<ListStyle>,
 	list_cutoff: Option<usize>, key: Option<&str>, doc_comment: Option<&str>,
-) -> Option<TokenStream> {
+) -> TokenStream {
 	let apply_doc_comment = apply_doc_comment(doc_comment, &quote! { new_node });
 	if is_option(ty) {
-		return Some(quote! {
+		return quote! {
 			{
 				let child_index = node.ensure_children().nodes().iter().position(|n| n.name().value() == #field_name);
 				let child = match child_index {
@@ -981,14 +959,14 @@ fn serialize_child_update(
 				};
 				::config_traits::ConfigSerialize::apply_to_kdl_node(&self.#field_ident, child)?;
 			}
-		});
+		};
 	}
 
 	if let Some(_inner) = vec_inner_ty(ty) {
 		if key.is_none() {
 			let len_ident = syn::Ident::new("__len", proc_macro2::Span::call_site());
 			let use_children = list_style_bool(list_style, list_cutoff, &len_ident);
-			return Some(quote! {
+			return quote! {
 				{
 					let child_index = node
 						.ensure_children()
@@ -1038,7 +1016,7 @@ fn serialize_child_update(
 						child.clear_children();
 					}
 				}
-			});
+			};
 		}
 
 		let update_items = if let Some(key) = key {
@@ -1071,7 +1049,7 @@ fn serialize_child_update(
 			}
 		};
 
-		return Some(quote! {
+		return quote! {
 			{
 				let child_index = node
 					.ensure_children()
@@ -1090,10 +1068,10 @@ fn serialize_child_update(
 				let child_nodes = child.ensure_children();
 				#update_items
 			}
-		});
+		};
 	}
 
-	Some(quote! {
+	quote! {
 		{
 			let child_index = node.ensure_children().nodes().iter().position(|n| n.name().value() == #field_name);
 				let child = match child_index {
@@ -1107,7 +1085,7 @@ fn serialize_child_update(
 			};
 			::config_traits::ConfigSerialize::apply_to_kdl_node(&self.#field_ident, child)?;
 		}
-	})
+	}
 }
 
 #[allow(clippy::too_many_lines)]

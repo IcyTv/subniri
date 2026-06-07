@@ -45,10 +45,11 @@ impl Bluetooth {
 	}
 
 	pub fn init(&self) -> Task<Message> {
+		let _ = self;
 		Task::perform(load_data(), Message::AsyncDataLoaded)
 	}
 
-	pub fn subscription(&self) -> Subscription<Message> {
+	pub fn subscription() -> Subscription<Message> {
 		Subscription::run(|| {
 			async_stream::stream! {
 				let session = match Session::new().await {
@@ -81,13 +82,12 @@ impl Bluetooth {
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
 			Message::AsyncDataLoaded(Ok(data)) => {
-				self.set_state(data.state.clone());
+				self.set_state(&data.state);
 				self.async_data = Some(data);
 			}
 			Message::AsyncDataLoaded(Err(error)) => {
 				log::warn!("Failed to initialize Bluetooth system menu widget: {error}");
 			}
-			Message::StateChanged(state) => self.set_state(state),
 			Message::Toggle if let Some(data) = &self.async_data => {
 				let session = data.session.clone();
 
@@ -114,14 +114,14 @@ impl Bluetooth {
 					Message::Toggled,
 				);
 			}
-			Message::Toggled(state) => self.set_state(state),
+			Message::Toggled(state) | Message::StateChanged(state) => self.set_state(&state),
 			_ => (),
 		}
 
 		Task::none()
 	}
 
-	fn set_state(&mut self, state: BluetoothState) {
+	fn set_state(&mut self, state: &BluetoothState) {
 		self.enabled.go_mut(state.enabled, Instant::now());
 		self.active_devices = state.active_devices;
 	}

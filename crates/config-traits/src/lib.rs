@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 pub use kdl;
 
 use miette::{Diagnostic, NamedSource, SourceSpan};
@@ -131,7 +133,7 @@ impl ConfigError {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn wrong_type(span: Option<SourceSpan>) -> Self {
 		Self::WrongType { span, src: None }
 	}
@@ -152,12 +154,12 @@ impl ConfigError {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn out_of_range(span: Option<SourceSpan>) -> Self {
 		Self::OutOfRange { span, src: None }
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn invalid_date_time(e: jiff::Error, span: Option<SourceSpan>) -> Self {
 		Self::InvalidDateTime {
 			error: e,
@@ -166,7 +168,7 @@ impl ConfigError {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn date_time_parse(e: anyhow::Error, span: Option<SourceSpan>) -> Self {
 		Self::DateTimeParse {
 			error: e,
@@ -175,7 +177,7 @@ impl ConfigError {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn validation(error: garde::error::Report, span: Option<SourceSpan>) -> Self {
 		Self::Validation {
 			src: None,
@@ -184,6 +186,12 @@ impl ConfigError {
 		}
 	}
 
+	/// Turn a `WrongType` into a `WrongTypeExpected`
+	///
+	/// # Panics
+	///
+	/// In debug mode, if error not a `WrongType` error. Just returns the error in release mode
+	#[must_use]
 	pub fn expected(self, ty: impl Into<String>) -> Self {
 		let Self::WrongType { span, src } = self else {
 			#[cfg(debug_assertions)]
@@ -199,7 +207,7 @@ impl ConfigError {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn with_span_no_overwrite(self, new_span: SourceSpan) -> Self {
 		match self {
 			Self::MissingField { name, span, src } if span.is_none() => Self::MissingField {
@@ -258,6 +266,7 @@ impl ConfigError {
 		}
 	}
 
+	#[must_use]
 	pub fn with_source(self, source: impl Into<String>) -> Self {
 		let source = source.into();
 		let source = || Arc::new(NamedSource::new("config", source.clone()));
@@ -310,8 +319,7 @@ impl ConfigError {
 				src: Some(source()),
 				span,
 			},
-			err @ Self::ParseError(_) => err,
-			err @ Self::IoError(_) => err,
+			err @ (Self::ParseError(_) | Self::IoError(_)) => err,
 		}
 	}
 }
@@ -423,13 +431,15 @@ impl<T: ConfigValue> Config for T {
 
 impl<T: ConfigSerialize> ConfigSerialize for Option<T> {
 	fn apply_to_kdl_node(&self, node: &mut kdl::KdlNode) -> Result<(), ConfigError> {
-		if let Some(value) = self { value.apply_to_kdl_node(node) } else {
-  				node.entries_mut().clear();
-  				node.entries_mut()
-  					.push(kdl::KdlEntry::new(kdl::KdlValue::Null));
-  				node.clear_children();
-  				Ok(())
-  			}
+		if let Some(value) = self {
+			value.apply_to_kdl_node(node)
+		} else {
+			node.entries_mut().clear();
+			node.entries_mut()
+				.push(kdl::KdlEntry::new(kdl::KdlValue::Null));
+			node.clear_children();
+			Ok(())
+		}
 	}
 }
 
@@ -450,7 +460,7 @@ impl ConfigValue for String {
 			kdl::KdlValue::Bool(b) => Ok(b.to_string()),
 			kdl::KdlValue::Float(f) => Ok(f.to_string()),
 			kdl::KdlValue::Integer(i) => Ok(i.to_string()),
-			_ => Err(ConfigError::wrong_type(None)),
+			kdl::KdlValue::Null => Err(ConfigError::wrong_type(None)),
 		}
 	}
 
@@ -473,6 +483,7 @@ impl ConfigValue for bool {
 }
 
 impl ConfigValue for f32 {
+	#[allow(clippy::cast_possible_truncation)]
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
 		match value {
 			kdl::KdlValue::Float(f) => Ok(*f as Self),
@@ -482,7 +493,7 @@ impl ConfigValue for f32 {
 	}
 
 	fn to_kdl_value(&self) -> kdl::KdlValue {
-		kdl::KdlValue::Float(f64::from((*self)))
+		kdl::KdlValue::Float(f64::from(*self))
 	}
 }
 
@@ -529,10 +540,11 @@ config_value_for_kdl_ty!(Integer; i8, i16, i32, i64, i128, u8, u16, u32, u64, u1
 
 impl ConfigValue for url::Url {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
-		match value {
-			kdl::KdlValue::String(url) => url::Url::parse(url).map_err(Into::into),
-			_ => Err(ConfigError::wrong_type(None)),
-		}
+		let kdl::KdlValue::String(string) = value else {
+			return Err(ConfigError::wrong_type(None));
+		};
+
+		url::Url::parse(string).map_err(Into::into)
 	}
 
 	fn to_kdl_value(&self) -> kdl::KdlValue {
@@ -542,15 +554,15 @@ impl ConfigValue for url::Url {
 
 impl ConfigValue for jiff::Timestamp {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
-		let string = match value {
-			kdl::KdlValue::String(s) => s,
-			_ => return Err(ConfigError::wrong_type(None)),
+		let kdl::KdlValue::String(string) = value else {
+			return Err(ConfigError::wrong_type(None));
 		};
 
 		dateparser::parse(string)
 			.map_err(|e| ConfigError::date_time_parse(e, None))
 			.map(|dt| {
-				jiff::Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32).unwrap()
+				jiff::Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos().cast_signed())
+					.unwrap()
 			})
 	}
 
@@ -562,9 +574,8 @@ impl ConfigValue for jiff::Timestamp {
 
 impl ConfigValue for jiff::civil::Time {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
-		let string = match value {
-			kdl::KdlValue::String(s) => s,
-			_ => return Err(ConfigError::wrong_type(None)),
+		let kdl::KdlValue::String(string) = value else {
+			return Err(ConfigError::wrong_type(None));
 		};
 
 		string
@@ -585,9 +596,8 @@ impl ConfigValue for jiff::civil::Time {
 
 impl ConfigValue for jiff::SignedDuration {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
-		let string = match value {
-			kdl::KdlValue::String(s) => s,
-			_ => return Err(ConfigError::wrong_type(None)),
+		let kdl::KdlValue::String(string) = value else {
+			return Err(ConfigError::wrong_type(None));
 		};
 
 		string
@@ -602,9 +612,8 @@ impl ConfigValue for jiff::SignedDuration {
 
 impl ConfigValue for jiff::Span {
 	fn from_kdl_value(value: &kdl::KdlValue) -> Result<Self, ConfigError> {
-		let string = match value {
-			kdl::KdlValue::String(s) => s,
-			_ => return Err(ConfigError::wrong_type(None)),
+		let kdl::KdlValue::String(string) = value else {
+			return Err(ConfigError::wrong_type(None));
 		};
 
 		string

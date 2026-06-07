@@ -146,6 +146,7 @@ fn current_preset(config: &config::Nightlight) -> NightlightPreset {
 	}
 }
 
+#[allow(clippy::cast_sign_loss)]
 fn seconds_since_midnight(time: jiff::civil::Time) -> u32 {
 	(time.hour() as u32 * 60 * 60) + (time.minute() as u32 * 60) + time.second() as u32
 }
@@ -252,13 +253,13 @@ impl NightlightDbus {
 		}
 	}
 
-	fn unavailable_error(&self) -> zbus::fdo::Error {
+	fn unavailable_error() -> zbus::fdo::Error {
 		zbus::fdo::Error::Failed("Nightlight is not enabled. Enable it in the config.".into())
 	}
 
 	async fn apply_state(&self, state: DesiredState) -> zbus::fdo::Result<DesiredState> {
 		let Some(controller) = &self.inner.controller else {
-			return Err(self.unavailable_error());
+			return Err(Self::unavailable_error());
 		};
 
 		controller
@@ -270,6 +271,7 @@ impl NightlightDbus {
 		Ok(state)
 	}
 
+	#[allow(clippy::cast_possible_truncation)]
 	async fn apply_preset(
 		&self, preset: NightlightPreset, brightness: f64, temperature: u32,
 	) -> zbus::fdo::Result<DesiredState> {
@@ -323,6 +325,7 @@ impl NightlightDbus {
 		f64::from(self.state().await.brightness)
 	}
 
+	#[allow(clippy::cast_possible_truncation)]
 	#[zbus(property, name = "Brightness")]
 	async fn set_brightness(
 		&self, brightness: f64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
@@ -543,7 +546,7 @@ impl NightlightControllerTask {
 			wl_registry::Event::GlobalRemove(name) => {
 				state.events.push(WaylandEvent::OutputRemoved(*name));
 			}
-			_ => {}
+			wl_registry::Event::Global(_) => {}
 		});
 
 		let mut controller = Self {
@@ -562,7 +565,7 @@ impl NightlightControllerTask {
 			.cloned()
 			.collect::<Vec<_>>();
 
-		for global in output_globals {
+		for global in &output_globals {
 			controller.add_output(global)?;
 		}
 
@@ -579,9 +582,9 @@ impl NightlightControllerTask {
 					command = command_rx.recv() => {
 						match command {
 							Some(command) => {
-								if self.handle_command(command)? {
-									return Ok(());
-								}
+								self.handle_command(command);
+								return Ok(());
+
 							}
 							None => return Ok(()),
 						}
@@ -601,9 +604,8 @@ impl NightlightControllerTask {
 					command = command_rx.recv() => {
 						match command {
 							Some(command) => {
-								if self.handle_command(command)? {
-									return Ok(());
-								}
+								self.handle_command(command);
+								return Ok(());
 							}
 							None => return Ok(()),
 						}
@@ -621,21 +623,21 @@ impl NightlightControllerTask {
 		self.pending_apply = Some(Box::pin(tokio::time::sleep(self.debounce)));
 	}
 
-	fn handle_command(&mut self, command: Command) -> std::io::Result<bool> {
+	fn handle_command(&mut self, command: Command) -> bool {
 		match command {
 			Command::SetState { state, response_tx } => {
 				let result = self.set_state(state);
-				let _ = response_tx.send(result);
-				Ok(false)
+				let _ = response_tx.send(Ok(result));
+				false
 			}
-			Command::Shutdown => Ok(true),
+			Command::Shutdown => true,
 		}
 	}
 
-	fn set_state(&mut self, state: DesiredState) -> std::io::Result<DesiredState> {
+	fn set_state(&mut self, state: DesiredState) -> DesiredState {
 		self.state = state;
 		self.schedule_apply();
-		Ok(self.state)
+		self.state
 	}
 
 	fn apply_state(&mut self) -> std::io::Result<()> {
@@ -663,7 +665,7 @@ impl NightlightControllerTask {
 		Ok(())
 	}
 
-	fn add_output(&mut self, global: GlobalArgs) -> std::io::Result<()> {
+	fn add_output(&mut self, global: &GlobalArgs) -> std::io::Result<()> {
 		if self.outputs.iter().any(|o| o.global_name == global.name) {
 			return Ok(());
 		}
@@ -709,7 +711,7 @@ impl NightlightControllerTask {
 			match event {
 				WaylandEvent::OutputAdded(global) => {
 					log::debug!("gamma output added: {}", global.name);
-					self.add_output(global)?;
+					self.add_output(&global)?;
 					self.connection.async_flush().await?;
 				}
 				WaylandEvent::OutputRemoved(name) => {
@@ -785,6 +787,7 @@ impl NightlightControllerTask {
 		let mut push_col = |channel: f32| {
 			for i in 0..size {
 				let x = i as f32 / (size - 1) as f32;
+				#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 				let wchar = (x * channel * brightness * f32::from(u16::MAX)).clamp(0.0, 65535.0) as u16;
 				let bytes = wchar.to_ne_bytes();
 				mmap[idx..idx + 2].copy_from_slice(&bytes);

@@ -85,68 +85,68 @@ pub const fn rgb(hex: u32) -> Color {
 }
 
 pub const DECORATIVE: Decorative = Decorative {
-	pink: rgb(0xFF8ACD),
-	pink50: rgb(0xFF8ACD),
-	pink70: rgb(0xFFC6E7),
-	pink90: rgb(0xFFE2F3),
+	pink: rgb(0xFF8_ACD),
+	pink50: rgb(0xFF8_ACD),
+	pink70: rgb(0xFFC_6E7),
+	pink90: rgb(0xFFE_2F3),
 
-	purple: rgb(0xB37DFF),
-	purple50: rgb(0xB37DFF),
-	purple70: rgb(0xD9BEFF),
-	purple90: rgb(0xF0E5FF),
+	purple: rgb(0xB37_DFF),
+	purple50: rgb(0xB37_DFF),
+	purple70: rgb(0xD9B_EFF),
+	purple90: rgb(0xF0E_5FF),
 
-	blue: rgb(0x8AF1FF),
-	blue50: rgb(0x8AF1FF),
-	blue70: rgb(0xB3F6FF),
-	blue90: rgb(0xD6FAFF),
+	blue: rgb(0x8AF_1FF),
+	blue50: rgb(0x8AF_1FF),
+	blue70: rgb(0xB3F_6FF),
+	blue90: rgb(0xD6F_AFF),
 
-	yellow: rgb(0xFFE959),
-	yellow50: rgb(0xFFE959),
-	yellow70: rgb(0xFFF29B),
-	yellow90: rgb(0xFFF8C5),
+	yellow: rgb(0xFFE_959),
+	yellow50: rgb(0xFFE_959),
+	yellow70: rgb(0xFFF_29B),
+	yellow90: rgb(0xFFF_8C5),
 
-	green: rgb(0x76F7AE),
-	green50: rgb(0x76F7AE),
-	green70: rgb(0xADFACE),
-	green90: rgb(0xCFFCE3),
+	green: rgb(0x76F_7AE),
+	green50: rgb(0x76F_7AE),
+	green70: rgb(0xADF_ACE),
+	green90: rgb(0xCFF_CE3),
 
-	orange: rgb(0xFFB366),
-	orange50: rgb(0xFFB366),
-	orange70: rgb(0xFFD1A3),
-	orange90: rgb(0xFFF0DD),
+	orange: rgb(0xFFB_366),
+	orange50: rgb(0xFFB_366),
+	orange70: rgb(0xFFD_1A3),
+	orange90: rgb(0xFFF_0DD),
 
-	coral: rgb(0xFF7F96),
-	coral50: rgb(0xFF7F96),
-	coral70: rgb(0xFFB8C4),
-	coral90: rgb(0xFFE3E8),
+	coral: rgb(0xFF7_F96),
+	coral50: rgb(0xFF7_F96),
+	coral70: rgb(0xFFB_8C4),
+	coral90: rgb(0xFFE_3E8),
 
-	mint: rgb(0x67E8C2),
-	mint50: rgb(0x67E8C2),
-	mint70: rgb(0xA8F3DD),
-	mint90: rgb(0xDDFBF2),
+	mint: rgb(0x67E_8C2),
+	mint50: rgb(0x67E_8C2),
+	mint70: rgb(0xA8F_3DD),
+	mint90: rgb(0xDDF_BF2),
 
-	teal: rgb(0x5FD6D2),
-	teal50: rgb(0x5FD6D2),
-	teal70: rgb(0x9BE9E6),
-	teal90: rgb(0xD8FAF8),
+	teal: rgb(0x5FD_6D2),
+	teal50: rgb(0x5FD_6D2),
+	teal70: rgb(0x9BE_9E6),
+	teal90: rgb(0xD8F_AF8),
 };
 
 pub const FEEDBACK: Feedback = Feedback {
-	danger: rgb(0xFF5454),
-	danger50: rgb(0xFF5454),
-	danger90: rgb(0xFFD6D6),
+	danger: rgb(0xFF5_454),
+	danger50: rgb(0xFF5_454),
+	danger90: rgb(0xFFD_6D6),
 
-	warning: rgb(0xFF9F69),
-	warning50: rgb(0xFF9F69),
-	warning90: rgb(0xFFEAD1),
+	warning: rgb(0xFF9_F69),
+	warning50: rgb(0xFF9_F69),
+	warning90: rgb(0xFFE_AD1),
 
-	success: rgb(0x3CD39D),
-	success50: rgb(0x3CD39D),
-	success90: rgb(0xD7F8EC),
+	success: rgb(0x3CD_39D),
+	success50: rgb(0x3CD_39D),
+	success90: rgb(0xD7F_8EC),
 
-	info: rgb(0x63A9FF),
-	info50: rgb(0x63A9FF),
-	info90: rgb(0xDCEBFF),
+	info: rgb(0x63A_9FF),
+	info50: rgb(0x63A_9FF),
+	info90: rgb(0xDCE_BFF),
 };
 
 pub const COLORS: Colors = Colors {
@@ -154,18 +154,17 @@ pub const COLORS: Colors = Colors {
 	feedback: FEEDBACK,
 
 	background: DECORATIVE.pink,
-	disabled_background: rgb(0xA3AEAF),
-	body: rgb(0xFFFBEE),
+	disabled_background: rgb(0xA3A_EAF),
+	body: rgb(0xFFF_BEE),
 
-	text: rgb(0x000000),
-	secondary: rgb(0x000000),
-	border: rgb(0x000000),
-	separator: rgb(0xE2E2E2),
+	text: rgb(0x000_000),
+	secondary: rgb(0x000_000),
+	border: rgb(0x000_000),
+	separator: rgb(0xE2E_2E2),
 
-	white: rgb(0xFFFFFF),
-	black: rgb(0x000000),
+	white: rgb(0xFFF_FFF),
+	black: rgb(0x000_000),
 };
-
 #[must_use]
 pub fn neo_theme() -> iced::Theme {
 	iced::Theme::custom(

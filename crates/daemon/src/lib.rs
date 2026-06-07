@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 pub mod nightlight;
 
 pub const NIGHTLIGHT_BUS_NAME: &str = "de.icytv.subniri.Daemon";
@@ -59,7 +61,7 @@ impl NightlightClient {
 		})
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub fn from_connection(connection: zbus::Connection) -> Self {
 		Self { connection }
 	}
@@ -124,7 +126,7 @@ pub enum NightlightPreset {
 }
 
 impl NightlightPreset {
-	#[must_use] 
+	#[must_use]
 	pub const fn as_str(self) -> &'static str {
 		match self {
 			Self::Day => "day",
@@ -133,6 +135,11 @@ impl NightlightPreset {
 		}
 	}
 
+	/// Parse Nightlight Preset value (day, night or custom)
+	///
+	/// # Errors
+	///
+	/// `InvalidArgs` if the value could not be parsed into one of the presets
 	pub fn parse(value: &str) -> zbus::fdo::Result<Self> {
 		match value {
 			"day" | "Day" => Ok(Self::Day),

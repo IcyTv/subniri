@@ -64,7 +64,7 @@ struct HashableReceiver(Receiver<Message>);
 
 impl Hash for HashableReceiver {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdeadbeefu32.hash(state);
+		0xdead_beefu32.hash(state);
 	}
 }
 
@@ -109,6 +109,7 @@ impl Launcher {
 		Subscription::batch([keyboard, event, dbus])
 	}
 
+	#[allow(clippy::needless_pass_by_value)]
 	fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
 			Message::Close => {
@@ -135,6 +136,8 @@ impl Launcher {
 	}
 
 	fn style(&self, _theme: &Theme) -> Style {
+		let _ = self;
+
 		Style {
 			background_color: Color::TRANSPARENT,
 			text_color: COLORS.text,

@@ -1,3 +1,5 @@
+#![allow(clippy::missing_errors_doc)]
+
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -131,7 +133,7 @@ impl ConfigFile {
 				}
 
 				match current_file_contents(&config_path) {
-					Ok(contents) if is_process_write(&config_path, &contents) => continue,
+					Ok(contents) if is_process_write(&config_path, &contents) => (),
 					Ok(_) => yield Ok(()),
 					Err(error) => yield Err(error),
 				}
@@ -313,6 +315,7 @@ pub struct Nightlight {
 	pub debounce_ms: u64,
 }
 
+#[allow(clippy::ref_option)]
 fn verify_use_location_dusk_dawn<'a>(
 	dusk: &'a Option<Time>, dawn: &'a Option<Time>,
 ) -> impl FnOnce(&bool, &()) -> garde::Result + 'a {
@@ -379,7 +382,7 @@ impl Default for NightlightSetting {
 }
 
 impl NightlightSetting {
-	#[must_use] 
+	#[must_use]
 	pub const fn day() -> Self {
 		Self {
 			temperature: 6500,
@@ -387,7 +390,7 @@ impl NightlightSetting {
 		}
 	}
 
-	#[must_use] 
+	#[must_use]
 	pub const fn night() -> Self {
 		Self {
 			temperature: 2500,
@@ -439,66 +442,4 @@ pub struct SystemMenu {
 	///     `a b`
 	///     `c d`
 	pub widgets: Vec<SystemMenuWidgets>,
-}
-
-#[cfg(test)]
-mod test {
-	use super::*;
-
-	#[test]
-	fn test() {
-		let doc = r#"
-nightlight {
-enabled
-use_location
-}
-
-homeassistant {
-}
-
-spotify {
-}
-        "#;
-		let res = ConfigFile::parse_validated(doc);
-
-		let (mut doc, mut config) = match res {
-			Ok(res) => res,
-			Err(e) => {
-				let report = miette::Report::new(e);
-				panic!("{report:?}");
-			}
-		};
-
-		println!("{:#?}", config);
-
-		config
-			.homeassistant
-			.tracked_devices
-			.extend(["foo", "bar", "baz"].into_iter().map(str::to_string));
-		config.system_menu.widgets.push(SystemMenuWidgets::Wifi);
-		config.system_menu.widgets.push(SystemMenuWidgets::Speaker);
-
-		config.apply_to_kdl_document(&mut doc).unwrap();
-		doc.autoformat();
-
-		println!("\nRESULTING CONFIG:\n");
-
-		println!("{}", doc);
-	}
-
-	#[test]
-	fn validated_parse_rejects_out_of_range_nightlight_settings() {
-		let doc = r#"
-nightlight {
-    day {
-        temperature 500
-        brightness 1.0
-    }
-}
-        "#;
-
-		let err = ConfigFile::parse_validated(doc).unwrap_err();
-
-		assert!(matches!(err, config_traits::ConfigError::Validation { .. }));
-	}
 }

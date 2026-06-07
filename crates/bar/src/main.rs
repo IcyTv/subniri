@@ -37,7 +37,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 			// FIXME: Don't clone
 			let doc = doc.clone();
 			let config = config.clone();
-			move || Bar::new(conn.clone(), doc.clone(), config.clone())
+			move || Bar::new(&conn, doc.clone(), config.clone())
 		},
 		Bar::namespace,
 		Bar::update,
@@ -54,7 +54,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 	})
 	.layer_settings(LayerShellSettings {
 		size: Some((0, BASE_BAR_HEIGHT)),
-		exclusive_zone: BASE_BAR_HEIGHT as i32,
+		exclusive_zone: BASE_BAR_HEIGHT.cast_signed(),
 		anchor: Anchor::Top | Anchor::Left | Anchor::Right,
 		start_mode: StartMode::AllScreens,
 		..Default::default()
@@ -90,7 +90,7 @@ struct Bar {
 
 impl Bar {
 	fn new(
-		connection: Connection, config_doc: kdl::KdlDocument, config_file: ConfigFile,
+		connection: &Connection, config_doc: kdl::KdlDocument, config_file: ConfigFile,
 	) -> (Self, Task<BarMessage>) {
 		let _ = connection;
 
@@ -123,6 +123,7 @@ impl Bar {
 		String::from("polarbar-daemon")
 	}
 
+	#[allow(clippy::too_many_lines)]
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
 			BarMessage::Resumed => Task::future(async {
@@ -165,6 +166,7 @@ impl Bar {
 							min: (1, 1),
 							max: (480, 640),
 						},
+						#[allow(clippy::cast_possible_truncation)]
 						anchor_rect: (
 							bounds.x.round() as i32,
 							bounds.y.round() as i32,
@@ -182,8 +184,12 @@ impl Bar {
 				}))
 				.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
-			BarMessage::Module(_, _, _,
-msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu)) => {
+			BarMessage::Module(
+				_,
+				_,
+				_,
+				msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu),
+			) => {
 				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
 					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
@@ -254,7 +260,7 @@ msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu)) => {
 			}),
 			Task::done(BarMessage::ExclusiveZoneChange {
 				id,
-				zone_size: height as i32,
+				zone_size: height.cast_signed(),
 			}),
 		])
 	}
@@ -268,9 +274,10 @@ msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu)) => {
 			return 1.0;
 		};
 
-		scale_for_screen(height.max(0) as u32)
+		scale_for_screen(height.max(0).cast_unsigned())
 	}
 
+	#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 	fn bar_height_for_scale(scale: f32) -> u32 {
 		(BASE_BAR_HEIGHT as f32 * scale).round() as u32
 	}
@@ -318,6 +325,7 @@ msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu)) => {
 	fn section<'a>(
 		&self, id: Id, section: Section, modules: &'a [Module], output_name: Option<&str>,
 	) -> Element<'a, BarMessage> {
+		let _ = self;
 		modules
 			.iter()
 			.enumerate()
@@ -350,6 +358,7 @@ msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu)) => {
 	}
 
 	fn style(&self, _theme: &Theme) -> iced::theme::Style {
+		let _ = self;
 		iced::theme::Style {
 			// background_color: Color::from_rgba(1.0, 0.0, 0.0, 0.5),
 			background_color: Color::TRANSPARENT,

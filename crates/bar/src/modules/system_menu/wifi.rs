@@ -57,10 +57,11 @@ impl Wifi {
 	}
 
 	pub fn init(&self) -> Task<Message> {
+		let _ = self;
 		Task::perform(load_data(), Message::AsyncDataLoaded)
 	}
 
-	pub fn subscription(&self) -> Subscription<Message> {
+	pub fn subscription() -> Subscription<Message> {
 		Subscription::run(|| {
 			async_stream::stream! {
 				let nm = match NetworkManager::new().await {
@@ -130,7 +131,6 @@ impl Wifi {
 				self.set_state(data.state.clone());
 				self.async_data = Some(data);
 			}
-			Message::StateChanged(state) => self.set_state(state),
 			Message::Toggle if let Some(data) = &self.async_data => {
 				let nm = data.nm.clone();
 				return Task::perform(
@@ -146,8 +146,8 @@ impl Wifi {
 					Message::Toggled,
 				);
 			}
-			Message::Toggled(state) => self.set_state(state),
-			_ => (),
+			Message::Toggled(state) | Message::StateChanged(state) => self.set_state(state),
+			Message::Toggle => (),
 		}
 
 		Task::none()
@@ -184,7 +184,8 @@ impl Wifi {
 	fn subtitle(&self) -> String {
 		if let Some(connection) = &self.active_connection {
 			let strength = connection
-				.strength.map_or_else(|| "-- %".to_string(), |strength| format!("{strength}%"));
+				.strength
+				.map_or_else(|| "-- %".to_string(), |strength| format!("{strength}%"));
 
 			if self.extra_active_connections > 0 {
 				format!(

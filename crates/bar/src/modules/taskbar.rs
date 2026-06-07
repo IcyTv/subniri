@@ -57,7 +57,7 @@ impl Taskbar {
 		})
 	}
 
-	pub fn subscription(&self) -> Subscription<Message> {
+	pub fn subscription() -> Subscription<Message> {
 		Subscription::run(|| {
 			async_stream::stream! {
 				let mut event_stream = pin!(open_event_stream().await.unwrap());
@@ -155,7 +155,7 @@ impl Taskbar {
 				futures::executor::block_on(self.send(Request::Action(Action::FocusWindow { id })))
 					.unwrap();
 			}
-			_ => (),
+			Message::Event(_) => (),
 		}
 	}
 
@@ -201,16 +201,16 @@ impl Taskbar {
 
 fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element<'a, Message> {
 	let content: Element<Message> = if workspace.is_active {
- 		"".into()
- 	} else {
- 		let windows = windows
- 			.iter()
- 			.filter(|w| w.workspace_id == Some(workspace.id))
- 			.take(4)
- 			.collect::<Vec<_>>();
+		"".into()
+	} else {
+		let windows = windows
+			.iter()
+			.filter(|w| w.workspace_id == Some(workspace.id))
+			.take(4)
+			.collect::<Vec<_>>();
 
- 		workspace_preview(&windows)
- 	};
+		workspace_preview(&windows)
+	};
 
 	neo_button(content)
 		.style(NeoButtonStyle {
@@ -411,5 +411,5 @@ fn cmp_windows(a: &Window, b: &Window) -> Ordering {
 fn win_sort_key(w: &Window) -> impl Ord {
 	// TODO what about tabbed? Can niri do tabbed?
 	let (col, tile) = w.layout.pos_in_scrolling_layout.unwrap_or_default();
-	(w.workspace_id, col as i32, tile as i32, w.id)
+	(w.workspace_id, col, tile, w.id)
 }

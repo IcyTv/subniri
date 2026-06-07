@@ -50,7 +50,7 @@ struct HashableReceiver(Receiver<PlayerCommand>);
 
 impl Hash for HashableReceiver {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdeadbeefu32.hash(state);
+		0xdead_beefu32.hash(state);
 	}
 }
 
@@ -152,10 +152,10 @@ impl MediaControls {
 				{
 					let ck = (snapshot.art_url.clone(), snapshot.url.clone()).into();
 					if self.thumbnail_cache.borrow().contains(&ck) {
-     						None
-     					} else {
-     						Some(ck)
-     					}
+						None
+					} else {
+						Some(ck)
+					}
 				} else {
 					None
 				};
@@ -259,14 +259,7 @@ impl MediaControls {
 		))
 	}
 
-	// pub fn view_popup<'a>(&'a self) -> Element<'a, Message> {
-	//     lazy::<'a, Message, _, _, _, _>(
-	//         self.active_player.as_ref().map(|(_, snap)| snap.clone()),
-	//         |active_player| Self::view_popup_inner(active_player),
-	//     )
-	//     .into()
-	// }
-	//
+	#[allow(clippy::too_many_lines)]
 	pub fn view_popup(&self) -> Element<'_, Message> {
 		let art_row = row![
 			space::horizontal(),
@@ -522,7 +515,7 @@ async fn handle_player_command(
 				PlayerCommand::SkipPrevious => player.previous().await,
 				PlayerCommand::SkipNext => player.next().await,
 				// TODO: Maybe turn these into PlayerActions or sth?
-				_ => unreachable!(),
+				PlayerCommand::CyclePlayer => unreachable!(),
 			};
 
 			if let Err(e) = res {
@@ -563,8 +556,7 @@ async fn manage_mpris_event(
 			players.remove(&identity);
 			Some(Message::PlayerDetached(identity))
 		}
-		Ok(MprisEvent::PlayerPropertiesChanged(identity) |
-MprisEvent::PlayerSeeked(identity)) => {
+		Ok(MprisEvent::PlayerPropertiesChanged(identity) | MprisEvent::PlayerSeeked(identity)) => {
 			if let Some(player) = players.get(&identity) {
 				let snapshot = read_player_snapshot(player).await;
 				Some(Message::PlayerUpdated(identity, snapshot))
@@ -716,6 +708,7 @@ async fn load_image_url(
 	Ok(handle)
 }
 
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default, Hash)]
 pub struct PlayerSnapshot {
 	title: String,
@@ -737,6 +730,7 @@ pub struct PlayerSnapshot {
 	can_pause: bool,
 }
 
+#[allow(clippy::too_many_lines)]
 async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
 	let Ok(metadata) = player.metadata().await else {
 		log::warn!("Failed to get player metadata");

@@ -169,6 +169,7 @@ impl Logout {
 		String::from("iceout")
 	}
 
+	#[allow(clippy::unused_self)]
 	fn subscription(&self) -> Subscription<Message> {
 		let keyboard = keyboard::listen().map(|e| match e {
 			keyboard::Event::KeyPressed {
@@ -206,13 +207,9 @@ impl Logout {
 		Subscription::batch([keyboard, event])
 	}
 
+	#[allow(clippy::needless_pass_by_value)]
 	fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
-			Message::Exit => {
-				if matches!(self.state, LogoutState::Choosing) {
-					return iced::exit();
-				}
-			}
 			Message::PowerCapabilitiesLoaded(capabilities) => {
 				self.power_capabilities = capabilities;
 				if !self.is_entry_enabled(self.selected_entry) {
@@ -243,7 +240,8 @@ impl Logout {
 					self.selected_entry = entry;
 				}
 			}
-			Message::IcedEvent(iced::event::Event::Window(iced::window::Event::Unfocused)) => {
+			Message::IcedEvent(iced::event::Event::Window(iced::window::Event::Unfocused))
+			| Message::Exit => {
 				if matches!(self.state, LogoutState::Choosing) {
 					return iced::exit();
 				}
@@ -511,6 +509,7 @@ impl Logout {
 		.spacing(12)
 	}
 
+	#[allow(clippy::unused_self)]
 	fn transition(&self, label: &'static str) -> Element<'_, Message> {
 		let content = neo_card(
 			column![
@@ -564,6 +563,7 @@ impl Logout {
 	// 	.into()
 	// }
 
+	#[allow(clippy::unused_self)]
 	fn style(&self, _theme: &Theme) -> Style {
 		Style {
 			background_color: Color::TRANSPARENT,
@@ -571,6 +571,7 @@ impl Logout {
 		}
 	}
 
+	#[allow(clippy::unused_self)]
 	fn lock(&self) -> Task<Message> {
 		Task::future(async move {
 			let action = LogoutAction::Lock;
@@ -599,6 +600,7 @@ impl Logout {
 		})
 	}
 
+	#[allow(clippy::unused_self)]
 	fn sign_out(&self) -> Task<Message> {
 		Task::future(async move {
 			let action = LogoutAction::SignOut;

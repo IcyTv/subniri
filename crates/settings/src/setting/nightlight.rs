@@ -12,7 +12,7 @@ use neo_widgets::{
 };
 use num_traits::{AsPrimitive, Num, NumCast};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub enum Message {
 	IncreaseDawn,
 	DecreaseDawn,
@@ -33,13 +33,12 @@ pub enum Message {
 
 #[derive(Clone, Default)]
 pub struct State {
-	preview_day_temp: Option<u32>,
-	preview_day_bright: Option<f64>,
-	preview_night_temp: Option<u32>,
-	preview_night_bright: Option<f64>,
+	day_temp: Option<u32>,
+	day_bright: Option<f64>,
+	night_temp: Option<u32>,
+	night_bright: Option<f64>,
 }
 
-#[inline(always)]
 pub fn accent_color() -> Color {
 	COLORS.decorative.orange
 }
@@ -78,43 +77,44 @@ pub fn update(config: &mut ConfigFile, state: &mut State, message: Message) -> T
 			return Task::none();
 		}
 		Message::PreviewDayTemp(temp) => {
-			state.preview_day_temp = Some(temp);
+			state.day_temp = Some(temp);
 			return Task::none();
 		}
 		Message::PreviewDayBright(bright) => {
-			state.preview_day_bright = Some(bright);
+			state.day_bright = Some(bright);
 			return Task::none();
 		}
 		Message::PreviewNightTemp(temp) => {
-			state.preview_night_temp = Some(temp);
+			state.night_temp = Some(temp);
 			return Task::none();
 		}
 		Message::PreviewNightBright(bright) => {
-			state.preview_night_bright = Some(bright);
+			state.night_bright = Some(bright);
 			return Task::none();
 		}
 		Message::UpdateDayTemp(temp) => {
-			state.preview_day_temp = None;
+			state.day_temp = None;
 			config.nightlight.day.temperature = temp;
 		}
 		Message::UpdateDayBright(bright) => {
-			state.preview_day_bright = None;
+			state.day_bright = None;
 			config.nightlight.day.brightness = bright;
 		}
 		Message::UpdateNightTemp(temp) => {
-			state.preview_night_temp = None;
+			state.night_temp = None;
 			config.nightlight.night.temperature = temp;
 		}
 		Message::UpdateNightBright(bright) => {
-			state.preview_night_bright = None;
+			state.night_bright = None;
 			config.nightlight.night.brightness = bright;
 		}
-		_ => return Task::none(),
+		Message::UpdateConfig => return Task::none(),
 	}
 
 	Task::done(Message::UpdateConfig)
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message> {
 	let dawn = config
 		.nightlight
@@ -125,17 +125,13 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 		.nightlight
 		.dusk
 		.unwrap_or(jiff::civil::Time::new(21, 30, 0, 0).unwrap());
-	let day_temp = state
-		.preview_day_temp
-		.unwrap_or(config.nightlight.day.temperature);
-	let day_bright = state
-		.preview_day_bright
-		.unwrap_or(config.nightlight.day.brightness);
+	let day_temp = state.day_temp.unwrap_or(config.nightlight.day.temperature);
+	let day_bright = state.day_bright.unwrap_or(config.nightlight.day.brightness);
 	let night_temp = state
-		.preview_night_temp
+		.night_temp
 		.unwrap_or(config.nightlight.night.temperature);
 	let night_bright = state
-		.preview_night_bright
+		.night_bright
 		.unwrap_or(config.nightlight.night.brightness);
 
 	column![

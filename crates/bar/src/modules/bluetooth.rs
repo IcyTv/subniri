@@ -191,13 +191,13 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 
 		while let Some(ref ma) = maybe_adapter {
 			let adapter = if let Some(adapter) = ma {
-   					yield Message::AdapterFound;
-   					adapter
-   				} else {
-   					yield  Message::AdapterLost;
-   					maybe_adapter = session_stream.next().await;
-   					continue;
-   				};
+					   yield Message::AdapterFound;
+					   adapter
+				   } else {
+					   yield  Message::AdapterLost;
+					   maybe_adapter = session_stream.next().await;
+					   continue;
+				   };
 
 			let adapter_events = match adapter.events().await {
 				Ok(events) => events,

@@ -154,7 +154,7 @@ struct PwEventReceiverHashable(pub async_channel::Receiver<PwEvent>);
 
 impl Hash for PwEventReceiverHashable {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdeadbeefu32.hash(state);
+		0xdead_beefu32.hash(state);
 	}
 }
 
@@ -181,6 +181,7 @@ impl fmt::Debug for Volume {
 }
 
 impl PwConnection {
+	#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 	fn connect(event_tx: async_channel::Sender<PwEvent>) -> Result<Self, String> {
 		pipewire_native::init();
 
@@ -461,7 +462,7 @@ impl PwConnection {
 }
 
 impl Volume {
-	pub async fn new() -> Result<Self, String> {
+	pub fn new() -> Result<Self, String> {
 		let (event_tx, event_rx) = async_channel::unbounded();
 		let connection = PwConnection::connect(event_tx.clone())?;
 
@@ -769,7 +770,8 @@ impl Volume {
 		}
 	}
 
-	fn handle_connection_lost(&mut self, reason: String) -> Task<Message> {
+	fn handle_connection_lost(&mut self, reason: impl AsRef<str>) -> Task<Message> {
+		let reason = reason.as_ref();
 		log::warn!("PipeWire connection lost: {reason}");
 
 		self.pending_health_check = None;
@@ -828,18 +830,15 @@ impl Volume {
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
-		let sink = match self
+		let Some(sink) = self
 			.default_sink
 			.as_ref()
 			.and_then(|id| self.devices.get(id))
-		{
-			Some(sink) => sink,
-			None => {
-				return neo_button("loading")
-					.height(MODULE_HEIGHT)
-					.radius(MODULE_RADIUS)
-					.background(COLORS.decorative.yellow);
-			}
+		else {
+			return neo_button("loading")
+				.height(MODULE_HEIGHT)
+				.radius(MODULE_RADIUS)
+				.background(COLORS.decorative.yellow);
 		};
 
 		let volume = sink.volume.normalized();
@@ -898,7 +897,9 @@ impl Volume {
 		let (sink_name, sink_volume) = self
 			.default_sink
 			.and_then(|id| self.devices.get(&id))
-			.map_or(("<unknown>", PwVolume::default()), |d| (d.label.as_str(), d.volume.clone()));
+			.map_or(("<unknown>", PwVolume::default()), |d| {
+				(d.label.as_str(), d.volume.clone())
+			});
 
 		let speaker_icon = if sink_volume.mute {
 			phosphor_icon!("speaker-x")
@@ -931,7 +932,9 @@ impl Volume {
 		let (source_name, source_volume) = self
 			.default_source
 			.and_then(|id| self.devices.get(&id))
-			.map_or(("<unknown>", PwVolume::default()), |d| (d.label.as_str(), d.volume.clone()));
+			.map_or(("<unknown>", PwVolume::default()), |d| {
+				(d.label.as_str(), d.volume.clone())
+			});
 
 		let mic_icon = if source_volume.mute {
 			phosphor_icon!("microphone-slash")
@@ -1028,15 +1031,15 @@ impl PwVolume {
 
 	fn linear(&self) -> f32 {
 		if self.channel_volums.is_empty() {
-  			self.volume.max(0.0).cbrt()
-  		} else {
-  			self.channel_volums
-  				.iter()
-  				.copied()
-  				.map(|v| v.max(0.0).cbrt())
-  				.sum::<f32>()
-  				/ self.channel_volums.len() as f32
-  		}
+			self.volume.max(0.0).cbrt()
+		} else {
+			self.channel_volums
+				.iter()
+				.copied()
+				.map(|v| v.max(0.0).cbrt())
+				.sum::<f32>()
+				/ self.channel_volums.len() as f32
+		}
 	}
 
 	fn channel_count(&self) -> usize {
@@ -1195,9 +1198,8 @@ fn parse_channelmix_max_volume(
 
 		while parser.available() > 0 {
 			let key_pod = parser.pop_raw_pod()?;
-			let value_pod = match parser.pop_raw_pod() {
-				Ok(pod) => pod,
-				Err(_) => break,
+			let Ok(value_pod) = parser.pop_raw_pod() else {
+				break;
 			};
 
 			let Ok(key) = key_pod.decode::<String>() else {
@@ -1219,6 +1221,7 @@ fn parse_channelmix_max_volume(
 fn decode_numeric_pod(pod: &RawPod<'_>) -> Result<Option<f32>, pipewire_native_spa::pod::Error> {
 	let value = match pod.type_() {
 		Type::Float => Some(pod.decode::<f32>()?),
+		#[allow(clippy::cast_possible_truncation)]
 		Type::Double => Some(pod.decode::<f64>()? as f32),
 		Type::Int => Some(pod.decode::<i32>()? as f32),
 		Type::Long => Some(pod.decode::<i64>()? as f32),

@@ -19,7 +19,7 @@ pub enum Module {
 	Network,
 	Bluetooth(Option<bluetooth::Bluetooth>),
 	Clock(clock::Clock),
-	Volume(Option<volume::Volume>),
+	Volume(Result<volume::Volume, String>),
 	MediaControls(media_controls::MediaControls),
 	Taskbar(Option<taskbar::Taskbar>),
 }
@@ -40,7 +40,6 @@ pub enum ModuleMessage {
 	BluetoothInitialized(Result<bluetooth::Bluetooth, String>),
 	Bluetooth(bluetooth::Message),
 
-	VolumeInitialized(Result<volume::Volume, String>),
 	Volume(volume::Message),
 
 	TaskbarInitialized(Result<taskbar::Taskbar, String>),
@@ -71,7 +70,7 @@ impl Module {
 	}
 
 	pub fn volume() -> Self {
-		Self::Volume(None)
+		Self::Volume(volume::Volume::new())
 	}
 
 	pub fn media_controls() -> Self {
@@ -87,7 +86,7 @@ impl Module {
 	}
 
 	pub fn set_popup_id(&mut self, id: Id) {
-		let _ = id;
+		let _ = (self, id);
 	}
 
 	pub fn init_task(&self) -> Task<ModuleMessage> {
@@ -96,9 +95,6 @@ impl Module {
 				bluetooth::Bluetooth::new(),
 				ModuleMessage::BluetoothInitialized,
 			),
-			Self::Volume(None) => {
-				Task::perform(volume::Volume::new(), ModuleMessage::VolumeInitialized)
-			}
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
 			}
@@ -125,10 +121,6 @@ impl Module {
 					Err(error) => log::warn!("Failed to initialize Bluetooth module: {error}"),
 				}
 			}
-			(Self::Volume(volume), ModuleMessage::VolumeInitialized(result)) => match result {
-				Ok(initialized) => *volume = Some(initialized),
-				Err(error) => log::warn!("Failed to initialize Volme module: {error}"),
-			},
 			(Self::Taskbar(taskbar), ModuleMessage::TaskbarInitialized(result)) => match result {
 				Ok(initialized) => *taskbar = Some(initialized),
 				Err(error) => log::warn!("Failed to initialize Niri taskbar: {error}"),
@@ -136,7 +128,7 @@ impl Module {
 			(Self::Bluetooth(Some(bluetooth)), ModuleMessage::Bluetooth(message)) => {
 				bluetooth.update(message);
 			}
-			(Self::Volume(Some(volume)), ModuleMessage::Volume(message)) => {
+			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => clock.update(message),
@@ -163,13 +155,15 @@ impl Module {
 			Self::Bluetooth(Some(bluetooth)) => {
 				bluetooth.subscription().map(ModuleMessage::Bluetooth)
 			}
-			Self::Volume(Some(volume)) => volume.subscription().map(ModuleMessage::Volume),
-			Self::Clock(clock) => clock.subscription().map(ModuleMessage::Clock),
+			Self::Volume(Ok(volume)) => volume.subscription().map(ModuleMessage::Volume),
+			Self::Clock(_) => clock::Clock::subscription().map(ModuleMessage::Clock),
 			Self::MediaControls(controls) => {
 				controls.subscription().map(ModuleMessage::MediaControls)
 			}
-			Self::Taskbar(Some(taskbar)) => taskbar.subscription().map(ModuleMessage::Taskbar),
-			Self::SystemMenu(menu) => menu.subscription().map(ModuleMessage::SystemMenu),
+			Self::Taskbar(Some(_)) => taskbar::Taskbar::subscription().map(ModuleMessage::Taskbar),
+			Self::SystemMenu(_) => {
+				system_menu::SystemMenu::subscription().map(ModuleMessage::SystemMenu)
+			}
 			_ => Subscription::none(),
 		}
 	}
@@ -190,12 +184,13 @@ impl Module {
 					ModuleMessage::Pressed(ModuleKind::MediaControls, bounds)
 				})
 				.into(),
-			Self::Volume(Some(volume)) => volume
+			Self::Volume(Ok(volume)) => volume
 				.view()
 				.map(ModuleMessage::Volume)
 				.on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::Volume, bounds))
 				.into(),
-			Self::Volume(None) => loading(COLORS.decorative.yellow),
+			// TODO
+			Self::Volume(Err(_e)) => loading(COLORS.decorative.yellow),
 			Self::Network => network::network()
 				.map(ModuleMessage::Network)
 				.on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::Network, bounds))
@@ -224,7 +219,7 @@ impl Module {
 				controls.view_popup().map(ModuleMessage::MediaControls)
 			}
 			Self::SystemMenu(menu) => menu.view_popup().map(ModuleMessage::SystemMenu),
-			Self::Volume(Some(vol)) => vol.view_popup().map(ModuleMessage::Volume),
+			Self::Volume(Ok(vol)) => vol.view_popup().map(ModuleMessage::Volume),
 			Self::Bluetooth(Some(bt)) => bt.view_popup().map(ModuleMessage::Bluetooth),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)

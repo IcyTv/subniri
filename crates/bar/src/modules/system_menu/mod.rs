@@ -58,7 +58,8 @@ impl SystemMenu {
 	pub fn new(config: &ConfigFile) -> Self {
 		let username = User::from_uid(Uid::effective())
 			.ok()
-			.flatten().map_or_else(|| "<unknown>".to_string(), |u| u.name);
+			.flatten()
+			.map_or_else(|| "<unknown>".to_string(), |u| u.name);
 		let avatar = image::Handle::from_bytes(
 			include_bytes!("../../../../../assets/avatar.gif").as_slice(),
 		);
@@ -84,7 +85,7 @@ impl SystemMenu {
 		])
 	}
 
-	pub fn subscription(&self) -> Subscription<Message> {
+	pub fn subscription() -> Subscription<Message> {
 		// TODO: Don't block...
 		let nightlight = Subscription::run(|| futures::executor::block_on(nighlight_stream()));
 
@@ -99,15 +100,15 @@ impl SystemMenu {
 				},
 				Duration::from_mins(1),
 			),
-			self.wifi.subscription().map(Message::Wifi),
-			self.bluetooth.subscription().map(Message::Bluetooth),
+			wifi::Wifi::subscription().map(Message::Wifi),
+			bluetooth::Bluetooth::subscription().map(Message::Bluetooth),
 			nightlight,
 		])
 	}
 
 	pub fn update(&mut self, message: Message, config: &ConfigFile) -> Task<Message> {
 		// FIXME: I absolutely hate this
-		self.widgets = config.system_menu.widgets.clone();
+		self.widgets.clone_from(&config.system_menu.widgets);
 
 		if matches!(
 			message,
@@ -134,6 +135,7 @@ impl SystemMenu {
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
+		let _ = self;
 		neo_button(svg(phosphor_icon!("squares-four", "bold")).width(Length::Shrink))
 			.width(48.0)
 			.height(MODULE_HEIGHT)
@@ -141,6 +143,7 @@ impl SystemMenu {
 			.radius(MODULE_RADIUS)
 	}
 
+	#[allow(clippy::too_many_lines)]
 	pub fn view_popup(&self) -> Element<'_, Message> {
 		let mut content = column![].spacing(8);
 
@@ -285,11 +288,9 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 	};
 
 	let smallest = match largest {
-		Unit::Year => Unit::Day,    // Y M D
-		Unit::Month => Unit::Hour,  // M D H
-		Unit::Day => Unit::Minute,  // D H M
-		Unit::Hour => Unit::Minute, // H M
-		_ => Unit::Minute,
+		Unit::Year => Unit::Day,   // Y M D
+		Unit::Month => Unit::Hour, // M D H
+		_ => Unit::Minute,         // D H M
 	};
 
 	Ok(uptime.round(
