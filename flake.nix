@@ -2,7 +2,7 @@
   description = "Build a cargo workspace";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
 
     flake-utils.url = "github:numtide/flake-utils";
 
@@ -492,7 +492,8 @@
               uv
               python314
               libGL
-              (cargo2nix.packages.${system}.cargo2nix)
+              cachix
+              cargo2nix.packages.${system}.cargo2nix
               (nvim.lib.makeNeovimWithLanguages {
                 inherit pkgs system;
                 languages.rust = {
