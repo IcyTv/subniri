@@ -369,6 +369,10 @@
                 name = "settings";
                 binName = "snowconf";
               })
+              (mkWrappedGuiOverride {
+                name = "launcher";
+                binName = "avalaunch";
+              })
             ];
         };
 
