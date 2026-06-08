@@ -221,6 +221,7 @@ where
 
 		Widget::update(
 			self.content.as_widget_mut(),
+			#[allow(clippy::indexing_slicing)]
 			&mut tree.children[0],
 			event,
 			layout.child(0),
@@ -313,6 +314,7 @@ where
 			offset,
 			|renderer| {
 				self.content.as_widget().draw(
+					#[allow(clippy::indexing_slicing)]
 					&tree.children[0],
 					renderer,
 					theme,

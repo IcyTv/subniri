@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use config::{ConfigFile, SystemMenuWidgets};
 use daemon::NightlightProxy;
-use futures::Stream;
+use futures::{StreamExt as _, stream};
 use iced::{
 	Element, Font, Length, Subscription, Task,
 	alignment::Vertical,
@@ -19,7 +19,6 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
-use tokio_stream::StreamExt as _;
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -301,12 +300,24 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 	)?)
 }
 
-async fn nighlight_stream() -> impl Stream<Item = Message> {
-	let connection = zbus::Connection::session().await.unwrap();
+async fn nighlight_stream() -> stream::BoxStream<'static, Message> {
+	let connection = match zbus::Connection::session().await {
+		Ok(connection) => connection,
+		Err(error) => {
+			log::warn!("Failed to connect to session bus for nightlight signals: {error}");
+			return stream::once(async { Message::Noop }).boxed();
+		}
+	};
 
 	log::trace!("Connected");
 
-	let proxy = NightlightProxy::new(&connection).await.unwrap();
+	let proxy = match NightlightProxy::new(&connection).await {
+		Ok(proxy) => proxy,
+		Err(error) => {
+			log::warn!("Failed to create nightlight proxy: {error}");
+			return stream::once(async { Message::Noop }).boxed();
+		}
+	};
 
 	log::trace!("got proxy");
 
@@ -321,19 +332,36 @@ async fn nighlight_stream() -> impl Stream<Item = Message> {
 	log::trace!("Got property streams");
 
 	let enabled = enabled.then(|enabled| async move {
-		let value = enabled.get().await.unwrap();
-		Message::NightlightEnabled(value)
+		match enabled.get().await {
+			Ok(value) => Message::NightlightEnabled(value),
+			Err(error) => {
+				log::warn!("Failed to read nightlight enabled value: {error}");
+				Message::Noop
+			}
+		}
 	});
 	let brightness = brightness.then(|brightness| async move {
-		let value = brightness.get().await.unwrap();
-		Message::BrightnessChanged(value)
+		match brightness.get().await {
+			Ok(value) => Message::BrightnessChanged(value),
+			Err(error) => {
+				log::warn!("Failed to read nightlight brightness value: {error}");
+				Message::Noop
+			}
+		}
 	});
 	let temperature = temperature.then(|temperature| async move {
 		log::trace!("Temp changed");
-		let value = temperature.get().await.unwrap();
-		log::trace!("Temp: {value:?}");
-		Message::TemperatureChanged(value)
+		match temperature.get().await {
+			Ok(value) => {
+				log::trace!("Temp: {value:?}");
+				Message::TemperatureChanged(value)
+			}
+			Err(error) => {
+				log::warn!("Failed to read nightlight temperature value: {error}");
+				Message::Noop
+			}
+		}
 	});
 
-	enabled.merge(brightness).merge(temperature)
+	stream::select(stream::select(enabled, brightness), temperature).boxed()
 }

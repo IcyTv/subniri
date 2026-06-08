@@ -77,6 +77,12 @@ lto = true
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 cast_precision_loss = "allow"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
 
 [patch.crates-io]
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }

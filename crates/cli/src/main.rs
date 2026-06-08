@@ -81,13 +81,14 @@ async fn nightlight(cmd: &NightlightSubcommand) -> Result<(), Box<dyn std::error
 
 	let conn = Connection::session().await?;
 
-	if !is_proxy_ready(
-		&conn,
-		NightlightProxy::DESTINATION.as_ref().unwrap(),
-		NightlightProxy::PATH.as_ref().unwrap(),
-	)
-	.await?
-	{
+	let destination = NightlightProxy::DESTINATION
+		.as_ref()
+		.ok_or("nightlight proxy is missing a DBus destination")?;
+	let path = NightlightProxy::PATH
+		.as_ref()
+		.ok_or("nightlight proxy is missing a DBus object path")?;
+
+	if !is_proxy_ready(&conn, destination, path).await? {
 		spinner.error("The daemon `permafrostd` isn't running");
 		outro_cancel("Run `permafrostd` in a console or as a startup service.")?;
 		std::process::exit(-1);
@@ -172,15 +173,14 @@ async fn launcher(
 	spinner.start("Connecting to Launcher");
 
 	{
-		if !is_proxy_ready(
-			&conn,
-			launcher_common::LauncherProxy::DESTINATION
-				.as_ref()
-				.unwrap(),
-			launcher_common::LauncherProxy::PATH.as_ref().unwrap(),
-		)
-		.await?
-		{
+		let destination = launcher_common::LauncherProxy::DESTINATION
+			.as_ref()
+			.ok_or("launcher proxy is missing a DBus destination")?;
+		let path = launcher_common::LauncherProxy::PATH
+			.as_ref()
+			.ok_or("launcher proxy is missing a DBus object path")?;
+
+		if !is_proxy_ready(&conn, destination, path).await? {
 			spinner.error("The launcher daemon isn't running!");
 			outro_cancel(
 				"Run `avalaunch` in a console or as a startup service to use the launcher",

@@ -3,6 +3,7 @@ use std::{
 	error::Error,
 	fmt,
 	hash::Hash,
+	num::NonZeroUsize,
 	rc::Rc,
 	time::{Duration, Instant},
 };
@@ -96,7 +97,9 @@ impl MediaControls {
 		Self {
 			active_player: None,
 			active_player_position: 0.0,
-			thumbnail_cache: Rc::new(RefCell::new(lru::LruCache::new(8.try_into().unwrap()))),
+			thumbnail_cache: Rc::new(RefCell::new(lru::LruCache::new(
+				NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
+			))),
 			is_playing: Animation::new(false).quick(),
 			cmd_rx,
 			cmd_tx,
@@ -432,7 +435,14 @@ impl MediaControls {
 
 fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Message> {
 	async_stream::stream! {
-		let mut mpris = Mpris::new().await.expect("Failed to connect to mpris");
+		let mut mpris = match Mpris::new().await {
+			Ok(mpris) => mpris,
+			Err(error) => {
+				log::warn!("Failed to connect to mpris: {error}");
+				yield Message::Noop;
+				return;
+			}
+		};
 		mpris.watch();
 
 		let mut players = FxSmallMap::<8, PlayerIdentity, MprisPlayer>::new();
@@ -486,7 +496,10 @@ async fn handle_player_command(
 				})
 				.map_or(0, |index| (index + 1) % players.len());
 
-			let next_player = players[next_player_index];
+			let Some(next_player) = players.get(next_player_index) else {
+				log::warn!("Next player index was out of range");
+				return None;
+			};
 			*current_player = Some(next_player.0.clone());
 
 			return Some(Message::PlayerChanged(
@@ -590,10 +603,8 @@ async fn resolve_thumbnail(
 	art_url: Option<&str>, url: Option<&str>,
 ) -> Result<Option<image::Handle>, Box<dyn Error>> {
 	if let Some(art_url) = art_url
-		&& art_url.starts_with("file://")
+		&& let Some(path) = art_url.strip_prefix("file://")
 	{
-		let path = art_url.strip_prefix("file://").unwrap();
-
 		return Ok(Some(image::Handle::from_path(path)));
 	}
 
@@ -601,8 +612,7 @@ async fn resolve_thumbnail(
 		.user_agent("subniri/0.1")
 		.redirect(redirect::Policy::limited(5))
 		.timeout(Duration::from_secs(2))
-		.build()
-		.unwrap();
+		.build()?;
 
 	let mut urls = vec![];
 

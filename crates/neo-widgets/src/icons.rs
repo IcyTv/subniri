@@ -93,29 +93,11 @@ fn resolve_with(
 	lookup: impl FnOnce(&mut ApplicationIconResolver) -> Option<IconFile>,
 ) -> ResolvedIcon {
 	let resolver = icon_resolver();
-	let mut resolver = resolver.lock().unwrap();
-
-	lookup(&mut resolver).map_or_else(default_icon, ResolvedIcon::from_icon_file)
-}
-
-/// Resolve an icon from the phosphor icon set at runtime
-///
-/// # Panics
-///
-/// When the environment variable `PHOSPHOR_ICONS` isn't set.
-#[must_use]
-pub fn phosphor_icon(icon: &str, variant: &str) -> svg::Handle {
-	let path = if icon.contains('/') {
-		PathBuf::from(icon)
-	} else {
-		let base = std::env::var("PHOSPHOR_ICONS").expect("PHOSPHOR_ICONS must be set");
-
-		PathBuf::from(base)
-			.join(variant)
-			.join(format!("{icon}-{variant}.svg"))
+	let Ok(mut resolver) = resolver.lock() else {
+		return default_icon();
 	};
 
-	svg::Handle::from_path(path)
+	lookup(&mut resolver).map_or_else(default_icon, ResolvedIcon::from_icon_file)
 }
 
 struct ApplicationIconResolver {

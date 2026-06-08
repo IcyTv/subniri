@@ -63,6 +63,7 @@ where
 			left: padding.left,
 		},
 		|limits| {
+			#[allow(clippy::indexing_slicing)]
 			content
 				.as_widget_mut()
 				.layout(&mut tree.children[0], renderer, &limits.loose())

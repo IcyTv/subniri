@@ -24,12 +24,12 @@ mod modules;
 // mod clock;
 // mod icons;
 // mod mpris;
-fn main() -> Result<(), iced_layershell::Error> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let _ = pretty_env_logger::try_init();
 
-	let connection = Connection::connect_to_env().unwrap();
+	let connection = Connection::connect_to_env()?;
 
-	let (doc, config) = ConfigFile::load().unwrap();
+	let (doc, config) = ConfigFile::load()?;
 
 	let app = daemon(
 		{
@@ -60,7 +60,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 		..Default::default()
 	});
 
-	app.run()
+	Ok(app.run()?)
 }
 
 const BASE_BAR_HEIGHT: u32 = 60;

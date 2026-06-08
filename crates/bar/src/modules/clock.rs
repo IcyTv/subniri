@@ -87,12 +87,18 @@ fn current_time() -> String {
 	// jiff::Timestamp::now().format("%H:%M").to_string()
 	let time = jiff::Zoned::now();
 
-	jiff::fmt::strtime::format("%H:%M", &time).unwrap()
+	jiff::fmt::strtime::format("%H:%M", &time).unwrap_or_else(|error| {
+		log::warn!("Failed to format current time: {error}");
+		"--:--".to_string()
+	})
 }
 
 fn current_date() -> String {
 	// Local::now().format("%a %B %d").to_string()
 	let time = jiff::Zoned::now();
 
-	jiff::fmt::strtime::format("%a %B %d", &time).unwrap()
+	jiff::fmt::strtime::format("%a %B %d", &time).unwrap_or_else(|error| {
+		log::warn!("Failed to format current date: {error}");
+		"--- --".to_string()
+	})
 }

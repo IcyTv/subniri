@@ -119,12 +119,12 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 	let dawn = config
 		.nightlight
 		.dawn
-		.unwrap_or(jiff::civil::Time::new(7, 0, 0, 0).unwrap());
+		.unwrap_or_else(|| fallback_time(7, 0));
 
 	let dusk = config
 		.nightlight
 		.dusk
-		.unwrap_or(jiff::civil::Time::new(21, 30, 0, 0).unwrap());
+		.unwrap_or_else(|| fallback_time(21, 30));
 	let day_temp = state.day_temp.unwrap_or(config.nightlight.day.temperature);
 	let day_bright = state.day_bright.unwrap_or(config.nightlight.day.brightness);
 	let night_temp = state
@@ -386,7 +386,7 @@ impl<T: Default, D: Default, F, L> SliderCardArgs<'_, T, D, F, L> {
 	}
 }
 
-fn slider_card<'a, T: Num + NumCast + AsPrimitive<f32> + Clone>(
+fn slider_card<'a, T>(
 	args: SliderCardArgs<
 		'a,
 		T,
@@ -394,7 +394,11 @@ fn slider_card<'a, T: Num + NumCast + AsPrimitive<f32> + Clone>(
 		impl Fn(T) -> Message + 'static,
 		impl Fn(T) -> Message + 'static,
 	>,
-) -> Element<'a, Message> {
+) -> Element<'a, Message>
+where
+	T: Num + NumCast + AsPrimitive<f32> + Clone,
+	f32: AsPrimitive<T>,
+{
 	let color = args.accent;
 	neo_card(
 		column![
@@ -438,6 +442,16 @@ fn slider_card<'a, T: Num + NumCast + AsPrimitive<f32> + Clone>(
 	.padding(16)
 	.background(args.background_color)
 	.into()
+}
+
+fn fallback_time(hour: i8, minute: i8) -> jiff::civil::Time {
+	match jiff::civil::Time::new(hour, minute, 0, 0) {
+		Ok(time) => time,
+		Err(error) => {
+			log::warn!("Invalid fallback time {hour}:{minute}: {error}");
+			jiff::civil::Time::default()
+		}
+	}
 }
 
 fn time_container(

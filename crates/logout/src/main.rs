@@ -193,6 +193,7 @@ impl Logout {
 				key: keyboard::Key::Character(c),
 				..
 			} if ('1'..='6').contains(&c.chars().next().unwrap_or_default()) => {
+				#[allow(clippy::unwrap_used)]
 				let index: u8 = c.parse().unwrap();
 				Message::SelectEntry(index as usize - 1)
 			}

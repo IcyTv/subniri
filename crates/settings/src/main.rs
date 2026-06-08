@@ -3,7 +3,7 @@ use std::time::Instant;
 use config::{ConfigFile, KdlDocument};
 use iced::{
 	Alignment, Background, Border, Element, Font, Length, Subscription, Task, Theme, font,
-	futures::StreamExt,
+	futures::{StreamExt, stream},
 	theme,
 	widget::{column, container, row, space, text},
 };
@@ -47,7 +47,13 @@ impl Settings {
 		let mut first = Tab::nightlight();
 		first.selected.go_mut(true, Instant::now());
 
-		let (doc, config) = ConfigFile::load().unwrap();
+		let (doc, config) = match ConfigFile::load() {
+			Ok(config) => config,
+			Err(error) => {
+				log::warn!("Error loading config, using defaults: {error}");
+				(KdlDocument::new(), ConfigFile::default())
+			}
+		};
 
 		Self {
 			selected_setting: 0,
@@ -64,13 +70,23 @@ impl Settings {
 
 	fn subscription(&self) -> Subscription<Message> {
 		let config_watch = Subscription::run(|| {
-			ConfigFile::watch().unwrap().map(|res| match res {
-				Ok(()) => Message::ConfigUpdated,
-				Err(e) => {
-					log::warn!("Invalid config file: {e}");
-					Message::Noop
-				}
-			})
+			ConfigFile::watch().map_or_else(
+				|error| {
+					log::warn!("Error watching config file: {error}");
+					stream::once(async { Message::Noop }).boxed()
+				},
+				|watch| {
+					watch
+						.map(|res| match res {
+							Ok(()) => Message::ConfigUpdated,
+							Err(e) => {
+								log::warn!("Invalid config file: {e}");
+								Message::Noop
+							}
+						})
+						.boxed()
+				},
+			)
 		});
 
 		let mut subs = vec![config_watch];
@@ -106,9 +122,12 @@ impl Settings {
 			Message::Redraw => iced_runtime::task::effect(iced_runtime::Action::Window(
 				iced::window::Action::RedrawAll,
 			)),
-			Message::Setting(index, msg) => self.tabs[index]
-				.update(&mut self.config, &mut self.doc, msg)
-				.map(move |msg| Message::Setting(index, msg)),
+			Message::Setting(index, msg) => {
+				self.tabs.get_mut(index).map_or_else(Task::none, |tab| {
+					tab.update(&mut self.config, &mut self.doc, msg)
+						.map(move |msg| Message::Setting(index, msg))
+				})
+			}
 			Message::Noop => Task::none(),
 		}
 	}

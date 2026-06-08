@@ -606,7 +606,13 @@ impl Volume {
 		let channels = node.volume.channel_count();
 		let channel_volume = node.volume.raw_from_normalized(target);
 		let channel_volumes = vec![channel_volume; channels];
-		let route_props = build_route_props_pod(&channel_volumes, None);
+		let route_props = match build_route_props_pod(&channel_volumes, None) {
+			Ok(route_props) => route_props,
+			Err(error) => {
+				log::warn!("Failed to build route props for volume adjustment: {error:?}");
+				return Task::none();
+			}
+		};
 		let route = device.route.clone();
 
 		if let Err(e) = device.proxy.set_param(
@@ -655,7 +661,13 @@ impl Volume {
 		let channels = node.volume.channel_count();
 		let channel_volume = node.volume.raw_from_normalized(target);
 		let channel_volumes = vec![channel_volume; channels];
-		let route_props = build_route_props_pod(&channel_volumes, None);
+		let route_props = match build_route_props_pod(&channel_volumes, None) {
+			Ok(route_props) => route_props,
+			Err(error) => {
+				log::warn!("Failed to build route props for volume update: {error:?}");
+				return Task::none();
+			}
+		};
 		let route = device.route.clone();
 
 		if let Err(e) = device.proxy.set_param(
@@ -698,7 +710,13 @@ impl Volume {
 			log::warn!("Default sink device route not found");
 			return Task::none();
 		};
-		let route_props = build_route_props_pod(&node.volume.channel_volums, Some(mute));
+		let route_props = match build_route_props_pod(&node.volume.channel_volums, Some(mute)) {
+			Ok(route_props) => route_props,
+			Err(error) => {
+				log::warn!("Failed to build route props for mute update: {error:?}");
+				return Task::none();
+			}
+		};
 		let route = device.route.clone();
 
 		if let Err(e) = device.proxy.set_param(
@@ -1161,7 +1179,9 @@ fn decode_route(pod: &RawPodOwned) -> Result<Option<PwRoute>, pipewire_native_sp
 	Ok(route)
 }
 
-fn build_route_props_pod(channel_volumes: &[f32], mute: Option<bool>) -> RawPodOwned {
+fn build_route_props_pod(
+	channel_volumes: &[f32], mute: Option<bool>,
+) -> Result<RawPodOwned, pipewire_native_spa::pod::Error> {
 	let mut route_props = [0u8; 4096];
 	let builder = Builder::new(route_props.as_mut_slice()).push_object(
 		ObjectType::Props,
@@ -1181,8 +1201,8 @@ fn build_route_props_pod(channel_volumes: &[f32], mute: Option<bool>) -> RawPodO
 		},
 	);
 
-	let built = builder.build().expect("route props pod should fit buffer");
-	RawPodOwned::wrap(Vec::from(built)).expect("built route props pod should be valid")
+	let built = builder.build()?;
+	RawPodOwned::wrap(Vec::from(built))
 }
 
 fn parse_channelmix_max_volume(

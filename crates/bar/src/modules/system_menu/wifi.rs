@@ -10,7 +10,7 @@ use nmrs::{DeviceState, NetworkManager};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-	AsyncDataLoaded(AsyncData),
+	AsyncDataLoaded(Option<AsyncData>),
 	StateChanged(WifiState),
 	Toggle,
 	Toggled(WifiState),
@@ -127,7 +127,7 @@ impl Wifi {
 
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
-			Message::AsyncDataLoaded(data) => {
+			Message::AsyncDataLoaded(Some(data)) => {
 				self.set_state(data.state.clone());
 				self.async_data = Some(data);
 			}
@@ -135,9 +135,21 @@ impl Wifi {
 				let nm = data.nm.clone();
 				return Task::perform(
 					async move {
-						let radios = nm.airplane_mode_state().await.unwrap();
+						let radios = match nm.airplane_mode_state().await {
+							Ok(radios) => radios,
+							Err(error) => {
+								log::warn!("Failed to read NetworkManager radio state: {error}");
+								return WifiState::default();
+							}
+						};
 						let enabled = !radios.wifi.enabled;
-						nm.set_wireless_enabled(enabled).await.unwrap();
+						if let Err(error) = nm.set_wireless_enabled(enabled).await {
+							log::warn!("Failed to set Wi-Fi enabled state: {error}");
+							return WifiState {
+								enabled: radios.wifi.enabled,
+								..Default::default()
+							};
+						}
 						load_state(&nm).await.unwrap_or_else(|_| WifiState {
 							enabled,
 							..Default::default()
@@ -147,7 +159,7 @@ impl Wifi {
 				);
 			}
 			Message::Toggled(state) | Message::StateChanged(state) => self.set_state(state),
-			Message::Toggle => (),
+			Message::AsyncDataLoaded(None) | Message::Toggle => (),
 		}
 
 		Task::none()
@@ -205,17 +217,20 @@ impl Wifi {
 	}
 }
 
-async fn load_data() -> AsyncData {
-	let nm = NetworkManager::new()
-		.await
-		// FIXME: Don't panic here
-		.expect("Failed to connect to NetworkManager");
+async fn load_data() -> Option<AsyncData> {
+	let nm = match NetworkManager::new().await {
+		Ok(nm) => nm,
+		Err(error) => {
+			log::warn!("Failed to connect to NetworkManager: {error}");
+			return None;
+		}
+	};
 
 	let state = load_state(&nm).await.unwrap_or_default();
 
 	log::trace!("Wifi enabled: {}", state.enabled);
 
-	AsyncData { nm, state }
+	Some(AsyncData { nm, state })
 }
 
 async fn load_state(nm: &NetworkManager) -> nmrs::Result<WifiState> {

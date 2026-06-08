@@ -130,8 +130,12 @@ fn preset_setting(config: &config::Nightlight, preset: NightlightPreset) -> Nigh
 fn current_preset(config: &config::Nightlight) -> NightlightPreset {
 	let now = chrono::Local::now().time();
 	let now = now.num_seconds_from_midnight();
-	let dawn = seconds_since_midnight(config.dawn.unwrap());
-	let dusk = seconds_since_midnight(config.dusk.unwrap());
+	let Some((dawn, dusk)) = configured_schedule_times(config) else {
+		log::warn!("Nightlight schedule is missing dawn or dusk, using day preset");
+		return NightlightPreset::Day;
+	};
+	let dawn = seconds_since_midnight(dawn);
+	let dusk = seconds_since_midnight(dusk);
 
 	let is_day = if dawn <= dusk {
 		now >= dawn && now < dusk
@@ -156,8 +160,13 @@ async fn schedule_presets(
 ) -> Result<JobScheduler, Box<dyn std::error::Error>> {
 	let mut sched = JobScheduler::new().await?;
 
-	let dawn = time_cron(config.dawn.unwrap());
-	let dusk = time_cron(config.dusk.unwrap());
+	let Some((dawn, dusk)) = configured_schedule_times(config) else {
+		log::warn!("Nightlight schedule is missing dawn or dusk, not scheduling preset changes");
+		return Ok(sched);
+	};
+
+	let dawn = time_cron(dawn);
+	let dusk = time_cron(dusk);
 
 	sched
 		.add(Job::new_async_tz(dawn, chrono::Local, {
@@ -215,6 +224,12 @@ fn time_cron(time: jiff::civil::Time) -> String {
 	let hour = time.hour();
 
 	format!("{sec} {min} {hour} * * *")
+}
+
+fn configured_schedule_times(
+	config: &config::Nightlight,
+) -> Option<(jiff::civil::Time, jiff::civil::Time)> {
+	Some((config.dawn?, config.dusk?))
 }
 
 #[derive(Clone)]
@@ -755,8 +770,7 @@ impl NightlightControllerTask {
 	}
 
 	fn recreate_control(&mut self, control: ZwlrGammaControlV1) {
-		if let Some(index) = self.outputs.iter().position(|o| o.control == control) {
-			let output = &mut self.outputs[index];
+		if let Some(output) = self.outputs.iter_mut().find(|o| o.control == control) {
 			output.control.destroy(&mut self.connection);
 			output.control =
 				Self::create_control(&mut self.connection, self.gamma_mgr, output.output);
@@ -784,21 +798,26 @@ impl NightlightControllerTask {
 
 		let mut idx = 0;
 
-		let mut push_col = |channel: f32| {
+		let mut push_col = |channel: f32| -> std::io::Result<()> {
 			for i in 0..size {
 				let x = i as f32 / (size - 1) as f32;
 				#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 				let wchar = (x * channel * brightness * f32::from(u16::MAX)).clamp(0.0, 65535.0) as u16;
 				let bytes = wchar.to_ne_bytes();
-				mmap[idx..idx + 2].copy_from_slice(&bytes);
+				let Some(slot) = mmap.get_mut(idx..idx + 2) else {
+					return Err(std::io::Error::other("gamma LUT mmap is too small"));
+				};
+				slot.copy_from_slice(&bytes);
 
 				idx += 2;
 			}
+
+			Ok(())
 		};
 
-		push_col(r);
-		push_col(g);
-		push_col(b);
+		push_col(r)?;
+		push_col(g)?;
+		push_col(b)?;
 
 		controls.set_gamma(connection, OwnedFd::from(file));
 

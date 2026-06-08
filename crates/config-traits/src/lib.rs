@@ -192,6 +192,7 @@ impl ConfigError {
 	///
 	/// In debug mode, if error not a `WrongType` error. Just returns the error in release mode
 	#[must_use]
+	#[allow(clippy::panic)]
 	pub fn expected(self, ty: impl Into<String>) -> Self {
 		let Self::WrongType { span, src } = self else {
 			#[cfg(debug_assertions)]
@@ -417,7 +418,9 @@ impl<T: ConfigValue> Config for T {
 			return Err(ConfigError::wrong_type(None).expected("one argument"));
 		}
 
-		let entry = node.entries().first().unwrap();
+		// # SAFETY
+		// Cannot panic, because the entries() are checked before.
+		let entry = unsafe { node.entries().first().unwrap_unchecked() };
 
 		if entry.name().is_some() {
 			return Err(ConfigError::wrong_type(Some(entry.span())).expected("argument"));
@@ -561,6 +564,7 @@ impl ConfigValue for jiff::Timestamp {
 		dateparser::parse(string)
 			.map_err(|e| ConfigError::date_time_parse(e, None))
 			.map(|dt| {
+				#[allow(clippy::unwrap_used)]
 				jiff::Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos().cast_signed())
 					.unwrap()
 			})

@@ -109,6 +109,7 @@ where
 		renderer: &Renderer, shell: &mut Shell<'_, Message>, viewport: &Rectangle,
 	) {
 		self.content.as_widget_mut().update(
+			#[allow(clippy::indexing_slicing)]
 			&mut tree.children[0],
 			event,
 			layout.child(0),
@@ -124,6 +125,7 @@ where
 		renderer: &Renderer,
 	) -> mouse::Interaction {
 		self.content.as_widget().mouse_interaction(
+			#[allow(clippy::indexing_slicing)]
 			&tree.children[0],
 			layout.child(0),
 			cursor,
@@ -140,6 +142,7 @@ where
 		let child_layout = layout.child(0);
 
 		neo_surface::draw(renderer, bounds, self.style.surface, 0.0, |renderer| {
+			#[allow(clippy::indexing_slicing)]
 			self.content.as_widget().draw(
 				&tree.children[0],
 				renderer,

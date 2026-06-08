@@ -60,7 +60,14 @@ impl Taskbar {
 	pub fn subscription() -> Subscription<Message> {
 		Subscription::run(|| {
 			async_stream::stream! {
-				let mut event_stream = pin!(open_event_stream().await.unwrap());
+				let event_stream = match open_event_stream().await {
+					Ok(event_stream) => event_stream,
+					Err(error) => {
+						log::warn!("Failed to open niri event stream: {error}");
+						return;
+					}
+				};
+				let mut event_stream = pin!(event_stream);
 
 				while let Some(event) = event_stream.next().await {
 					match event {
@@ -115,7 +122,9 @@ impl Taskbar {
 				}
 
 				if let Some(index) = index {
-					self.windows[index] = window;
+					if let Some(existing) = self.windows.get_mut(index) {
+						*existing = window;
+					}
 				} else {
 					let insert_idx = self
 						.windows
@@ -146,14 +155,20 @@ impl Taskbar {
 
 			Message::FocusWorkspace(id) => {
 				// TODO: I'm sure we can do better here... Maybe return a Task or sth?
-				futures::executor::block_on(self.send(Request::Action(Action::FocusWorkspace {
-					reference: WorkspaceReferenceArg::Id(id),
-				})))
-				.unwrap();
+				if let Err(error) = futures::executor::block_on(self.send(Request::Action(
+					Action::FocusWorkspace {
+						reference: WorkspaceReferenceArg::Id(id),
+					},
+				))) {
+					log::warn!("Failed to focus workspace {id}: {error}");
+				}
 			}
 			Message::FocusWindow(id) => {
-				futures::executor::block_on(self.send(Request::Action(Action::FocusWindow { id })))
-					.unwrap();
+				if let Err(error) = futures::executor::block_on(
+					self.send(Request::Action(Action::FocusWindow { id })),
+				) {
+					log::warn!("Failed to focus window {id}: {error}");
+				}
 			}
 			Message::Event(_) => (),
 		}
@@ -328,7 +343,7 @@ fn window_btn(window: &Window) -> Element<'_, Message> {
 
 impl Taskbar {
 	async fn send(&mut self, request: Request) -> Result<Response, String> {
-		let mut buf = serde_json::to_string(&request).unwrap();
+		let mut buf = serde_json::to_string(&request).map_err(|e| format!("{e}"))?;
 		buf.push('\n');
 
 		self.stream
@@ -365,7 +380,7 @@ async fn get_stream() -> Result<BufReader<UnixStream>, String> {
 async fn open_event_stream() -> Result<impl Stream<Item = Result<Event, io::Error>>, String> {
 	let mut stream = get_stream().await?;
 
-	let mut buf = serde_json::to_string(&Request::EventStream).unwrap();
+	let mut buf = serde_json::to_string(&Request::EventStream).map_err(|e| format!("{e}"))?;
 	buf.push('\n');
 
 	stream

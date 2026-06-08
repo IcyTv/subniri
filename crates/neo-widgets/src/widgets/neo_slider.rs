@@ -155,7 +155,8 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 
 impl<T, Message> NeoSlider<T, Message>
 where
-	T: Num + NumCast + AsPrimitive<f32> + Clone,
+	T: Num + AsPrimitive<f32> + Clone,
+	f32: AsPrimitive<T>,
 {
 	fn percentage_from_value(&self, value: T) -> f32 {
 		let range = (self.maximum - self.minimum).as_();
@@ -180,7 +181,8 @@ where
 			value
 		};
 
-		NumCast::from(value.clamp(minimum, maximum)).unwrap()
+		// NumCast::from(value.clamp(minimum, maximum)).unwrap()
+		value.clamp(minimum, maximum).as_()
 	}
 
 	fn stepped_percentage(&self, percentage: f32) -> f32 {
@@ -316,7 +318,8 @@ fn expanded_bounds(bounds: Rectangle, radius: f32) -> Rectangle {
 
 impl<T, Message, Theme, Renderer> Widget<Message, Theme, Renderer> for NeoSlider<T, Message>
 where
-	T: Num + NumCast + AsPrimitive<f32> + Clone + 'static,
+	T: Num + AsPrimitive<f32> + Clone + 'static,
+	f32: AsPrimitive<T>,
 	Message: Clone,
 	Renderer: renderer::Renderer,
 {
@@ -527,7 +530,8 @@ where
 impl<'a, T, Message: 'a, Theme, Renderer> From<NeoSlider<T, Message>>
 	for Element<'a, Message, Theme, Renderer>
 where
-	T: Num + NumCast + AsPrimitive<f32> + Clone + 'static,
+	T: Num + AsPrimitive<f32> + Clone + 'static,
+	f32: AsPrimitive<T>,
 	Message: Clone,
 	Renderer: renderer::Renderer,
 {

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used)]
+
 use convert_case::{Case, Casing};
 use proc_macro_error2::abort;
 use proc_macro2::TokenStream;
@@ -1248,8 +1250,11 @@ fn is_bool(ty: &syn::Type) -> bool {
 
 fn vec_inner_ty(ty: &syn::Type) -> Option<&syn::Type> {
 	match ty {
-		syn::Type::Path(p) if p.path.segments.len() == 1 && p.path.segments[0].ident == "Vec" => {
-			match &p.path.segments[0].arguments {
+		syn::Type::Path(p)
+			if let Some(first) = p.path.segments.first()
+				&& first.ident == "Vec" =>
+		{
+			match &first.arguments {
 				syn::PathArguments::AngleBracketed(args) => {
 					args.args.iter().find_map(|arg| match arg {
 						syn::GenericArgument::Type(inner) => Some(inner),
@@ -1266,9 +1271,10 @@ fn vec_inner_ty(ty: &syn::Type) -> Option<&syn::Type> {
 fn option_inner_ty(ty: &syn::Type) -> Option<&syn::Type> {
 	match ty {
 		syn::Type::Path(p)
-			if p.path.segments.len() == 1 && p.path.segments[0].ident == "Option" =>
+			if let Some(first) = p.path.segments.first()
+				&& first.ident == "Option" =>
 		{
-			match &p.path.segments[0].arguments {
+			match &first.arguments {
 				syn::PathArguments::AngleBracketed(args) => {
 					args.args.iter().find_map(|arg| match arg {
 						syn::GenericArgument::Type(inner) => Some(inner),
@@ -1326,12 +1332,10 @@ fn is_required_child(ty: &syn::Type, allow_missing: bool) -> bool {
 fn is_option(ty: &syn::Type) -> bool {
 	match ty {
 		syn::Type::Path(p)
-			if p.path.segments.len() == 1 && p.path.segments[0].ident == "Option" =>
+			if let Some(first) = p.path.segments.first()
+				&& first.ident == "Option" =>
 		{
-			matches!(
-				p.path.segments[0].arguments,
-				syn::PathArguments::AngleBracketed(_)
-			)
+			matches!(first.arguments, syn::PathArguments::AngleBracketed(_))
 		}
 		_ => false,
 	}

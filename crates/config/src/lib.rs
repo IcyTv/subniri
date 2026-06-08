@@ -290,12 +290,12 @@ pub struct Nightlight {
 	/// Time (usually in the morning), when the nightlight should change to the `day` settings.
 	/// The format can be anything close to `"HH:MM"`
 	// TODO: Allow for default = None, when use_location and not specified...
-	#[config(default = Time::new(7, 0, 0, 0).unwrap())]
+	#[config(default = unsafe { Time::new(7, 0, 0, 0).unwrap_unchecked() })]
 	#[garde(custom(verify_dusk_dawn_use_location("dawn", self.use_location)))]
 	pub dawn: Option<Time>,
 	/// Time (usually in the evening), when the nightlight should change to the `night` settings.
 	/// The format can be anything close to `"HH:MM"`
-	#[config(default = Time::new(20, 0, 0, 0).unwrap())]
+	#[config(default = unsafe { Time::new(20, 0, 0, 0).unwrap_unchecked() })]
 	#[garde(custom(verify_dusk_dawn_use_location("dusk", self.use_location)))]
 	pub dusk: Option<Time>,
 
@@ -353,8 +353,8 @@ impl Default for Nightlight {
 		Self {
 			enabled: false,
 			use_location: false,
-			dawn: Some(jiff::civil::Time::new(7, 0, 0, 0).unwrap()),
-			dusk: Some(jiff::civil::Time::new(20, 0, 0, 0).unwrap()),
+			dawn: Some(unsafe { jiff::civil::Time::new(7, 0, 0, 0).unwrap_unchecked() }),
+			dusk: Some(unsafe { jiff::civil::Time::new(20, 0, 0, 0).unwrap_unchecked() }),
 			night: NightlightSetting::night(),
 			day: NightlightSetting::day(),
 			debounce_ms: 500,
