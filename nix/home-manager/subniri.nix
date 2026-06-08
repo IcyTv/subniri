@@ -70,11 +70,12 @@
     )
     enabledComponents;
 
+  systemdComponentUnits = map (name: "${name}.service") (builtins.attrNames systemdComponents);
+
   mkService = name: component: {
     Unit = {
       Description = componentDefinitions.${name}.description;
-      After = ["graphical-session.target"];
-      PartOf = ["graphical-session.target"];
+      PartOf = ["subniri.target"];
     };
 
     Service = {
@@ -84,6 +85,15 @@
       ];
       Restart = "on-failure";
       RestartSec = 5;
+    };
+  };
+
+  subniriTarget = {
+    Unit = {
+      Description = "Subniri desktop shell";
+      Wants = systemdComponentUnits;
+      After = ["graphical-session.target"] ++ systemdComponentUnits;
+      PartOf = ["graphical-session.target"];
     };
 
     Install = {
@@ -319,6 +329,9 @@ in {
       text = renderConfig cfg.settings;
     };
 
-    systemd.user.services = mkIf cfg.systemd.enable (lib.mapAttrs mkService systemdComponents);
+    systemd.user = mkIf (cfg.systemd.enable && systemdComponents != {}) {
+      services = lib.mapAttrs mkService systemdComponents;
+      targets.subniri = subniriTarget;
+    };
   };
 }
