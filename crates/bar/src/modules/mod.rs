@@ -221,6 +221,7 @@ impl Module {
 			Self::SystemMenu(menu) => menu.view_popup().map(ModuleMessage::SystemMenu),
 			Self::Volume(Ok(vol)) => vol.view_popup().map(ModuleMessage::Volume),
 			Self::Bluetooth(Some(bt)) => bt.view_popup().map(ModuleMessage::Bluetooth),
+			Self::Clock(clock) => clock.view_popup().map(ModuleMessage::Clock),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),

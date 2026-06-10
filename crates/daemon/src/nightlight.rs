@@ -598,7 +598,6 @@ impl NightlightControllerTask {
 						match command {
 							Some(command) => {
 								self.handle_command(command);
-								return Ok(());
 
 							}
 							None => return Ok(()),
@@ -620,7 +619,6 @@ impl NightlightControllerTask {
 						match command {
 							Some(command) => {
 								self.handle_command(command);
-								return Ok(());
 							}
 							None => return Ok(()),
 						}

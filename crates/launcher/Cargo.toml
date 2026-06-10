@@ -14,11 +14,20 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+arboard = "3.6.1"
 async-channel.workspace = true
 async-stream.workspace = true
+async-trait = "0.1.89"
 clap = { workspace = true, features = ["derive"] }
+eyre = "0.6.12"
+freedesktop-desktop-entry.workspace = true
+futures.workspace = true
+fuzzy-matcher = "0.3.7"
 iced.workspace = true
 iced_layershell.workspace = true
+iced_runtime.workspace = true
+kalkulator = "0.2.2"
+libc = "0.2.186"
 log.workspace = true
 neo-widgets.workspace = true
 pretty_env_logger.workspace = true

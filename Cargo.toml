@@ -16,7 +16,6 @@ bluer = { version = "0.17.4", features = ["bluetoothd"] }
 clap = { version = "4.6.1", features = ["derive"] }
 config = { version = "0.0.1", path = "crates/config" }
 daemon = { path = "./crates/daemon" }
-dirs = "6.0.0"
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
 futures = "0.3.32"
@@ -37,34 +36,28 @@ iced = { version = "0.15.0-dev", features = [
   "canvas",
 ], git = "https://github.com/IcyTv/iced", default-features = false, rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
 iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
-iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "25c23e727634def0e1e4dda9b48d083bc9151b90" }
+iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3b5118610c24090a4196c0f845d7b6bdb059fefe" }
 icon = "0.2.0"
 image = "0.25.10"
 jiff = "0.2.25"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
 launcher-common = { path = "./crates/launcher-common" }
-lazy-regex = "3.6.0"
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
 log = "0.4.29"
 lru = "0.18.0"
 lyon_algorithms = "1.0.20"
-mime = "0.3.17"
 mprizzle = { git = "https://github.com/IcyTv/mprizzle", version = "0.0.8" }
 neo-widgets = { version = "0.0.1", path = "crates/neo-widgets" }
 niri-ipc = "26.4.0"
 nix = { version = "0.31.3", features = ["user"] }
 nmrs = "3.1.5"
 num-traits = "0.2.19"
-paste = "1.0.15"
 pretty_env_logger = "0.5.0"
 reqwest = "0.13.3"
-rgb = "0.8.53"
 serde_json = "1.0.149"
 small-map = "0.1.5"
 tokio = { version = "1.52.3", features = ["full"] }
-tracing = "0.1.44"
 url = "2.5.8"
 wayland-client = "0.31.14"
 zbus = "5.15.0"

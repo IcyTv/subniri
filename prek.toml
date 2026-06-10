@@ -19,7 +19,7 @@ pass_filenames = false
 id = "clippy"
 name = "clippy"
 description = "Lint rust code"
-entry = "env CARGO_INCREMENTAL=0 cargo clippy --workspace --all-targets --all-features -- -D warnings"
+entry = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
 language = "system"
 types = ["rust"]
 pass_filenames = false

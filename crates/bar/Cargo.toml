@@ -1,12 +1,14 @@
 [package]
-name = "polarbar"
+name = "bar"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 description = "Bar for subniri shell"
 documentation.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[[bin]]
+name = "polarbar"
+path = "src/main.rs"
 
 [lints]
 workspace = true
@@ -41,7 +43,6 @@ reqwest.workspace = true
 serde_json.workspace = true
 small-map.workspace = true
 tokio.workspace = true
-tokio-stream = "0.1.18"
 url.workspace = true
 wayland-client.workspace = true
 zbus.workspace = true

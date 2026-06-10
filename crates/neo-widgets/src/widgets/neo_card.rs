@@ -2,7 +2,7 @@ use iced::{
 	Color, Element, Event, Length, Padding, Rectangle,
 	advanced::{
 		Layout, Shell, Widget, layout, mouse, renderer,
-		widget::{self, Tree},
+		widget::{self, Operation, Tree},
 	},
 };
 
@@ -118,6 +118,21 @@ where
 			shell,
 			viewport,
 		);
+	}
+
+	fn operate(
+		&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer,
+		operation: &mut dyn Operation,
+	) {
+		operation.traverse(&mut |operation| {
+			self.content.as_widget_mut().operate(
+				#[allow(clippy::indexing_slicing)]
+				&mut tree.children[0],
+				layout.child(0),
+				renderer,
+				operation,
+			);
+		});
 	}
 
 	fn mouse_interaction(

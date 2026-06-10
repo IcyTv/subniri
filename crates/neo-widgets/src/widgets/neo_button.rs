@@ -7,18 +7,21 @@ use iced::{
 	Animation, Color, Element, Event, Length, Padding, Rectangle,
 	advanced::{
 		Layout, Widget, layout, mouse, renderer,
-		widget::{self, Tree, tree},
+		widget::{self, Tree, operation::Focusable, tree},
 	},
+	keyboard,
+	widget::Id,
 	window,
 };
 
-use crate::style::COLORS;
+use crate::{style::COLORS, widgets::NeoSurfaceStyle};
 
 use super::neo_surface::{self, NeoContentSurfaceStyle};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NeoButtonStyle {
 	pub surface: NeoContentSurfaceStyle,
+	pub focused: NeoContentSurfaceStyle,
 	pub disabled_background: Color,
 }
 
@@ -26,6 +29,14 @@ impl Default for NeoButtonStyle {
 	fn default() -> Self {
 		Self {
 			surface: NeoContentSurfaceStyle::default(),
+			focused: NeoContentSurfaceStyle {
+				surface: NeoSurfaceStyle {
+					background: COLORS.decorative.pink,
+					border_width: 3.0,
+					..Default::default()
+				},
+				..Default::default()
+			},
 			disabled_background: COLORS.disabled_background,
 		}
 	}
@@ -45,6 +56,7 @@ pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer
 	width: Length,
 	height: Length,
 	enabled: bool,
+	id: Id,
 }
 
 enum OnPress<'a, Message> {
@@ -70,6 +82,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			width: Length::Shrink,
 			height: Length::Shrink,
 			enabled: true,
+			id: Id::unique(),
 		}
 	}
 
@@ -131,6 +144,16 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn id<I: Into<Id>>(mut self, id: I) -> Self {
+		self.id = id.into();
+		self
+	}
+
+	pub fn focus_color(mut self, color: Color) -> Self {
+		self.style.focused.surface.background = color;
+		self
+	}
+
 	pub fn map<F, Out>(self, func: F) -> NeoButton<'a, Out, Theme, Renderer>
 	where
 		F: Fn(Message) -> Out + Clone + 'a,
@@ -151,6 +174,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			width: self.width,
 			height: self.height,
 			enabled: self.enabled,
+			id: self.id,
 		}
 	}
 }
@@ -189,6 +213,25 @@ where
 
 	fn state(&self) -> iced::advanced::widget::tree::State {
 		iced::advanced::widget::tree::State::new(State::default())
+	}
+
+	fn operate(
+		&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer,
+		operation: &mut dyn widget::Operation,
+	) {
+		let state = tree.state.downcast_mut::<State>();
+
+		operation.focusable(Some(&self.id), layout.bounds(), state);
+
+		operation.traverse(&mut |operation| {
+			#[allow(clippy::indexing_slicing)]
+			self.content.as_widget_mut().operate(
+				&mut tree.children[0],
+				layout.child(0),
+				renderer,
+				operation,
+			);
+		});
 	}
 
 	fn layout(
@@ -234,9 +277,22 @@ where
 		let is_captured = shell.is_event_captured();
 
 		match event {
+			Event::Keyboard(keyboard::Event::KeyPressed {
+				key: keyboard::Key::Named(keyboard::key::Named::Enter | keyboard::key::Named::Space),
+				..
+			}) if state.focused && self.enabled && !is_captured => {
+				if let Some(message) = self.on_press.clone() {
+					shell.publish(match message {
+						OnPress::Message(message) => message,
+						OnPress::WithBounds(callback) => callback(bounds),
+					});
+					shell.capture_event();
+				}
+			}
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
 				if over && !is_captured =>
 			{
+				state.focused = true;
 				state.pressed = state.pressed.clone().go(true, Instant::now());
 
 				shell.request_redraw();
@@ -298,7 +354,11 @@ where
 				.interpolate(0.0, self.style.surface.surface.shadow_width, Instant::now());
 
 		let child_layout = layout.child(0);
-		let surface = self.style.surface.surface;
+		let surface = if state.focused {
+			self.style.focused.surface
+		} else {
+			self.style.surface.surface
+		};
 
 		neo_surface::draw(
 			renderer,
@@ -332,7 +392,9 @@ where
 struct State {
 	pressed: Animation<bool>,
 	hovered: bool,
+	focused: bool,
 }
+
 impl Default for State {
 	fn default() -> Self {
 		Self {
@@ -340,6 +402,21 @@ impl Default for State {
 				.delay(Duration::ZERO)
 				.duration(Duration::from_millis(50)),
 			hovered: false,
+			focused: false,
 		}
+	}
+}
+
+impl Focusable for State {
+	fn is_focused(&self) -> bool {
+		self.focused
+	}
+
+	fn focus(&mut self) {
+		self.focused = true;
+	}
+
+	fn unfocus(&mut self) {
+		self.focused = false;
 	}
 }

@@ -349,7 +349,8 @@
                 };
               })
               (mkWrappedGuiOverride {
-                name = "polarbar";
+                name = "bar";
+                binName = "polarbar";
                 buildInputs = guiBuildInputs ++ [pkgs.pipewire];
                 runtimeLibs = waylandRuntimeLibs ++ [pkgs.pipewire];
                 wrapArgs = [
@@ -358,12 +359,13 @@
                   "${pkgs.pipewire}/lib/spa-0.2"
                 ];
                 extraAttrs = {
-                  SUBNIRI_ICEOUT_BIN = "${rustPkgs.workspace.iceout {}}/bin/iceout";
+                  SUBNIRI_ICEOUT_BIN = "${rustPkgs.workspace.logout {}}/bin/iceout";
                   SUBNIRI_SNOWCONF_BIN = "${rustPkgs.workspace.settings {}}/bin/snowconf";
                 };
               })
               (mkWrappedGuiOverride {
-                name = "iceout";
+                name = "logout";
+                binName = "iceout";
               })
               (mkWrappedGuiOverride {
                 name = "settings";
@@ -423,7 +425,7 @@
           }
           {
             name = "polarbar";
-            package = rustPkgs.workspace.polarbar {};
+            package = rustPkgs.workspace.bar {};
           }
           {
             name = "permafrostd";
@@ -435,7 +437,7 @@
           }
           {
             name = "iceout";
-            package = rustPkgs.workspace.iceout {};
+            package = rustPkgs.workspace.logout {};
           }
           {
             name = "snowconf";
