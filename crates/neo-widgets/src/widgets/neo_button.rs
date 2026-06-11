@@ -56,6 +56,7 @@ pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer
 	width: Length,
 	height: Length,
 	enabled: bool,
+	focusable: bool,
 	id: Id,
 }
 
@@ -82,6 +83,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			width: Length::Shrink,
 			height: Length::Shrink,
 			enabled: true,
+			focusable: false,
 			id: Id::unique(),
 		}
 	}
@@ -154,6 +156,11 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn focusable(mut self, focusable: bool) -> Self {
+		self.focusable = focusable;
+		self
+	}
+
 	pub fn map<F, Out>(self, func: F) -> NeoButton<'a, Out, Theme, Renderer>
 	where
 		F: Fn(Message) -> Out + Clone + 'a,
@@ -174,6 +181,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			width: self.width,
 			height: self.height,
 			enabled: self.enabled,
+			focusable: self.focusable,
 			id: self.id,
 		}
 	}
@@ -219,9 +227,11 @@ where
 		&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer,
 		operation: &mut dyn widget::Operation,
 	) {
-		let state = tree.state.downcast_mut::<State>();
+		if self.focusable {
+			let state = tree.state.downcast_mut::<State>();
 
-		operation.focusable(Some(&self.id), layout.bounds(), state);
+			operation.focusable(Some(&self.id), layout.bounds(), state);
+		}
 
 		operation.traverse(&mut |operation| {
 			#[allow(clippy::indexing_slicing)]
@@ -280,7 +290,7 @@ where
 			Event::Keyboard(keyboard::Event::KeyPressed {
 				key: keyboard::Key::Named(keyboard::key::Named::Enter | keyboard::key::Named::Space),
 				..
-			}) if state.focused && self.enabled && !is_captured => {
+			}) if self.focusable && state.focused && self.enabled && !is_captured => {
 				if let Some(message) = self.on_press.clone() {
 					shell.publish(match message {
 						OnPress::Message(message) => message,
@@ -292,7 +302,7 @@ where
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
 				if over && !is_captured =>
 			{
-				state.focused = true;
+				state.focused = self.focusable;
 				state.pressed = state.pressed.clone().go(true, Instant::now());
 
 				shell.request_redraw();

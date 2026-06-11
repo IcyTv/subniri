@@ -76,6 +76,7 @@
     Unit = {
       Description = componentDefinitions.${name}.description;
       PartOf = ["subniri.target"];
+      After = ["graphical-session.target"];
     };
 
     Service = {

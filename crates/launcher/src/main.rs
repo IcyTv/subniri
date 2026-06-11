@@ -494,6 +494,7 @@ impl Launcher {
 
 			let display = neo_button(display)
 				.background(COLORS.body)
+				.focusable(true)
 				.focus_color(COLORS.decorative.pink)
 				.on_press(Message::Activate(
 					cand.provider,
