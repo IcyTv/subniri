@@ -189,6 +189,7 @@ impl Launcher {
 			Message::Close if let Some(id) = self.open.take() => {
 				self.search.clear();
 				self.candidates.clear();
+				self.has_candidates.go_mut(false, Instant::now());
 				self.session.0 = self.session.0.wrapping_add(1);
 				let close = Message::RemoveWindow(id);
 				let exit_task = if self.exit_on_close {
