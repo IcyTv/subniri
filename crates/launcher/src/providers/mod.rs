@@ -2,10 +2,12 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use async_channel::Receiver;
-use iced::widget::svg;
+use iced::widget::text::Span;
+use neo_widgets::icons::ResolvedIcon;
 
 pub mod applications;
 pub mod calculator;
+pub mod projects;
 
 #[async_trait::async_trait]
 pub trait Provider: Send + Sync {
@@ -73,6 +75,7 @@ pub enum MatchKind {
 	Prefix,
 	Fuzzy,
 	Substring,
+	Typo,
 	#[default]
 	Unknown,
 }
@@ -80,11 +83,12 @@ pub enum MatchKind {
 impl MatchKind {
 	pub fn priority(self) -> i32 {
 		match self {
-			Self::Exact => 0,
-			Self::Prefix => 1,
-			Self::Fuzzy => 2,
-			Self::Substring => 3,
-			Self::Unknown => 4,
+			Self::Exact => 4,
+			Self::Prefix => 3,
+			Self::Substring => 2,
+			Self::Typo => 1,
+			Self::Fuzzy => 0,
+			Self::Unknown => -1,
 		}
 	}
 }
@@ -116,14 +120,16 @@ pub struct ActivationKey(pub Arc<str>);
 
 #[derive(Clone, Debug)]
 pub struct Candidate {
+	pub session_handle: SessionHandle,
 	pub provider: ProviderId,
 	pub id: CandidateId,
 	pub activation: ActivationKey,
 
 	pub title: Arc<str>,
-	pub subtitle: Option<Arc<str>>,
+	pub title_spans: Option<Arc<[Span<'static, ()>]>>,
+	pub subtitle: Option<Arc<[Span<'static, ()>]>>,
 	pub right_text: Option<Arc<str>>,
-	pub icon: Option<svg::Handle>,
+	pub icon: Option<ResolvedIcon>,
 
 	pub kind: CandidateKind,
 	pub section_hint: Option<SectionHint>,
@@ -133,9 +139,9 @@ pub struct Candidate {
 }
 
 pub fn compare_candidates(a: &Candidate, b: &Candidate) -> Ordering {
-	a.match_kind
+	b.match_kind
 		.priority()
-		.cmp(&b.match_kind.priority())
+		.cmp(&a.match_kind.priority())
 		// Higher provider score first
 		.then_with(|| b.provider_score.total_cmp(&a.provider_score))
 		// Deterministic tie-breakers

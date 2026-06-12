@@ -6,6 +6,9 @@ pub use neo_button::{NeoButton, NeoButtonStyle, neo_button};
 mod neo_card;
 pub use neo_card::{NeoCard, NeoCardStyle, neo_card};
 
+mod neo_scrollable;
+pub use neo_scrollable::{NeoScrollable, neo_scrollable};
+
 mod neo_surface;
 pub use neo_surface::{NeoContentSurfaceStyle, NeoSurfaceStyle};
 

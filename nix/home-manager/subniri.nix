@@ -81,9 +81,11 @@
 
     Service = {
       ExecStart = "${component.package}/bin/${componentDefinitions.${name}.bin}";
-      Environment = lib.optionals cfg.config.enable [
-        "SUBNIRI_CONFIG_FILE=${configPath}"
-      ];
+      Environment =
+        lib.optionals cfg.config.enable [
+          "SUBNIRI_CONFIG_FILE=${configPath}"
+        ]
+        ++ ["RUST_LOG=warn"];
       Restart = "on-failure";
       RestartSec = 5;
     };

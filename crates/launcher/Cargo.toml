@@ -19,6 +19,7 @@ async-channel.workspace = true
 async-stream.workspace = true
 async-trait = "0.1.89"
 clap = { workspace = true, features = ["derive"] }
+config.workspace = true
 eyre = "0.6.12"
 freedesktop-desktop-entry.workspace = true
 futures.workspace = true
@@ -31,5 +32,6 @@ libc = "0.2.186"
 log.workspace = true
 neo-widgets.workspace = true
 pretty_env_logger.workspace = true
+strsim = "0.11.1"
 tokio.workspace = true
 zbus = { workspace = true, features = ["tokio"] }

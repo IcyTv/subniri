@@ -1,8 +1,12 @@
-use std::{process::Stdio, sync::Arc};
+use std::{collections::HashSet, process::Stdio, sync::Arc};
 
 use async_channel::{Receiver, Sender};
+use config::LauncherTypoSearch;
 use freedesktop_desktop_entry::{DesktopEntry, desktop_entries, get_languages_from_env};
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
+use iced::widget::{span, text::Span};
+use neo_widgets::{icons::resolve_icon, style::COLORS};
+use strsim::damerau_levenshtein;
 use tokio::{process::Command, sync::RwLock};
 
 use crate::providers::{
@@ -18,10 +22,11 @@ pub struct ApplicationProvider {
 	languages: Vec<String>,
 	entries: Arc<RwLock<Vec<DesktopEntry>>>,
 	matcher: Arc<SkimMatcherV2>,
+	typo_search: LauncherTypoSearch,
 }
 
 impl ApplicationProvider {
-	pub fn new() -> Self {
+	pub fn new(typo_search: LauncherTypoSearch) -> Self {
 		let (sender, receiver) = async_channel::unbounded();
 		let languages = get_languages_from_env();
 		Self {
@@ -30,36 +35,103 @@ impl ApplicationProvider {
 			languages,
 			entries: Arc::new(RwLock::new(vec![])),
 			matcher: Arc::new(SkimMatcherV2::default()),
+			typo_search,
 		}
 	}
 
 	fn entry_to_candidate(
-		locales: &[String], entry: &DesktopEntry, score: i64, match_kind: MatchKind,
+		session_handle: SessionHandle, locales: &[String], entry: &DesktopEntry,
+		app_match: AppMatch,
 	) -> Candidate {
-		let title = entry
-			.full_name(locales)
-			.or(entry.generic_name(locales))
-			.map_or_else(|| Arc::from("Unknown"), |s| Arc::from(&*s));
-
-		let subtitle = entry
+		let title = entry_title(entry, locales);
+		let subtitle_text = entry
 			.comment(locales)
 			.or(entry.generic_name(locales))
-			.map(|s| Arc::from(&*s));
+			.map(|s| Arc::<str>::from(&*s));
+
+		let title_spans = if app_match.field == MatchField::Title {
+			Some(highlight_spans(&title, &app_match.indices))
+		} else {
+			None
+		};
+
+		let subtitle = match app_match.field {
+			MatchField::Title => subtitle_text.as_deref().map(plain_spans),
+			MatchField::GenericName | MatchField::Comment => subtitle_text.as_deref().map(|text| {
+				if text == app_match.text.as_ref() {
+					highlight_spans(text, &app_match.indices)
+				} else {
+					plain_spans(text)
+				}
+			}),
+			MatchField::Keyword | MatchField::Category => {
+				Some(highlight_spans(&app_match.text, &app_match.indices))
+			}
+		};
 
 		Candidate {
+			session_handle,
 			provider: APP_PROVIDER_ID,
 			id: CandidateId(Arc::from(format!("app_{}", entry.appid))),
 			activation: ActivationKey(Arc::from(entry.appid.as_str())),
 			title,
+			title_spans,
 			subtitle,
 			right_text: None,
-			icon: None,
+			icon: Some(resolve_icon(&entry.appid, 32, 2)),
 			kind: CandidateKind::App,
 			section_hint: Some(SectionHint::Apps),
-			match_kind,
-			provider_score: score as f32,
+			match_kind: app_match.kind,
+			provider_score: app_match.score as f32,
 		}
 	}
+}
+
+fn highlight_spans(text: &str, indices: &[usize]) -> Arc<[Span<'static, ()>]> {
+	// TODO: This might be better with a linear search on an array, since indices should generally
+	// be quite small
+	let matched: HashSet<usize> = indices.iter().copied().collect();
+	let mut spans = Vec::new();
+	let mut buf = String::new();
+	let mut current_highlight = None;
+
+	for (idx, ch) in text.chars().enumerate() {
+		let highlight = matched.contains(&idx);
+
+		if current_highlight == Some(highlight) {
+			buf.push(ch);
+			continue;
+		}
+
+		if !buf.is_empty() {
+			spans.push(span_for(
+				std::mem::take(&mut buf),
+				current_highlight.unwrap_or_default(),
+			));
+		}
+
+		current_highlight = Some(highlight);
+		buf.push(ch);
+	}
+
+	if !buf.is_empty() {
+		spans.push(span_for(buf, current_highlight.unwrap_or_default()));
+	}
+
+	Arc::from(spans)
+}
+
+fn plain_spans(text: &str) -> Arc<[Span<'static, ()>]> {
+	Arc::from([span(text.to_owned())])
+}
+
+fn span_for(text: String, highlight: bool) -> Span<'static, ()> {
+	let mut span = span(text);
+	if highlight {
+		span = span.color(COLORS.decorative.purple);
+	}
+
+	span
 }
 
 #[async_trait::async_trait]
@@ -82,12 +154,13 @@ impl Provider for ApplicationProvider {
 	}
 
 	async fn update_query(
-		&self, _session: SessionHandle, query: Query, _ctx: Arc<dyn ProviderContext>,
+		&self, session: SessionHandle, query: Query, _ctx: Arc<dyn ProviderContext>,
 	) -> eyre::Result<()> {
 		let search = query.raw.clone();
 		let entries = self.entries.clone();
 		let langs = self.languages.clone();
 		let matcher = self.matcher.clone();
+		let typo_search = self.typo_search.clone();
 
 		self.sender.send(ProviderEvent::Reset).await?;
 		self.sender
@@ -103,10 +176,10 @@ impl Provider for ApplicationProvider {
 
 			for entry in entries.iter() {
 				if !entry.hidden() {
-					let app_match = get_match(&search, &matcher, entry, &langs);
+					let app_match = get_match(&search, &matcher, &typo_search, entry, &langs);
 
-					if let Some((score, kind)) = app_match {
-						let cand = Self::entry_to_candidate(&langs, entry, score, kind);
+					if let Some(m) = app_match {
+						let cand = Self::entry_to_candidate(session, &langs, entry, m);
 						let _ = sender.send_blocking(ProviderEvent::CandidateUpsert(cand));
 					}
 				}
@@ -161,63 +234,156 @@ const WEIGHT_ACTION: i64 = 70;
 const WEIGHT_KEYWORD: i64 = 60;
 const WEIGHT_CATEGORY: i64 = 30;
 
-fn get_match(
-	input: &str, matcher: &SkimMatcherV2, entry: &DesktopEntry, locales: &[String],
-) -> Option<(i64, MatchKind)> {
-	let mut best_score = -1;
-	let mut best_kind = MatchKind::Unknown;
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchField {
+	Category,
+	Keyword,
+	Comment,
+	GenericName,
+	Title,
+}
 
-	if let Some(name) = entry.name(locales)
-		&& let Some((score, kind)) = analyze_match(&name, input, matcher)
-	{
-		best_score = score * WEIGHT_NAME;
-		best_kind = kind;
+struct AppMatch {
+	score: i64,
+	kind: MatchKind,
+	field: MatchField,
+	text: Arc<str>,
+	indices: Arc<[usize]>,
+}
+
+impl Default for AppMatch {
+	fn default() -> Self {
+		Self {
+			score: -1,
+			kind: MatchKind::Unknown,
+			field: MatchField::Category,
+			text: Arc::from(""),
+			indices: Arc::new([]),
+		}
+	}
+}
+
+impl AppMatch {
+	fn weight(mut self, weight: i64) -> Self {
+		self.score *= weight;
+		self
 	}
 
-	if let Some(generic_name) = entry.generic_name(locales)
-		&& let Some((score, kind)) = analyze_match(&generic_name, input, matcher)
-	{
-		let score = score * WEIGHT_GENERIC;
-		if score > best_score {
-			best_score = score;
-			best_kind = kind;
+	fn max(&mut self, other: Self) {
+		if other.rank() > self.rank() {
+			*self = other;
 		}
 	}
 
+	fn rank(&self) -> (MatchField, i32, i64) {
+		(self.field, self.kind.priority(), self.score)
+	}
+}
+
+fn entry_title(entry: &DesktopEntry, locales: &[String]) -> Arc<str> {
+	entry
+		.full_name(locales)
+		.or(entry.name(locales))
+		.or(entry.generic_name(locales))
+		.map_or_else(|| Arc::from("Unknown"), |s| Arc::from(&*s))
+}
+
+fn get_match(
+	input: &str, matcher: &SkimMatcherV2, typo_search: &LauncherTypoSearch, entry: &DesktopEntry,
+	locales: &[String],
+) -> Option<AppMatch> {
+	let mut best = AppMatch::default();
+	let title = entry_title(entry, locales);
+
+	if let Some(m) = analyze_match(&title, input, matcher, Some(typo_search)) {
+		best = m.with_text(title, MatchField::Title).weight(WEIGHT_NAME);
+	}
+
+	if let Some(generic_name) = entry.generic_name(locales)
+		&& let Some(m) = analyze_match(&generic_name, input, matcher, Some(typo_search))
+	{
+		best.max(
+			m.with_text(generic_name, MatchField::GenericName)
+				.weight(WEIGHT_GENERIC),
+		);
+	}
+
+	if let Some(comment) = entry.comment(locales)
+		&& let Some(m) = analyze_match(&comment, input, matcher, None)
+	{
+		best.max(
+			m.with_text(comment, MatchField::Comment)
+				.weight(WEIGHT_ACTION),
+		);
+	}
+
 	for kw in entry.keywords(locales).iter().flatten() {
-		if let Some((score, kind)) = analyze_match(kw, input, matcher) {
-			let score = score * WEIGHT_KEYWORD;
-			if score > best_score {
-				best_score = score;
-				best_kind = kind;
-			}
+		if let Some(m) = analyze_match(kw, input, matcher, None) {
+			best.max(
+				m.with_text(kw.as_ref(), MatchField::Keyword)
+					.weight(WEIGHT_KEYWORD),
+			);
 		}
 	}
 
 	for cat in entry.categories().iter().flatten() {
-		if let Some((score, kind)) = analyze_match(cat, input, matcher) {
-			let score = score * WEIGHT_CATEGORY;
-			if score > best_score {
-				best_score = score;
-				best_kind = kind;
-			}
+		if let Some(m) = analyze_match(cat, input, matcher, None) {
+			best.max(
+				m.with_text(cat.as_ref(), MatchField::Category)
+					.weight(WEIGHT_CATEGORY),
+			)
 		}
 	}
 
-	if best_score > 0 {
-		Some((best_score, best_kind))
-	} else {
-		None
+	if best.score > 0 { Some(best) } else { None }
+}
+
+struct AnalyzeMatch {
+	score: i64,
+	kind: MatchKind,
+	indices: Arc<[usize]>,
+}
+
+impl AnalyzeMatch {
+	fn with_text(self, text: impl Into<Arc<str>>, field: MatchField) -> AppMatch {
+		AppMatch {
+			score: self.score,
+			kind: self.kind,
+			field,
+			text: text.into(),
+			indices: self.indices,
+		}
 	}
 }
 
-fn analyze_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<(i64, MatchKind)> {
+fn analyze_match(
+	text: &str, pattern: &str, matcher: &SkimMatcherV2, typo_search: Option<&LauncherTypoSearch>,
+) -> Option<AnalyzeMatch> {
+	let fuzzy = analyze_fuzzy_match(text, pattern, matcher);
+
+	if fuzzy.as_ref().is_some_and(|m| {
+		matches!(
+			m.kind,
+			MatchKind::Exact | MatchKind::Prefix | MatchKind::Substring
+		)
+	}) {
+		return fuzzy;
+	}
+
+	if let Some(typo_search) = typo_search {
+		analyze_typo_match(text, pattern, typo_search).or(fuzzy)
+	} else {
+		fuzzy
+	}
+}
+
+fn analyze_fuzzy_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<AnalyzeMatch> {
 	let (score, indices) = matcher.fuzzy_indices(text, pattern)?;
 
 	#[allow(clippy::indexing_slicing)]
 	let is_contiguous = indices.windows(2).all(|w| w[0] + 1 == w[1]);
 
-	let match_kind = if indices.len() == text.len() {
+	let kind = if indices.len() == text.len() {
 		MatchKind::Exact
 	} else if is_contiguous && indices.first().is_some_and(|i| *i == 0) {
 		MatchKind::Prefix
@@ -227,5 +393,138 @@ fn analyze_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<(
 		MatchKind::Fuzzy
 	};
 
-	Some((score, match_kind))
+	Some(AnalyzeMatch {
+		score,
+		kind,
+		indices: Arc::from(indices),
+	})
+}
+
+fn analyze_typo_match(
+	text: &str, pattern: &str, typo_search: &LauncherTypoSearch,
+) -> Option<AnalyzeMatch> {
+	let pattern_len = pattern.chars().count();
+	let max_distance = typo_distance_limit(pattern_len, typo_search)?;
+	let pattern = pattern.to_lowercase();
+	let mut best: Option<AnalyzeMatch> = None;
+
+	for token in typo_tokens(text) {
+		if token.indices.len() < pattern_len {
+			continue;
+		}
+
+		let token_prefix = token
+			.chars
+			.iter()
+			.take(pattern_len)
+			.collect::<String>()
+			.to_lowercase();
+		let distance = damerau_levenshtein(&pattern, &token_prefix);
+
+		if distance == 0 || distance > max_distance {
+			continue;
+		}
+
+		let start = token.indices[0];
+		let score = 48 - (distance as i64 * 12) - (start.min(20) as i64);
+		if score <= 0 {
+			continue;
+		}
+
+		let candidate = AnalyzeMatch {
+			score,
+			kind: MatchKind::Typo,
+			indices: Arc::from(&token.indices[..pattern_len]),
+		};
+
+		if best
+			.as_ref()
+			.is_none_or(|best| candidate.score > best.score)
+		{
+			best = Some(candidate);
+		}
+	}
+
+	best
+}
+
+fn typo_distance_limit(pattern_len: usize, typo_search: &LauncherTypoSearch) -> Option<usize> {
+	if pattern_len < typo_search.min_chars as usize {
+		None
+	} else if pattern_len <= typo_search.short_query_chars as usize {
+		Some(typo_search.short_max_distance as usize)
+	} else if pattern_len <= typo_search.medium_query_chars as usize {
+		Some(typo_search.medium_max_distance as usize)
+	} else {
+		Some(typo_search.long_max_distance as usize)
+	}
+}
+
+struct TypoToken {
+	chars: Vec<char>,
+	indices: Vec<usize>,
+}
+
+fn typo_tokens(text: &str) -> impl Iterator<Item = TypoToken> + '_ {
+	let mut tokens = Vec::new();
+	let mut chars = Vec::new();
+	let mut indices = Vec::new();
+
+	for (idx, ch) in text.chars().enumerate() {
+		if ch.is_alphanumeric() {
+			chars.push(ch);
+			indices.push(idx);
+		} else if !chars.is_empty() {
+			tokens.push(TypoToken { chars, indices });
+			chars = Vec::new();
+			indices = Vec::new();
+		}
+	}
+
+	if !chars.is_empty() {
+		tokens.push(TypoToken { chars, indices });
+	}
+
+	tokens.into_iter()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn typo_match_accepts_one_substitution_in_title_prefix() {
+		let m = analyze_typo_match("Firefox", "fore", &LauncherTypoSearch::default())
+			.expect("fore should typo-match fire");
+
+		assert_eq!(m.kind, MatchKind::Typo);
+		assert_eq!(m.indices.as_ref(), &[0, 1, 2, 3]);
+	}
+
+	#[test]
+	fn typo_match_accepts_one_transposition_in_title_prefix() {
+		let m = analyze_typo_match("Firefox", "frie", &LauncherTypoSearch::default())
+			.expect("frie should typo-match fire");
+
+		assert_eq!(m.kind, MatchKind::Typo);
+		assert_eq!(m.indices.as_ref(), &[0, 1, 2, 3]);
+	}
+
+	#[test]
+	fn typo_match_rejects_short_patterns() {
+		assert!(analyze_typo_match("Firefox", "fo", &LauncherTypoSearch::default()).is_none());
+	}
+
+	#[test]
+	fn typo_match_uses_configured_min_chars() {
+		let typo_search = LauncherTypoSearch {
+			min_chars: 2,
+			..Default::default()
+		};
+
+		let m = analyze_typo_match("Firefox", "fo", &typo_search)
+			.expect("configured min_chars should allow two-character typo matching");
+
+		assert_eq!(m.indices.as_ref(), &[0, 1]);
+	}
 }

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_channel::{Receiver, Sender};
 use iced::widget::svg;
-use neo_widgets::phosphor_icon;
+use neo_widgets::{icons::ResolvedIcon, phosphor_icon};
 
 use crate::providers::{
 	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, MatchKind, Provider,
@@ -28,7 +28,9 @@ impl CalcProvider {
 		}
 	}
 
-	fn candidate_from_res(&self, expr_str: Arc<str>, res: f64) -> Candidate {
+	fn candidate_from_res(
+		&self, session_handle: SessionHandle, expr_str: Arc<str>, res: f64,
+	) -> Candidate {
 		let res_str = Arc::<str>::from(
 			format!("{res:.8}")
 				.trim_end_matches('0')
@@ -36,13 +38,15 @@ impl CalcProvider {
 		);
 
 		Candidate {
+			session_handle,
 			provider: CALC_PROVIDER_ID,
 			id: Self::cand_id(),
 			activation: ActivationKey(res_str.clone()),
 			title: res_str.clone(),
+			title_spans: None,
 			right_text: Some(expr_str),
 			subtitle: None,
-			icon: Some(self.icon.clone()),
+			icon: Some(ResolvedIcon::Svg(self.icon.clone())),
 			kind: CandidateKind::Calc,
 			section_hint: Some(SectionHint::Calculations),
 			match_kind: MatchKind::Exact,
@@ -70,7 +74,7 @@ impl Provider for CalcProvider {
 	}
 
 	async fn update_query(
-		&self, _session: SessionHandle, query: Query, _ctx: Arc<dyn ProviderContext>,
+		&self, session: SessionHandle, query: Query, _ctx: Arc<dyn ProviderContext>,
 	) -> eyre::Result<()> {
 		let expr = query.raw;
 
@@ -112,7 +116,7 @@ impl Provider for CalcProvider {
 
 		self.sender
 			.send(ProviderEvent::CandidateUpsert(
-				self.candidate_from_res(expr, res),
+				self.candidate_from_res(session, expr, res),
 			))
 			.await?;
 		self.sender.send(ProviderEvent::Done).await?;

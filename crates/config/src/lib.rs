@@ -62,6 +62,10 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub system_menu: SystemMenu,
+	/// Settings for controlling the launcher
+	#[config(default)]
+	#[garde(dive)]
+	pub launcher: Launcher,
 }
 
 impl ConfigFile {
@@ -442,4 +446,80 @@ pub struct SystemMenu {
 	///     `a b`
 	///     `c d`
 	pub widgets: Vec<SystemMenuWidgets>,
+}
+
+#[derive(Debug, Clone, Config)]
+pub enum LauncherProvider {
+	Calculator,
+	Applications,
+}
+
+impl LauncherProvider {
+	pub fn all() -> Vec<Self> {
+		vec![Self::Calculator, Self::Applications]
+	}
+}
+
+#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[garde(allow_unvalidated)]
+pub struct Launcher {
+	/// Providers to activate for the launcher. Their results will show up as entries in the
+	/// launcher.
+	#[config(default = LauncherProvider::All)]
+	pub providers: Vec<LauncherProvider>,
+	/// Settings for typo-tolerant launcher search.
+	#[config(default)]
+	#[garde(dive)]
+	pub typo_search: LauncherTypoSearch,
+}
+
+impl Default for Launcher {
+	fn default() -> Self {
+		Self {
+			providers: LauncherProvider::all(),
+			typo_search: LauncherTypoSearch::default(),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[garde(allow_unvalidated)]
+pub struct LauncherTypoSearch {
+	/// Minimum query length before typo matching is enabled.
+	#[config(default = 3)]
+	#[garde(range(min = 0, max = 32))]
+	pub min_chars: u32,
+	/// Query length where the short-query typo distance applies.
+	#[config(default = 4)]
+	#[garde(range(min = 0, max = 64))]
+	pub short_query_chars: u32,
+	/// Maximum edit distance for short typo queries.
+	#[config(default = 1)]
+	#[garde(range(min = 0, max = 8))]
+	pub short_max_distance: u32,
+	/// Query length where the medium-query typo distance applies.
+	#[config(default = 7)]
+	#[garde(range(min = 0, max = 64))]
+	pub medium_query_chars: u32,
+	/// Maximum edit distance for medium typo queries.
+	#[config(default = 2)]
+	#[garde(range(min = 0, max = 8))]
+	pub medium_max_distance: u32,
+	/// Maximum edit distance for long typo queries.
+	#[config(default = 3)]
+	#[garde(range(min = 0, max = 8))]
+	pub long_max_distance: u32,
+}
+
+impl Default for LauncherTypoSearch {
+	fn default() -> Self {
+		Self {
+			min_chars: 3,
+			short_query_chars: 4,
+			short_max_distance: 1,
+			medium_query_chars: 7,
+			medium_max_distance: 2,
+			long_max_distance: 3,
+		}
+	}
 }
