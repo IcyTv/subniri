@@ -43,6 +43,7 @@ pub enum Message {
 	SearchChanged(String),
 	Cycle(bool),
 	Activate(ProviderId, CandidateId, ActivationKey),
+	ActivateIndex(usize),
 	Redraw(Instant),
 	ProviderEvent(ProviderId, ProviderEvent),
 	Iced(iced::Event),
@@ -288,6 +289,17 @@ impl Launcher {
 					}
 				})
 			}
+			Message::ActivateIndex(index) => {
+				let Some(cand) = self.candidates.get(index) else {
+					return Task::none();
+				};
+
+				Task::done(Message::Activate(
+					cand.provider,
+					cand.id.clone(),
+					cand.activation.clone(),
+				))
+			}
 
 			Message::Iced(iced::Event::Window(iced::window::Event::RedrawRequested(now)))
 			| Message::Redraw(now)
@@ -509,6 +521,7 @@ impl Launcher {
 				placeholder: COLORS.text.scale_alpha(0.7),
 			})
 			.on_input(Message::SearchChanged)
+			.on_submit(Message::ActivateIndex(0))
 			.into()
 	}
 
