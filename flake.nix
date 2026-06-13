@@ -518,5 +518,7 @@
       homeManagerModules.subniri = import ./nix/home-manager/subniri.nix {inherit self;};
       homeManagerModules.default = self.homeManagerModules.subniri;
       homeModules.subniri = self.homeManagerModules.subniri;
+      nixosModules.subniri = import ./nix/nixos/subniri.nix {inherit self;};
+      nixosModules.default = self.nixosModules.subniri;
     };
 }

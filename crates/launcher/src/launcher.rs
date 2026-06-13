@@ -1,4 +1,11 @@
-use std::{collections::HashSet, hash::Hash, sync::Arc, time::Instant};
+use std::{
+	collections::HashSet,
+	env, fs,
+	hash::Hash,
+	process::Command,
+	sync::Arc,
+	time::{Duration, Instant},
+};
 
 use async_channel::Receiver;
 use futures::{StreamExt, future::join_all};
@@ -44,6 +51,8 @@ pub enum Message {
 	Cycle(bool),
 	Activate(ProviderId, CandidateId, ActivationKey),
 	ActivateIndex(usize),
+	Resumed,
+	RestartAfterResume,
 	Redraw(Instant),
 	ProviderEvent(ProviderId, ProviderEvent),
 	Iced(iced::Event),
@@ -148,6 +157,7 @@ impl Launcher {
 				}
 			}
 		});
+		let resume = resume_events();
 		let providers =
 			Subscription::run_with(HashableProviders(self.providers.clone()), |providers| {
 				let providers = providers.0.clone();
@@ -181,12 +191,17 @@ impl Launcher {
 		let iced = iced::event::listen().map(Message::Iced);
 		let frames = iced::window::frames().map(Message::Redraw);
 
-		Subscription::batch([keyboard, event, dbus, providers, iced, frames])
+		Subscription::batch([keyboard, event, dbus, resume, providers, iced, frames])
 	}
 
 	#[allow(clippy::needless_pass_by_value)]
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
+			Message::Resumed => Task::future(async {
+				tokio::time::sleep(Duration::from_millis(500)).await;
+				Message::RestartAfterResume
+			}),
+			Message::RestartAfterResume => restart_launcher_process(),
 			Message::Close if let Some(id) = self.open.take() => {
 				self.search.clear();
 				self.candidates.clear();
@@ -567,4 +582,87 @@ impl ProviderContext for DummyCtx {
 	async fn set_input(&self, _input: String) {}
 	async fn set_preview(&self, _preview: PreviewModel) {}
 	async fn set_response(&self, _response: String) {}
+}
+
+fn resume_events() -> Subscription<Message> {
+	if running_under_systemd_service() {
+		return Subscription::none();
+	}
+
+	Subscription::run(|| {
+		async_stream::stream! {
+			let connection = match zbus::Connection::system().await {
+				Ok(connection) => connection,
+				Err(error) => {
+					log::error!("Failed to connect to system bus for resume events: {error}");
+					return;
+				}
+			};
+
+			let proxy = match zbus::Proxy::new(
+				&connection,
+				"org.freedesktop.login1",
+				"/org/freedesktop/login1",
+				"org.freedesktop.login1.Manager",
+			)
+			.await
+			{
+				Ok(proxy) => proxy,
+				Err(error) => {
+					log::error!("Failed to connect to login manager for resume events: {error}");
+					return;
+				}
+			};
+
+			let mut sleep_signals = match proxy.receive_signal("PrepareForSleep").await {
+				Ok(sleep_signals) => sleep_signals,
+				Err(error) => {
+					log::error!("Failed to listen for sleep preparation: {error}");
+					return;
+				}
+			};
+
+			while let Some(signal) = sleep_signals.next().await {
+				match signal.body().deserialize::<bool>() {
+					Ok(false) => yield Message::Resumed,
+					Ok(true) => (),
+					Err(error) => log::warn!("Failed to read sleep preparation signal: {error}"),
+				}
+			}
+		}
+	})
+}
+
+fn restart_launcher_process() -> Task<Message> {
+	let exe = match env::current_exe() {
+		Ok(exe) => exe,
+		Err(error) => {
+			log::error!("Failed to find current executable for resume restart: {error}");
+			return Task::none();
+		}
+	};
+
+	let mut command = Command::new(exe);
+	command.args(env::args_os().skip(1));
+
+	if let Ok(current_dir) = env::current_dir() {
+		command.current_dir(current_dir);
+	}
+
+	match command.spawn() {
+		Ok(_) => iced_runtime::exit(),
+		Err(error) => {
+			log::error!("Failed to restart launcher after resume: {error}");
+			Task::none()
+		}
+	}
+}
+
+fn running_under_systemd_service() -> bool {
+	fs::read_to_string("/proc/self/cgroup").is_ok_and(|cgroup| {
+		cgroup.lines().any(|line| {
+			let path = line.rsplit_once(':').map_or(line, |(_, path)| path);
+			path.split('/').any(|part| part.ends_with(".service"))
+		})
+	})
 }

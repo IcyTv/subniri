@@ -1,6 +1,6 @@
 use config::ConfigFile;
 use iced::alignment::Vertical;
-use std::{collections::HashMap, env, path::PathBuf, process::Command, time::Duration};
+use std::{collections::HashMap, env, fs, path::PathBuf, process::Command, time::Duration};
 
 use futures::StreamExt;
 use iced::Length;
@@ -422,6 +422,10 @@ enum BarMessage {
 }
 
 fn resume_events() -> Subscription<BarMessage> {
+	if running_under_systemd_service() {
+		return Subscription::none();
+	}
+
 	Subscription::run(|| {
 		async_stream::stream! {
 			let connection = match zbus::Connection::system().await {
@@ -489,6 +493,15 @@ fn restart_bar_process() -> Task<BarMessage> {
 			Task::none()
 		}
 	}
+}
+
+fn running_under_systemd_service() -> bool {
+	fs::read_to_string("/proc/self/cgroup").is_ok_and(|cgroup| {
+		cgroup.lines().any(|line| {
+			let path = line.rsplit_once(':').map_or(line, |(_, path)| path);
+			path.split('/').any(|part| part.ends_with(".service"))
+		})
+	})
 }
 
 fn open_power_menu() {
