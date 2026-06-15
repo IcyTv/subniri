@@ -323,8 +323,15 @@ impl MediaControls {
 					.step(0.01)
 					.on_change(|_| Message::Noop),
 			);
+			content = content.push(space().height(2));
 
-			let position_text = text("00:41".to_string()).color(COLORS.text).size(12);
+			let position_text = text(format!(
+				"{:0>2}:{:0>2}",
+				self.active_player_position as u32 / 60,
+				self.active_player_position as u32 % 60
+			))
+			.color(COLORS.text)
+			.size(12);
 			let length_text = text(format!(
 				"{:0>2}:{:0>2}",
 				snap.length.as_secs() / 60,

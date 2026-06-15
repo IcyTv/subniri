@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use clap::Parser;
+use clap::{Parser, builder::PossibleValue};
 use config::{ConfigFile, LauncherProvider};
 use iced_layershell::{
 	daemon,
@@ -10,7 +10,9 @@ use iced_layershell::{
 
 use crate::{
 	launcher::Launcher,
-	providers::{Provider, applications::ApplicationProvider, calculator::CalcProvider},
+	providers::{
+		Provider, applications::ApplicationProvider, calculator::CalcProvider, files::FileProvider,
+	},
 };
 
 mod dbus;
@@ -30,6 +32,9 @@ struct Args {
 	/// Don't close the launcher when loosing focus
 	#[clap(long)]
 	no_focus: bool,
+
+	#[clap(short, long, num_args = 0..)]
+	providers: Vec<ClapLauncherProvider>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -41,15 +46,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		.inspect_err(|e| log::error!("Failed to load config: {e}"))
 		.unwrap_or_default();
 
-	let providers: Vec<Arc<dyn Provider>> = config
-		.launcher
-		.providers
-		.iter()
+	// log::trace!("Providers from args: {:?}", args.providers);
+	let providers = if args.providers.is_empty() {
+		config.launcher.providers.clone()
+	} else {
+		args.providers.clone().into_iter().map(|p| p.0).collect()
+	};
+	log::trace!("Providers: {:?}", providers);
+
+	let providers: Vec<Arc<dyn Provider>> = providers
+		.into_iter()
 		.map(|provider| match provider {
 			LauncherProvider::Applications => Arc::new(ApplicationProvider::new(
-				config.launcher.typo_search.clone(),
+				config.launcher.fuzzy_search.clone(),
 			)) as _,
 			LauncherProvider::Calculator => Arc::new(CalcProvider::new()) as _,
+			LauncherProvider::Files => Arc::new(FileProvider::new()) as _,
 		})
 		.collect::<Vec<_>>();
 	let providers = Arc::<[Arc<dyn Provider>]>::from(providers);
@@ -72,4 +84,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	});
 
 	tokio::task::block_in_place(move || app.run().map_err(Into::into))
+}
+
+#[derive(Clone, Debug)]
+#[repr(transparent)]
+struct ClapLauncherProvider(LauncherProvider);
+
+impl clap::ValueEnum for ClapLauncherProvider {
+	fn value_variants<'a>() -> &'a [Self] {
+		&[
+			Self(LauncherProvider::Applications),
+			Self(LauncherProvider::Calculator),
+			Self(LauncherProvider::Files),
+		]
+	}
+
+	fn to_possible_value(&self) -> Option<PossibleValue> {
+		match self.0 {
+			LauncherProvider::Applications => {
+				Some(PossibleValue::new("applications").alias("apps"))
+			}
+			LauncherProvider::Calculator => Some(PossibleValue::new("calculator").alias("calc")),
+			LauncherProvider::Files => Some(PossibleValue::new("files")),
+		}
+	}
+
+	fn from_str(input: &str, _ignore_case: bool) -> Result<Self, String> {
+		match input.to_lowercase().as_str() {
+			"applications" | "apps" => Ok(Self(LauncherProvider::Applications)),
+			"calculator" | "calc" => Ok(Self(LauncherProvider::Calculator)),
+			"files" => Ok(Self(LauncherProvider::Files)),
+			_ => Err(format!("Invalid provider: {input}")),
+		}
+	}
 }

@@ -7,6 +7,7 @@ use neo_widgets::icons::ResolvedIcon;
 
 pub mod applications;
 pub mod calculator;
+pub mod files;
 pub mod projects;
 
 #[async_trait::async_trait]

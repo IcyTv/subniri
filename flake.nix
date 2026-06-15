@@ -443,6 +443,10 @@
             name = "snowconf";
             package = rustPkgs.workspace.settings {};
           }
+          {
+            name = "icepickd";
+            package = rustPkgs.workspace.indexer {};
+          }
         ];
 
         workspacePackages =

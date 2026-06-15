@@ -22,6 +22,6 @@ log.workspace = true
 neo-widgets.workspace = true
 nix.workspace = true
 pretty_env_logger.workspace = true
-serde = { version = "1.0.228", features = ["derive"] }
+serde.workspace = true
 zbus.workspace = true
-zvariant = "5.11.0"
+zvariant.workspace = true

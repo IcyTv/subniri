@@ -7,12 +7,13 @@ use std::{
 	time::{Duration, Instant},
 };
 
-use async_channel::Receiver;
+use async_channel::{Receiver, Sender};
 use futures::{StreamExt, future::join_all};
 use iced::{
 	Alignment, Animation, Border, Color, Element, Font, Length, Subscription, Task, Theme, font,
 	keyboard,
 	theme::Style,
+	time,
 	widget::{column, container, image, row, space, svg, text, text::Rich, text_input},
 	window::Id,
 };
@@ -44,6 +45,8 @@ pub enum Message {
 	Close,
 	Exit,
 	ConnEstablished(Result<zbus::Connection, zbus::Error>),
+	DbusHealthCheck,
+	DbusHealthChecked(Result<bool, zbus::Error>),
 	WindowOpened(Id),
 	WindowFocused(Id),
 	WindowUnfocused(Id),
@@ -63,7 +66,10 @@ pub struct Launcher {
 	providers: Arc<[Arc<dyn Provider>]>,
 	open: Option<Id>,
 	conn: Option<zbus::Connection>,
+	dbus_tx: Sender<Message>,
 	dbus_rx: Receiver<Message>,
+	dbus_connected_once: bool,
+	dbus_reconnect_in_flight: bool,
 	search: String,
 	exit_on_close: bool,
 	keep_open_on_focus_loss: bool,
@@ -80,11 +86,7 @@ impl Launcher {
 	pub fn new(args: &crate::Args, providers: Arc<[Arc<dyn Provider>]>) -> (Self, Task<Message>) {
 		let (tx, dbus_rx) = async_channel::unbounded();
 
-		let dbus_conn_task = Task::future(async move {
-			let res = DbusListener::connect(tx).await;
-
-			Message::ConnEstablished(res)
-		});
+		let dbus_conn_task = connect_dbus_task(tx.clone());
 		let mut tasks = vec![dbus_conn_task];
 
 		if args.open {
@@ -96,7 +98,10 @@ impl Launcher {
 				providers,
 				open: None,
 				dbus_rx,
+				dbus_tx: tx,
 				conn: None,
+				dbus_connected_once: false,
+				dbus_reconnect_in_flight: true,
 				search: String::new(),
 				exit_on_close: args.exit_on_close,
 				keep_open_on_focus_loss: args.no_focus,
@@ -158,6 +163,7 @@ impl Launcher {
 			}
 		});
 		let resume = resume_events();
+		let dbus_health = time::every(Duration::from_secs(30)).map(|_| Message::DbusHealthCheck);
 		let providers =
 			Subscription::run_with(HashableProviders(self.providers.clone()), |providers| {
 				let providers = providers.0.clone();
@@ -191,7 +197,16 @@ impl Launcher {
 		let iced = iced::event::listen().map(Message::Iced);
 		let frames = iced::window::frames().map(Message::Redraw);
 
-		Subscription::batch([keyboard, event, dbus, resume, providers, iced, frames])
+		Subscription::batch([
+			keyboard,
+			event,
+			dbus,
+			resume,
+			dbus_health,
+			providers,
+			iced,
+			frames,
+		])
 	}
 
 	#[allow(clippy::needless_pass_by_value)]
@@ -268,13 +283,48 @@ impl Launcher {
 				}
 			}
 			Message::ConnEstablished(Ok(conn)) => {
+				log::info!("Launcher D-Bus service connected");
+				self.dbus_connected_once = true;
+				self.dbus_reconnect_in_flight = false;
 				self.conn = Some(conn);
 				Task::none()
 			}
 			Message::ConnEstablished(Err(e)) => {
-				log::error!("Error: {e}");
+				self.dbus_reconnect_in_flight = false;
 
-				iced::exit()
+				if self.dbus_connected_once {
+					log::warn!("Failed to reconnect launcher D-Bus service: {e}");
+					Task::none()
+				} else {
+					log::error!("Error: {e}");
+
+					iced::exit()
+				}
+			}
+			Message::DbusHealthCheck => {
+				if self.dbus_reconnect_in_flight {
+					return Task::none();
+				}
+
+				let Some(conn) = self.conn.clone() else {
+					self.dbus_reconnect_in_flight = true;
+					return connect_dbus_task(self.dbus_tx.clone());
+				};
+
+				Task::future(async move { Message::DbusHealthChecked(check_dbus_name(conn).await) })
+			}
+			Message::DbusHealthChecked(Ok(true)) => Task::none(),
+			Message::DbusHealthChecked(Ok(false)) => {
+				log::warn!("Launcher D-Bus name is no longer owned; reconnecting");
+				self.conn = None;
+				self.dbus_reconnect_in_flight = true;
+				connect_dbus_task(self.dbus_tx.clone())
+			}
+			Message::DbusHealthChecked(Err(error)) => {
+				log::warn!("Launcher D-Bus health check failed; reconnecting: {error}");
+				self.conn = None;
+				self.dbus_reconnect_in_flight = true;
+				connect_dbus_task(self.dbus_tx.clone())
 			}
 
 			Message::Exit => iced::exit(),
@@ -412,7 +462,8 @@ impl Launcher {
 
 		let mut content = column![].height(Length::Fill);
 
-		let end = self.candidates.len().min(10);
+		// let end = self.candidates.len().min(10);
+		let end = self.candidates.len();
 
 		for cand in self.candidates.get(..end).unwrap_or(&[]) {
 			let mut display = row![].spacing(12);
@@ -582,6 +633,30 @@ impl ProviderContext for DummyCtx {
 	async fn set_input(&self, _input: String) {}
 	async fn set_preview(&self, _preview: PreviewModel) {}
 	async fn set_response(&self, _response: String) {}
+}
+
+fn connect_dbus_task(tx: Sender<Message>) -> Task<Message> {
+	Task::future(async move { Message::ConnEstablished(DbusListener::connect(tx).await) })
+}
+
+async fn check_dbus_name(conn: zbus::Connection) -> zbus::Result<bool> {
+	let Some(unique_name) = conn.unique_name().map(ToString::to_string) else {
+		return Ok(false);
+	};
+
+	let proxy = zbus::Proxy::new(
+		&conn,
+		"org.freedesktop.DBus",
+		"/org/freedesktop/DBus",
+		"org.freedesktop.DBus",
+	)
+	.await?;
+
+	let owner: String = proxy
+		.call("GetNameOwner", &(crate::dbus::SERVICE_NAME))
+		.await?;
+
+	Ok(owner == unique_name)
 }
 
 fn resume_events() -> Subscription<Message> {

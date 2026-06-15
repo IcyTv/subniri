@@ -4,6 +4,8 @@
   pkgs,
   ...
 }: let
+  inherit (import ../kdl.nix {inherit lib;}) node plain leaf flag serialize;
+
   cfg = config.services.subniri;
   inherit (lib) mkEnableOption mkIf mkOption types;
 
@@ -42,6 +44,12 @@
     cli = {
       package = packages.subniri-cli;
       description = "Subniri CLI tool";
+    };
+    icepickd = {
+      package = packages.icepickd;
+      description = "File indexing service";
+      bin = "icepickd";
+      systemd = true;
     };
   };
 
@@ -85,7 +93,7 @@
         lib.optionals cfg.config.enable [
           "SUBNIRI_CONFIG_FILE=${configPath}"
         ]
-        ++ ["RUST_LOG=warn"];
+        ++ ["RUST_LOG=info"];
       Restart = "on-failure";
       RestartSec = 5;
     };
@@ -104,34 +112,8 @@
     };
   };
 
-  quote = builtins.toJSON;
-  bool = value:
-    if value
-    then "true"
-    else "false";
-  nullableString = value:
-    if value == null
-    then "null"
-    else quote value;
-
-  indent = text:
-    lib.concatMapStringsSep "\n" (line: "  ${line}")
-    (lib.splitString "\n" (lib.removeSuffix "\n" text));
-
-  renderBlock = name: lines: "${name} {\n${indent (lib.concatStringsSep "\n" lines)}\n}";
-
-  renderNightlightSetting = name: value:
-    renderBlock name [
-      "temperature ${toString value.temperature}"
-      "brightness ${toString value.brightness}"
-    ];
-
-  renderStringList = name: values:
-    if values == []
-    then "${name}"
-    else renderBlock name (map (value: ''- ${quote value}'') values);
-
-  renderConfig = settings: let
+  renderConfig = cfg: let
+    inherit (cfg) settings;
     dawn =
       if settings.nightlight.useLocation
       then null
@@ -145,28 +127,78 @@
       then "20:00"
       else settings.nightlight.dusk;
   in
-    lib.concatStringsSep "\n" [
-      (renderBlock "nightlight" [
-        "enabled ${bool settings.nightlight.enable}"
-        "use_location ${bool settings.nightlight.useLocation}"
-        "dawn ${nullableString dawn}"
-        "dusk ${nullableString dusk}"
-        (renderNightlightSetting "day" settings.nightlight.day)
-        (renderNightlightSetting "night" settings.nightlight.night)
-        "debounce_ms ${toString settings.nightlight.debounceMs}"
-      ])
-      (renderBlock "homeassistant" [
-        "enabled ${bool settings.homeassistant.enable}"
-        "url ${nullableString settings.homeassistant.url}"
-        (renderStringList "tracked_devices" settings.homeassistant.trackedDevices)
-      ])
-      (renderBlock "spotify" [
-        "enabled ${bool settings.spotify.enable}"
-      ])
-      (renderBlock "system_menu" [
-        (renderStringList "widgets" settings.systemMenu.widgets)
-      ])
-    ];
+    serialize.nodes (
+      [
+        (plain "nightlight" (
+          lib.optionals settings.nightlight.enable [
+            (flag "enabled")
+          ]
+          ++ lib.optionals settings.nightlight.useLocation [
+            (flag "use_location")
+          ]
+          ++ [
+            (leaf "debounce_ms" settings.nightlight.debounceMs)
+          ]
+          ++ lib.optionals (dawn != null) [
+            (leaf "dawn" dawn)
+          ]
+          ++ lib.optionals (dusk != null) [
+            (leaf "dusk" dusk)
+          ]
+          ++ [
+            (plain "day" [
+              (leaf "temperature" settings.nightlight.day.temperature)
+              (leaf "brightness" settings.nightlight.day.brightness)
+            ])
+            (plain "night" [
+              (leaf "temperature" settings.nightlight.night.temperature)
+              (leaf "brightness" settings.nightlight.night.brightness)
+            ])
+          ]
+        ))
+      ]
+      ++ (lib.optionals settings.homeassistant.enable (plain "homeassistant" (
+        [(flag "enabled")]
+        ++ lib.optionals (settings.homeassistant.url != null) [
+          (leaf "url" settings.homeassistant.url)
+        ]
+        ++ lib.optionals (settings.homeassistant.trackedDevices != []) [
+          (node "tracked_devices" settings.homeassistant.trackedDevices [])
+        ]
+      )))
+      ++ (lib.optionals settings.spotify.enable (plain "spotify" [
+        (flag "enabled")
+      ]))
+      ++ [
+        (plain "system_menu" (
+          lib.optionals (settings.systemMenu.widgets != []) [
+            (node "widgets" settings.systemMenu.widgets [])
+          ]
+        ))
+      ]
+      ++ lib.optionals cfg.avalaunch.enable [
+        (plain "launcher" (
+          lib.optionals (settings.launcher.providers != []) [
+            (node "providers" settings.launcher.providers [])
+          ]
+          ++ [
+            (plain "fuzzy_search" [
+              (leaf "min_chars" settings.launcher.fuzzy_search.min_chars)
+              (leaf "short_query_chars" settings.launcher.fuzzy_search.short.chars)
+              (leaf "short_max_distance" settings.launcher.fuzzy_search.short.distance)
+              (leaf "medium_query_chars" settings.launcher.fuzzy_search.medium.chars)
+              (leaf "medium_max_distance" settings.launcher.fuzzy_search.medium.distance)
+              (leaf "long_max_distance" settings.launcher.fuzzy_search.long.distance)
+            ])
+          ]
+        ))
+      ]
+      ++ lib.optionals cfg.icepickd.enable [
+        (plain "indexing" [
+          (flag "enabled")
+        ])
+      ]
+    );
 
   nightlightSettingType = types.submodule {
     options = {
@@ -299,6 +331,46 @@ in {
           default = [];
           description = "Widgets to display in the system menu.";
         };
+
+        launcher = {
+          providers = mkOption {
+            type = types.listOf (types.enum [
+              "calculator"
+              "applications"
+              "files"
+            ]);
+            default = ["calculator" "applications" "files"];
+            description = "Avalaunch providers to enable.";
+          };
+
+          fuzzy_search = let
+            queryRange = chars: distance: {
+              chars = mkOption {
+                type = types.ints.between 1 64;
+                default = chars;
+                description = "Maximum number of characters in the fuzzy search query.";
+              };
+              distance = mkOption {
+                type = types.ints.between 1 8;
+                default = distance;
+                description = "Maximum levenshtein distance for fuzzy search matches.";
+              };
+            };
+          in {
+            min_chars = mkOption {
+              type = types.ints.between 1 32;
+              default = 3;
+              description = "Minimum number of characters to start fuzzy search.";
+            };
+            short = queryRange 4 1;
+            medium = queryRange 7 2;
+            long.distance = mkOption {
+              type = types.ints.between 1 8;
+              default = 3;
+              description = "Maximum levenshtein distance for long fuzzy search matches.";
+            };
+          };
+        };
       };
     };
 
@@ -329,7 +401,7 @@ in {
     };
 
     xdg.configFile.${cfg.config.target} = mkIf cfg.config.enable {
-      text = renderConfig cfg.settings;
+      text = renderConfig cfg;
     };
 
     systemd.user = mkIf (cfg.systemd.enable && systemdComponents != {}) {

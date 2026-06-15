@@ -66,6 +66,14 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub launcher: Launcher,
+
+	/// Settings for controlling file indexing.
+	/// File indexing builds a database of files, projects, etc. on your system, which allows for
+	/// quick lookup of items in that database, for example from the launcher, at the cost of some
+	/// background resources.
+	#[config(default)]
+	#[garde(dive)]
+	pub indexing: Indexing,
 }
 
 impl ConfigFile {
@@ -452,11 +460,12 @@ pub struct SystemMenu {
 pub enum LauncherProvider {
 	Calculator,
 	Applications,
+	Files,
 }
 
 impl LauncherProvider {
 	pub fn all() -> Vec<Self> {
-		vec![Self::Calculator, Self::Applications]
+		vec![Self::Calculator, Self::Applications, Self::Files]
 	}
 }
 
@@ -470,14 +479,14 @@ pub struct Launcher {
 	/// Settings for typo-tolerant launcher search.
 	#[config(default)]
 	#[garde(dive)]
-	pub typo_search: LauncherTypoSearch,
+	pub fuzzy_search: LauncherTypoSearch,
 }
 
 impl Default for Launcher {
 	fn default() -> Self {
 		Self {
 			providers: LauncherProvider::all(),
-			typo_search: LauncherTypoSearch::default(),
+			fuzzy_search: LauncherTypoSearch::default(),
 		}
 	}
 }
@@ -521,5 +530,18 @@ impl Default for LauncherTypoSearch {
 			medium_max_distance: 2,
 			long_max_distance: 3,
 		}
+	}
+}
+
+#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[garde(allow_unvalidated)]
+pub struct Indexing {
+	#[config(default = true)]
+	pub enabled: bool,
+}
+
+impl Default for Indexing {
+	fn default() -> Self {
+		Self { enabled: true }
 	}
 }

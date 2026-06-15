@@ -3,6 +3,9 @@ use zbus::interface;
 
 use crate::launcher::Message;
 
+pub const SERVICE_NAME: &str = "de.icytv.subniri.Launcher";
+pub const OBJECT_PATH: &str = "/de/icytv/subniri/Launcher";
+
 pub struct DbusListener {
 	pub tx: Sender<Message>,
 }
@@ -12,8 +15,8 @@ impl DbusListener {
 		let listener = DbusListener { tx };
 
 		zbus::connection::Builder::session()
-			.and_then(|s| s.name("de.icytv.subniri.Launcher"))
-			.and_then(|s| s.serve_at("/de/icytv/subniri/Launcher", listener))
+			.and_then(|s| s.name(SERVICE_NAME))
+			.and_then(|s| s.serve_at(OBJECT_PATH, listener))
 			.map(zbus::connection::Builder::build)?
 			.await
 	}

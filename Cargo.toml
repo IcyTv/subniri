@@ -39,6 +39,7 @@ iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", 
 iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3b5118610c24090a4196c0f845d7b6bdb059fefe" }
 icon = "0.2.0"
 image = "0.25.10"
+indexer-common = { path = "crates/indexer-common" }
 jiff = "0.2.25"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
 launcher-common = { path = "./crates/launcher-common" }
@@ -55,16 +56,23 @@ nmrs = "3.1.5"
 num-traits = "0.2.19"
 pretty_env_logger = "0.5.0"
 reqwest = "0.13.3"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 small-map = "0.1.5"
 tokio = { version = "1.52.3", features = ["full"] }
 url = "2.5.8"
 wayland-client = "0.31.14"
-zbus = "5.15.0"
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8", features = [
+  "tokio",
+] }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
 
 [profile.release]
 codegen-units = 1
 lto = true
+
+[profile.dev.package."*"]
+opt-level = 3
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

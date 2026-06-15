@@ -1,4 +1,12 @@
-use std::{collections::HashSet, process::Stdio, sync::Arc};
+use std::{
+	collections::HashSet,
+	fs,
+	io::{self, Write},
+	os::{fd::AsRawFd, unix::net::UnixStream},
+	process::Stdio,
+	sync::Arc,
+	time::Duration,
+};
 
 use async_channel::{Receiver, Sender};
 use config::LauncherTypoSearch;
@@ -8,6 +16,7 @@ use iced::widget::{span, text::Span};
 use neo_widgets::{icons::resolve_icon, style::COLORS};
 use strsim::damerau_levenshtein;
 use tokio::{process::Command, sync::RwLock};
+use zbus::zvariant::{OwnedObjectPath, Value};
 
 use crate::providers::{
 	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, MatchKind, Provider,
@@ -207,18 +216,33 @@ impl Provider for ApplicationProvider {
 
 				let args = exec.get(1..).unwrap_or(&[]);
 
-				unsafe {
-					Command::new(cmd)
-						.args(args)
-						.stdin(Stdio::null())
-						.stdout(Stdio::null())
-						.stderr(Stdio::null())
-						.pre_exec(|| {
-							libc::setsid();
-							Ok(())
-						})
-						.spawn()?;
+				// Spawn the process, but keep it blocked in `pre_exec` until we have had a
+				// chance to move its PID out of avalaunch.service. Without the pause, a fast
+				// app could exec or fork before systemd sees the transient scope assignment.
+				let paused_child = spawn_paused_detached(cmd, args)?;
+
+				if let Some(pid) = paused_child.id()
+					&& running_under_systemd_service()
+				{
+					match tokio::time::timeout(
+						Duration::from_secs(2),
+						move_process_to_systemd_scope(pid),
+					)
+					.await
+					{
+						Ok(Ok(())) => (),
+						Ok(Err(error)) => {
+							log::warn!("Failed to move launched app into systemd scope: {error}");
+						}
+						Err(_) => {
+							log::warn!("Timed out moving launched app into systemd scope");
+						}
+					}
 				}
+
+				// Always release the child, even if scope creation failed. Scope handoff is a
+				// robustness improvement, not a reason to prevent the requested app launch.
+				paused_child.release()?;
 			}
 
 			Ok(Activation::CloseLauncher)
@@ -226,6 +250,167 @@ impl Provider for ApplicationProvider {
 			Ok(Activation::KeepOpen)
 		}
 	}
+}
+
+struct PausedChild {
+	child: tokio::process::Child,
+	release: UnixStream,
+}
+
+impl PausedChild {
+	fn id(&self) -> Option<u32> {
+		self.child.id()
+	}
+
+	fn release(mut self) -> io::Result<()> {
+		self.release.write_all(&[1])
+	}
+}
+
+fn spawn_paused_detached(cmd: &str, args: &[String]) -> eyre::Result<PausedChild> {
+	// This socket pair is an exec gate. The child blocks on `wait` in `pre_exec`,
+	// and the parent writes to `release` after the optional systemd scope handoff.
+	let (release, wait) = UnixStream::pair()?;
+	let wait_fd = wait.as_raw_fd();
+	let max_fd = open_fd_limit();
+
+	let mut command = Command::new(cmd);
+	command
+		.args(args)
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::null());
+
+	// SAFETY: `pre_exec` runs in the child after `fork` and before `exec`, so the closure only
+	// calls async-signal-safe libc functions (`close`, `setsid`, `read`) and avoids allocation,
+	// locking, or touching shared Rust state. The raw fds come from `UnixStream::pair`, remain open
+	// in the parent until `spawn` returns, and are inherited by the child. All inherited fds except
+	// stdio and the wait socket are closed before `exec`, so launched apps do not receive avalaunch's
+	// DBus/socket handles.
+	let child = unsafe {
+		command
+			.pre_exec(move || {
+				// The parent moves this PID to a systemd scope before allowing exec. First,
+				// close inherited avalaunch fds so the launched app cannot keep DBus sockets,
+				// layer-shell/display handles, or other internal resources alive or usable.
+				close_inherited_fds(max_fd, wait_fd);
+
+				if libc::setsid() == -1 {
+					let error = io::Error::last_os_error();
+					libc::close(wait_fd);
+					return Err(error);
+				}
+
+				let mut byte = 0_u8;
+				loop {
+					// Block here until the parent either completes the systemd handoff or gives
+					// up. EOF also releases the child, so this remains a best-effort handoff if
+					// avalaunch exits or drops the release socket unexpectedly. This is a blocking
+					// socket read, not polling; the loop only retries if a signal interrupts it.
+					let read = libc::read(wait_fd, (&raw mut byte).cast(), 1);
+					if read == 1 || read == 0 {
+						break;
+					}
+
+					let error = io::Error::last_os_error();
+					if read == -1 && error.raw_os_error() == Some(libc::EINTR) {
+						continue;
+					}
+
+					libc::close(wait_fd);
+					return Err(error);
+				}
+
+				if libc::close(wait_fd) == -1 {
+					return Err(io::Error::last_os_error());
+				}
+
+				Ok(())
+			})
+			.spawn()
+	};
+
+	match child {
+		Ok(child) => Ok(PausedChild { child, release }),
+		Err(error) => Err(error.into()),
+	}
+}
+
+fn open_fd_limit() -> i32 {
+	// Capture the limit in the parent before fork. Reading `/proc/self/fd` would be
+	// more precise, but directory iteration allocates and is not suitable for the
+	// `pre_exec` child path.
+	let mut limit = libc::rlimit {
+		rlim_cur: 0,
+		rlim_max: 0,
+	};
+
+	// SAFETY: `getrlimit` writes to the valid `limit` pointer for `RLIMIT_NOFILE` and does not retain
+	// the pointer after returning.
+	if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) } == 0
+		&& limit.rlim_cur != libc::RLIM_INFINITY
+	{
+		return i32::try_from(limit.rlim_cur).unwrap_or(i32::MAX);
+	}
+
+	1024
+}
+
+fn close_inherited_fds(max_fd: i32, keep_fd: i32) {
+	// Stdio is already redirected to `/dev/null` by `Command`; keep only the gate
+	// socket so the child can wait for the parent. Everything else belongs to
+	// avalaunch and should not survive into the launched application.
+	for fd in 3..max_fd {
+		if fd != keep_fd {
+			// SAFETY: Closing arbitrary inherited file descriptors in the forked child is safe here.
+			// Invalid or already-closed descriptors simply return `EBADF`, which is intentionally ignored.
+			unsafe {
+				libc::close(fd);
+			}
+		}
+	}
+}
+
+async fn move_process_to_systemd_scope(pid: u32) -> zbus::Result<()> {
+	let connection = zbus::Connection::session().await?;
+	let proxy = zbus::Proxy::new(
+		&connection,
+		"org.freedesktop.systemd1",
+		"/org/freedesktop/systemd1",
+		"org.freedesktop.systemd1.Manager",
+	)
+	.await?;
+
+	let unit = format!("avalaunch-app-{pid}.scope");
+	let description = format!("Application launched by avalaunch ({pid})");
+	let properties = [
+		("Description", Value::new(description)),
+		("PIDs", Value::new(vec![pid])),
+	];
+	let auxiliary_units: [(&str, Vec<(&str, Value<'_>)>); 0] = [];
+
+	let _: OwnedObjectPath = proxy
+		.call(
+			"StartTransientUnit",
+			&(
+				unit.as_str(),
+				"fail",
+				properties.as_slice(),
+				auxiliary_units.as_slice(),
+			),
+		)
+		.await?;
+
+	Ok(())
+}
+
+fn running_under_systemd_service() -> bool {
+	fs::read_to_string("/proc/self/cgroup").is_ok_and(|cgroup| {
+		cgroup.lines().any(|line| {
+			let path = line.rsplit_once(':').map_or(line, |(_, path)| path);
+			path.split('/').any(|part| part.ends_with(".service"))
+		})
+	})
 }
 
 const WEIGHT_NAME: i64 = 100;
