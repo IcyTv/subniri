@@ -17,8 +17,8 @@ use iced::{
 	widget::{column, container, image, row, space, svg, text},
 };
 use mprizzle::{
-	LoopStatus, Mpris, MprisError, MprisEvent, MprisPlayer, MprisResult, PlaybackStatus,
-	PlayerError, PlayerIdentity,
+	LoopStatus, Mpris, MprisError, MprisEvent, MprisPlayer, PlaybackStatus, PlayerError,
+	PlayerIdentity,
 };
 use neo_widgets::{
 	icons::{ResolvedIcon, resolve_icon},
@@ -35,6 +35,7 @@ use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 pub enum Message {
 	PlayerChanged(PlayerIdentity, PlayerSnapshot),
 	PlayerDetached(PlayerIdentity),
+	MprisDisconnected,
 	PlayerUpdated(PlayerIdentity, PlayerSnapshot),
 	PlayerPosition(PlayerIdentity, Duration),
 	CyclePlayer,
@@ -145,6 +146,11 @@ impl MediaControls {
 			{
 				self.active_player = None;
 				let _ = self.cmd_tx.send_blocking(PlayerCommand::CyclePlayer);
+			}
+			Message::MprisDisconnected => {
+				self.active_player = None;
+				self.active_player_position = 0.0;
+				self.is_playing.go_mut(false, Instant::now());
 			}
 			Message::PlayerUpdated(identity, snapshot)
 				if let Some(active_player) = &mut self.active_player
@@ -442,32 +448,51 @@ impl MediaControls {
 
 fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Message> {
 	async_stream::stream! {
-		let mut mpris = match Mpris::new().await {
-			Ok(mpris) => mpris,
-			Err(error) => {
-				log::warn!("Failed to connect to mpris: {error}");
-				yield Message::Noop;
-				return;
-			}
-		};
-		mpris.watch();
-
-		let mut players = FxSmallMap::<8, PlayerIdentity, MprisPlayer>::new();
-		let mut current_player = None;
-
 		loop {
-			tokio::select! {
-				event = mpris.recv() => {
-					if let Some(msg) = manage_mpris_event(event, &mut players, &mut current_player).await {
-						yield msg;
-					}
+			let mut mpris = match Mpris::new().await {
+				Ok(mpris) => mpris,
+				Err(error) => {
+					log::warn!("Failed to connect to mpris, retrying: {error}");
+					yield Message::MprisDisconnected;
+					tokio::time::sleep(Duration::from_secs(5)).await;
+					continue;
 				}
-				event = rx.recv() => {
-					if let Some(msg) = handle_player_command(event, &mut players, &mut current_player).await {
-						yield msg;
+			};
+			mpris.watch();
+
+			let mut players = FxSmallMap::<8, PlayerIdentity, MprisPlayer>::new();
+			let mut current_player = None;
+
+			loop {
+				tokio::select! {
+					event = mpris.recv() => {
+						match event {
+							Ok(Ok(event)) => {
+								if let Some(msg) = manage_mpris_event(event, &mut players, &mut current_player).await {
+									yield msg;
+								}
+							}
+							Ok(Err(error)) => {
+								log::warn!("MPRIS watch stream failed, reconnecting: {error}");
+								yield Message::MprisDisconnected;
+								break;
+							}
+							Err(error) => {
+								log::warn!("MPRIS event channel closed, reconnecting: {error}");
+								yield Message::MprisDisconnected;
+								break;
+							}
+						}
+					}
+					event = rx.recv() => {
+						if let Some(msg) = handle_player_command(event, &mut players, &mut current_player).await {
+							yield msg;
+						}
 					}
 				}
 			}
+
+			tokio::time::sleep(Duration::from_secs(1)).await;
 		}
 	}
 }
@@ -548,20 +573,11 @@ async fn handle_player_command(
 }
 
 async fn manage_mpris_event(
-	event: MprisResult<MprisResult<MprisEvent>>,
-	players: &mut FxSmallMap<8, PlayerIdentity, MprisPlayer>,
+	event: MprisEvent, players: &mut FxSmallMap<8, PlayerIdentity, MprisPlayer>,
 	current_player: &mut Option<PlayerIdentity>,
 ) -> Option<Message> {
-	let event = match event {
-		Ok(e) => e,
-		Err(e) => {
-			log::warn!("Error for mpris event stream: {e}");
-			return None;
-		}
-	};
-
 	match event {
-		Ok(MprisEvent::PlayerAttached(player)) => {
+		MprisEvent::PlayerAttached(player) => {
 			let identity = player.identity().clone();
 			let snapshot = read_player_snapshot(&player).await;
 			players.insert(identity.clone(), player);
@@ -572,11 +588,30 @@ async fn manage_mpris_event(
 				None
 			}
 		}
-		Ok(MprisEvent::PlayerDetached(identity)) => {
+		MprisEvent::PlayerDetached(identity) => {
+			let was_current_player = current_player.as_ref().is_some_and(|id| *id == identity);
 			players.remove(&identity);
-			Some(Message::PlayerDetached(identity))
+
+			if !was_current_player {
+				return Some(Message::PlayerDetached(identity));
+			}
+
+			let mut remaining_players = players.iter().collect::<Vec<_>>();
+			remaining_players
+				.sort_by(|(left_id, _), (right_id, _)| left_id.bus().cmp(right_id.bus()));
+
+			let Some((next_identity, next_player)) = remaining_players.first() else {
+				*current_player = None;
+				return Some(Message::PlayerDetached(identity));
+			};
+
+			*current_player = Some((*next_identity).clone());
+			Some(Message::PlayerChanged(
+				(*next_identity).clone(),
+				read_player_snapshot(next_player).await,
+			))
 		}
-		Ok(MprisEvent::PlayerPropertiesChanged(identity) | MprisEvent::PlayerSeeked(identity)) => {
+		MprisEvent::PlayerPropertiesChanged(identity) | MprisEvent::PlayerSeeked(identity) => {
 			if let Some(player) = players.get(&identity) {
 				let snapshot = read_player_snapshot(player).await;
 				Some(Message::PlayerUpdated(identity, snapshot))
@@ -584,12 +619,8 @@ async fn manage_mpris_event(
 				None
 			}
 		}
-		Ok(MprisEvent::PlayerPosition(identity, position)) => {
+		MprisEvent::PlayerPosition(identity, position) => {
 			Some(Message::PlayerPosition(identity, position))
-		}
-		Err(e) => {
-			log::warn!("Invalid or unknown mpris event: {e}");
-			None
 		}
 	}
 }
@@ -789,31 +820,16 @@ async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
 		})
 		.unwrap_or_default();
 
-	// TODO: We don't HAVE to wait for all of them and THEN process, we can do the processing as the
-	// futures resolve... But that's more complicated and for later.
-	let (
-		playback_status,
-		desktop_entry,
-		can_control,
-		can_next,
-		can_previous,
-		can_seek,
-		can_play,
-		can_pause,
-		shuffle,
-		loop_status,
-	) = tokio::join!(
-		player.playback_status(),
-		player.desktop_entry(),
-		player.can_control(),
-		player.can_next(),
-		player.can_previous(),
-		player.can_seek(),
-		player.can_play(),
-		player.can_pause(),
-		player.shuffle(),
-		player.loop_status(),
-	);
+	let playback_status = player.playback_status().await;
+	let desktop_entry = player.desktop_entry().await;
+	let can_control = player.can_control().await;
+	let can_next = player.can_next().await;
+	let can_previous = player.can_previous().await;
+	let can_seek = player.can_seek().await;
+	let can_play = player.can_play().await;
+	let can_pause = player.can_pause().await;
+	let shuffle = player.shuffle().await;
+	let loop_status = player.loop_status().await;
 
 	let is_playing = playback_status.map_or_else(
 		|e| {

@@ -12,6 +12,7 @@ use crate::{
 	launcher::Launcher,
 	providers::{
 		Provider, applications::ApplicationProvider, calculator::CalcProvider, files::FileProvider,
+		nix_shell::NixShellProvider,
 	},
 };
 
@@ -38,7 +39,7 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let _ = pretty_env_logger::try_init();
+	log::init!("launcher", "avalaunch")?;
 
 	let args = Args::parse();
 
@@ -46,7 +47,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		.inspect_err(|e| log::error!("Failed to load config: {e}"))
 		.unwrap_or_default();
 
-	// log::trace!("Providers from args: {:?}", args.providers);
 	let providers = if args.providers.is_empty() {
 		config.launcher.providers.clone()
 	} else {
@@ -62,6 +62,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)) as _,
 			LauncherProvider::Calculator => Arc::new(CalcProvider::new()) as _,
 			LauncherProvider::Files => Arc::new(FileProvider::new()) as _,
+			LauncherProvider::Nix => Arc::new(NixShellProvider::new()) as _,
 		})
 		.collect::<Vec<_>>();
 	let providers = Arc::<[Arc<dyn Provider>]>::from(providers);
@@ -96,6 +97,7 @@ impl clap::ValueEnum for ClapLauncherProvider {
 			Self(LauncherProvider::Applications),
 			Self(LauncherProvider::Calculator),
 			Self(LauncherProvider::Files),
+			Self(LauncherProvider::Nix),
 		]
 	}
 
@@ -106,6 +108,7 @@ impl clap::ValueEnum for ClapLauncherProvider {
 			}
 			LauncherProvider::Calculator => Some(PossibleValue::new("calculator").alias("calc")),
 			LauncherProvider::Files => Some(PossibleValue::new("files")),
+			LauncherProvider::Nix => Some(PossibleValue::new("nix")),
 		}
 	}
 
@@ -114,6 +117,7 @@ impl clap::ValueEnum for ClapLauncherProvider {
 			"applications" | "apps" => Ok(Self(LauncherProvider::Applications)),
 			"calculator" | "calc" => Ok(Self(LauncherProvider::Calculator)),
 			"files" => Ok(Self(LauncherProvider::Files)),
+			"nix" => Ok(Self(LauncherProvider::Nix)),
 			_ => Err(format!("Invalid provider: {input}")),
 		}
 	}

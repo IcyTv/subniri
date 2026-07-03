@@ -461,6 +461,7 @@ pub enum LauncherProvider {
 	Calculator,
 	Applications,
 	Files,
+	Nix,
 }
 
 impl LauncherProvider {

@@ -25,7 +25,7 @@ mod modules;
 // mod icons;
 // mod mpris;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let _ = pretty_env_logger::try_init();
+	log::init!("bar", "polarbar")?;
 
 	let connection = Connection::connect_to_env()?;
 

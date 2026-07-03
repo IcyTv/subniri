@@ -91,6 +91,9 @@ fn start_preset_reconciler(service: NightlightDbus, config: config::Nightlight) 
 
 		loop {
 			interval.tick().await;
+			if service.is_suspended().await {
+				continue;
+			}
 
 			let preset = current_preset(&config);
 			if preset == last_preset {
@@ -178,6 +181,11 @@ async fn schedule_presets(
 			move |_uuid, _l| {
 				let service = service.clone();
 				Box::pin(async move {
+					if service.is_suspended().await {
+						log::info!("Skipping dawn preset while nightlight is suspended");
+						return;
+					}
+
 					log::info!("Dawn");
 					if let Err(e) = service
 						.apply_preset(NightlightPreset::Day, brightness, temperature)
@@ -200,6 +208,11 @@ async fn schedule_presets(
 			move |_uuid, _l| {
 				let service = service.clone();
 				Box::pin(async move {
+					if service.is_suspended().await {
+						log::info!("Skipping dusk preset while nightlight is suspended");
+						return;
+					}
+
 					log::info!("Dusk");
 					if let Err(e) = service
 						.apply_preset(NightlightPreset::Night, brightness, temperature)
@@ -242,6 +255,13 @@ struct NightlightDbusInner {
 	config: config::Nightlight,
 	controller: Option<NightlightController>,
 	state: Mutex<DesiredState>,
+	suspension: Mutex<SuspensionState>,
+}
+
+#[derive(Default)]
+struct SuspensionState {
+	active: bool,
+	generation: u64,
 }
 
 impl NightlightDbus {
@@ -258,6 +278,7 @@ impl NightlightDbus {
 				config,
 				controller,
 				state: Mutex::new(DesiredState::default()),
+				suspension: Mutex::new(SuspensionState::default()),
 			}),
 		})
 	}
@@ -298,6 +319,66 @@ impl NightlightDbus {
 		};
 
 		self.apply_state(state).await
+	}
+
+	async fn apply_configured_preset(
+		&self, preset: NightlightPreset,
+	) -> zbus::fdo::Result<DesiredState> {
+		let NightlightSetting {
+			brightness,
+			temperature,
+		} = preset_setting(&self.inner.config, preset);
+
+		self.apply_preset(preset, brightness, temperature).await
+	}
+
+	async fn begin_suspension(&self) -> u64 {
+		let mut suspension = self.inner.suspension.lock().await;
+		suspension.active = true;
+		suspension.generation = suspension.generation.wrapping_add(1);
+		suspension.generation
+	}
+
+	async fn end_suspension(&self, generation: u64) -> bool {
+		let mut suspension = self.inner.suspension.lock().await;
+		if !suspension.active || suspension.generation != generation {
+			return false;
+		}
+
+		suspension.active = false;
+		true
+	}
+
+	async fn cancel_suspension(&self) -> bool {
+		let mut suspension = self.inner.suspension.lock().await;
+		if !suspension.active {
+			return false;
+		}
+
+		suspension.active = false;
+		suspension.generation = suspension.generation.wrapping_add(1);
+		true
+	}
+
+	async fn is_suspended(&self) -> bool {
+		self.inner.suspension.lock().await.active
+	}
+
+	async fn emit_state_properties_changed(
+		&self, emitter: &SignalEmitter<'_>,
+	) -> zbus::fdo::Result<()> {
+		self.enabled_changed(emitter).await?;
+		self.brightness_changed(emitter).await?;
+		self.temperature_changed(emitter).await?;
+		self.preset_changed(emitter).await?;
+		self.state_changed(emitter).await?;
+		Ok(())
+	}
+
+	async fn restore_scheduled_preset(&self, emitter: &SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+		let preset = current_preset(&self.inner.config);
+		self.apply_configured_preset(preset).await?;
+		self.emit_state_properties_changed(emitter).await
 	}
 
 	async fn state(&self) -> DesiredState {
@@ -424,6 +505,43 @@ impl NightlightDbus {
 		self.enabled_changed(&emitter).await?;
 		self.state_changed(&emitter).await?;
 		Ok(())
+	}
+
+	async fn suspend(
+		&self, duration_secs: u64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+	) -> zbus::fdo::Result<()> {
+		let generation = self.begin_suspension().await;
+		self.apply_configured_preset(NightlightPreset::Day).await?;
+		self.emit_state_properties_changed(&emitter).await?;
+
+		let service = self.clone();
+		let emitter = emitter.to_owned();
+		tokio::spawn(async move {
+			tokio::time::sleep(Duration::from_secs(duration_secs)).await;
+			if !service.end_suspension(generation).await {
+				return;
+			}
+
+			let preset = current_preset(&service.inner.config);
+			log::info!("Restoring nightlight preset after suspension: {preset:?}");
+			if let Err(error) = service.restore_scheduled_preset(&emitter).await {
+				log::warn!("Error restoring {preset:?} preset after suspension: {error}");
+			}
+		});
+
+		Ok(())
+	}
+
+	async fn unsuspend(
+		&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+	) -> zbus::fdo::Result<()> {
+		if !self.cancel_suspension().await {
+			return Ok(());
+		}
+
+		let preset = current_preset(&self.inner.config);
+		log::info!("Restoring nightlight preset after manual unsuspend: {preset:?}");
+		self.restore_scheduled_preset(&emitter).await
 	}
 }
 

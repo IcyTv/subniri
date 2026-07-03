@@ -11,6 +11,8 @@ use tantivy::{
 };
 use tantivy_derive::{Schema as _, tantivy_document};
 
+pub mod nix;
+
 pub struct Database {
 	path: PathBuf,
 	schema: Schema,

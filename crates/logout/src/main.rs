@@ -35,8 +35,8 @@ enum Command {
 	All,
 }
 
-fn main() -> Result<(), iced_layershell::Error> {
-	let _ = pretty_env_logger::try_init();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+	log::init!("logout", "iceout")?;
 
 	let args = Args::parse();
 
@@ -57,7 +57,7 @@ fn main() -> Result<(), iced_layershell::Error> {
 		..Default::default()
 	});
 
-	app.run()
+	Ok(app.run()?)
 }
 
 #[to_layer_message]

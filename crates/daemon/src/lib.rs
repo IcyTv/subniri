@@ -40,6 +40,10 @@ pub trait Nightlight {
 	fn state(&self) -> zbus::Result<NightlightStateTuple>;
 
 	fn toggle(&self) -> zbus::Result<()>;
+
+	fn suspend(&self, duration_secs: u64) -> zbus::Result<()>;
+
+	fn unsuspend(&self) -> zbus::Result<()>;
 }
 
 type NightlightStateTuple = (bool, bool, f64, u32, String);
@@ -90,6 +94,8 @@ impl NightlightClient {
 			}
 			NightlightCommand::SetEnabled(enabled) => proxy.set_enabled(enabled).await,
 			NightlightCommand::ToggleNightlight => proxy.toggle().await,
+			NightlightCommand::Suspend(duration_secs) => proxy.suspend(duration_secs).await,
+			NightlightCommand::Unsuspend => proxy.unsuspend().await,
 		};
 
 		match result {
@@ -116,6 +122,8 @@ pub enum NightlightCommand {
 	SetNightlight(NightlightPreset),
 	SetEnabled(bool),
 	ToggleNightlight,
+	Suspend(u64),
+	Unsuspend,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

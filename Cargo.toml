@@ -45,7 +45,7 @@ kdl = { version = "6.5.0", features = ["v1-fallback"] }
 launcher-common = { path = "./crates/launcher-common" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
-log = "0.4.29"
+log = { path = "./crates/log" }
 lru = "0.18.0"
 lyon_algorithms = "1.0.20"
 mprizzle = { git = "https://github.com/IcyTv/mprizzle", version = "0.0.8" }
@@ -54,7 +54,6 @@ niri-ipc = "26.4.0"
 nix = { version = "0.31.3", features = ["user"] }
 nmrs = "3.1.5"
 num-traits = "0.2.19"
-pretty_env_logger = "0.5.0"
 reqwest = "0.13.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
@@ -87,3 +86,5 @@ unimplemented = "deny"
 
 [patch.crates-io]
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }

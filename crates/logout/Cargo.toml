@@ -21,7 +21,6 @@ futures.workspace = true
 log.workspace = true
 neo-widgets.workspace = true
 nix.workspace = true
-pretty_env_logger.workspace = true
 serde.workspace = true
 zbus.workspace = true
 zvariant.workspace = true

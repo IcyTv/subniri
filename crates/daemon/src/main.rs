@@ -10,7 +10,7 @@ type NightlightFuture = Pin<Box<dyn Future<Output = Result<(), Error>>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
-	let _ = pretty_env_logger::try_init();
+	log::init!("daemon", "permafrostd")?;
 
 	let config_path = ConfigFile::path()?;
 	let (_doc, mut config) = ConfigFile::load_from_file(&config_path)?;

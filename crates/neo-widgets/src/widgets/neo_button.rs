@@ -262,27 +262,25 @@ where
 		&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
 		renderer: &Renderer, shell: &mut iced::advanced::Shell<'_, Message>, viewport: &Rectangle,
 	) {
-		if !self.enabled {
-			return;
-		}
-
 		let state = tree.state.downcast_mut::<State>();
 		let bounds = layout.bounds();
 		let over = cursor.is_over(bounds);
 
 		state.hovered = over;
 
-		Widget::update(
-			self.content.as_widget_mut(),
-			#[allow(clippy::indexing_slicing)]
-			&mut tree.children[0],
-			event,
-			layout.child(0),
-			cursor,
-			renderer,
-			shell,
-			viewport,
-		);
+		if self.enabled {
+			Widget::update(
+				self.content.as_widget_mut(),
+				#[allow(clippy::indexing_slicing)]
+				&mut tree.children[0],
+				event,
+				layout.child(0),
+				cursor,
+				renderer,
+				shell,
+				viewport,
+			);
+		}
 
 		let is_captured = shell.is_event_captured();
 
@@ -290,7 +288,12 @@ where
 			Event::Keyboard(keyboard::Event::KeyPressed {
 				key: keyboard::Key::Named(keyboard::key::Named::Enter | keyboard::key::Named::Space),
 				..
-			}) if self.focusable && state.focused && self.enabled && !is_captured => {
+			}) if self.enabled
+				&& self.focusable
+				&& state.focused
+				&& self.enabled
+				&& !is_captured =>
+			{
 				if let Some(message) = self.on_press.clone() {
 					shell.publish(match message {
 						OnPress::Message(message) => message,
@@ -300,7 +303,7 @@ where
 				}
 			}
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-				if over && !is_captured =>
+				if self.enabled && over && !is_captured =>
 			{
 				state.focused = self.focusable;
 				state.pressed = state.pressed.clone().go(true, Instant::now());
@@ -309,14 +312,14 @@ where
 				shell.capture_event();
 			}
 			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
-				if state.pressed.value() =>
+				if self.enabled && state.pressed.value() =>
 			{
 				state.pressed = state.pressed.clone().go(false, Instant::now());
 				shell.request_redraw();
 				shell.capture_event();
 			}
 			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-				if state.pressed.value() =>
+				if self.enabled && state.pressed.value() =>
 			{
 				if over
 					&& !is_captured && let Some(message) = self.on_press.clone()

@@ -293,6 +293,17 @@
                 };
               })
               (mkOverride {
+                registry = "git+https://github.com/IcyTv/mprizzle";
+                name = "mprizzle";
+
+                overrideArgs = old: {
+                  profile =
+                    if old.profile == null
+                    then null
+                    else old.profile // {lto = false;};
+                };
+              })
+              (mkOverride {
                 name = "smithay-client-toolkit";
                 overrideAttrs = drv: {
                   nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.pkg-config] drv;
@@ -339,6 +350,19 @@
 
                 overrideAttrs = drv: {
                   postPatch = appendScript "postPatch" (cargoPatch "Cargo.toml" (icedWorkspaceMetadata ++ icedOptionalDeps)) drv;
+                };
+              })
+              (mkOverride {
+                name = "libsystemd-sys";
+
+                overrideAttrs = drv: {
+                  propagatedBuildInputs = appendList "propagatedBuildInputs" [pkgs.systemd] drv;
+                  nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.pkg-config] drv;
+                  postInstall =
+                    appendScript "postInstall" ''
+                      rm -f $out/lib/.link-flags
+                    ''
+                    drv;
                 };
               })
               (mkOverride {
@@ -390,6 +414,7 @@
             libxkbcommon
             dbus
             pam
+            systemd
             vulkan-headers
             pipewire
             libpulseaudio
@@ -488,6 +513,8 @@
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           PHOSPHOR_ICONS = "${phosphorIcons}";
+
+          SUBNIRI_LOG_BACKEND = "console";
 
           # Extra inputs can be added here; cargo and rustc are provided by default.
           packages =

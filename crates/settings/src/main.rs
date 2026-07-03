@@ -16,14 +16,14 @@ use crate::setting::Tab;
 
 mod setting;
 
-fn main() -> Result<(), iced::Error> {
-	let _ = pretty_env_logger::try_init();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+	log::init!("settings", "snowconf")?;
 
 	let app = iced::application(Settings::new, Settings::update, Settings::view)
 		.style(Settings::style)
 		.subscription(Settings::subscription);
 
-	app.run()
+	Ok(app.run()?)
 }
 
 #[derive(Debug, Clone)]
