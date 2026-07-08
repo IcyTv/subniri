@@ -41,6 +41,7 @@ pipewire-native-spa = "0.1.4"
 reqwest.workspace = true
 serde_json.workspace = true
 small-map.workspace = true
+strum = { version = "0.28.0", features = ["derive"] }
 tokio.workspace = true
 url.workspace = true
 wayland-client.workspace = true

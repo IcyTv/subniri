@@ -52,6 +52,7 @@ pub fn neo_button<'a, Message, Theme, Renderer>(
 pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
 	content: Element<'a, Message, Theme, Renderer>,
 	on_press: Option<OnPress<'a, Message>>,
+	on_context_menu: Option<OnPress<'a, Message>>,
 	style: NeoButtonStyle,
 	width: Length,
 	height: Length,
@@ -79,6 +80,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		Self {
 			content: content.into(),
 			on_press: None,
+			on_context_menu: None,
 			style: NeoButtonStyle::default(),
 			width: Length::Shrink,
 			height: Length::Shrink,
@@ -103,6 +105,19 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		F: Fn(Rectangle) -> Message + 'a,
 	{
 		self.on_press = Some(OnPress::WithBounds(Rc::new(callback)));
+		self
+	}
+
+	pub fn on_context_menu(mut self, message: Message) -> Self {
+		self.on_context_menu = Some(OnPress::Message(message));
+		self
+	}
+
+	pub fn on_context_menu_with_bounds<F>(mut self, callback: F) -> Self
+	where
+		F: Fn(Rectangle) -> Message + 'a,
+	{
+		self.on_context_menu = Some(OnPress::WithBounds(Rc::new(callback)));
 		self
 	}
 
@@ -172,11 +187,23 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		NeoButton {
 			content: self.content.map(func.clone()),
 			on_press: self.on_press.map(|on_press| match on_press {
-				OnPress::Message(message) => OnPress::Message(func(message)),
+				OnPress::Message(message) => OnPress::Message(func.clone()(message)),
 				OnPress::WithBounds(callback) => {
+					let func = func.clone();
+
 					OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
 				}
 			}),
+			on_context_menu: self
+				.on_context_menu
+				.map(|on_context_menu| match on_context_menu {
+					OnPress::Message(message) => OnPress::Message(func.clone()(message)),
+					OnPress::WithBounds(callback) => {
+						let func = func.clone();
+
+						OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
+					}
+				}),
 			style: self.style,
 			width: self.width,
 			height: self.height,
@@ -311,6 +338,17 @@ where
 				shell.request_redraw();
 				shell.capture_event();
 			}
+			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Right))
+				if self.enabled && over && !is_captured =>
+			{
+				if let Some(message) = self.on_context_menu.clone() {
+					shell.publish(match message {
+						OnPress::Message(message) => message,
+						OnPress::WithBounds(callback) => callback(bounds),
+					});
+					shell.capture_event();
+				}
+			}
 			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
 				if self.enabled && state.pressed.value() =>
 			{
@@ -347,7 +385,10 @@ where
 		&self, _tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, _viewport: &Rectangle,
 		_renderer: &Renderer,
 	) -> mouse::Interaction {
-		if self.enabled && self.on_press.is_some() && cursor.is_over(layout.bounds()) {
+		if self.enabled
+			&& (self.on_press.is_some() || self.on_context_menu.is_some())
+			&& cursor.is_over(layout.bounds())
+		{
 			mouse::Interaction::Pointer
 		} else {
 			mouse::Interaction::None

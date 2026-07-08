@@ -81,9 +81,9 @@ struct Bar {
 	right: Vec<Module>,
 
 	open_popup: Option<(Id, Section, usize)>,
+	context_popup: Option<Id>,
 	layer_heights: HashMap<Id, u32>,
 	window_scales: HashMap<Id, f32>,
-	#[expect(dead_code)]
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 }
@@ -104,6 +104,7 @@ impl Bar {
 				Module::clock(),
 			],
 			open_popup: None,
+			context_popup: None,
 			layer_heights: HashMap::new(),
 			window_scales: HashMap::new(),
 			config_doc,
@@ -126,6 +127,20 @@ impl Bar {
 	#[allow(clippy::too_many_lines)]
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
+			BarMessage::ConfigUpdated => {
+				let (doc, config) = match ConfigFile::load() {
+					Ok(config) => config,
+					Err(error) => {
+						log::warn!("Error loading config: {error}");
+						return Task::none();
+					}
+				};
+
+				self.config_doc = doc;
+				self.config_file = config.clone();
+
+				self.broadcast_module_message(ModuleMessage::ConfigUpdated(config))
+			}
 			BarMessage::Resumed => Task::future(async {
 				tokio::time::sleep(Duration::from_millis(500)).await;
 				BarMessage::RestartAfterResume
@@ -150,7 +165,17 @@ impl Bar {
 				let scale = source_id.map_or(1.0, |id| self.scale_factor(id));
 				self.window_scales.insert(id, scale);
 
-				let task = if let Some(open_popup_id) = self.open_popup.take() {
+				let close_context_popup = if let Some(context_popup_id) = self.context_popup.take()
+				{
+					self.window_scales.remove(&context_popup_id);
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(context_popup_id),
+					))
+				} else {
+					Task::none()
+				};
+
+				let close_module_popup = if let Some(open_popup_id) = self.open_popup.take() {
 					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
 						iced_runtime::window::Action::Close(open_popup_id.0),
@@ -160,11 +185,57 @@ impl Bar {
 				};
 				self.open_popup = Some((id, section, index));
 
-				task.chain(Task::done(BarMessage::NewPopUp {
+				Task::batch([close_context_popup, close_module_popup])
+					.chain(Task::done(BarMessage::NewPopUp {
+						settings: IcedNewPopupSettings {
+							size: PopupSize::FitContent {
+								min: (1, 1),
+								max: (480, 640),
+							},
+							#[allow(clippy::cast_possible_truncation)]
+							anchor_rect: (
+								bounds.x.round() as i32,
+								bounds.y.round() as i32,
+								bounds.width.round() as i32,
+								bounds.height.round() as i32,
+							),
+							offset: (0, 8),
+							placement: PopupPlacement::BottomCenter,
+							constraint_adjustment: ConstraintAdjustment::SlideX
+								| ConstraintAdjustment::SlideY
+								| ConstraintAdjustment::FlipX
+								| ConstraintAdjustment::FlipY,
+						},
+						id,
+					}))
+					.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
+			}
+			BarMessage::Module(source_id, _, _, ModuleMessage::OpenContextMenu(bounds)) => {
+				let Some(source_id) = source_id else {
+					return Task::none();
+				};
+
+				let id = Id::unique();
+				let scale = self.scale_factor(source_id);
+				self.window_scales.insert(id, scale);
+
+				let close_context_popup = if let Some(context_popup_id) = self.context_popup.take()
+				{
+					self.window_scales.remove(&context_popup_id);
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(context_popup_id),
+					))
+				} else {
+					Task::none()
+				};
+
+				self.context_popup = Some(id);
+
+				close_context_popup.chain(Task::done(BarMessage::NewPopUp {
 					settings: IcedNewPopupSettings {
 						size: PopupSize::FitContent {
 							min: (1, 1),
-							max: (480, 640),
+							max: (240, 160),
 						},
 						#[allow(clippy::cast_possible_truncation)]
 						anchor_rect: (
@@ -173,7 +244,7 @@ impl Bar {
 							bounds.width.round() as i32,
 							bounds.height.round() as i32,
 						),
-						offset: (0, 8),
+						offset: (8, 0),
 						placement: PopupPlacement::BottomCenter,
 						constraint_adjustment: ConstraintAdjustment::SlideX
 							| ConstraintAdjustment::SlideY
@@ -182,7 +253,6 @@ impl Bar {
 					},
 					id,
 				}))
-				.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
 			BarMessage::Module(
 				_,
@@ -190,6 +260,16 @@ impl Bar {
 				_,
 				msg @ (ModuleMessage::OpenSettings | ModuleMessage::OpenPowerMenu),
 			) => {
+				let close_context_popup = if let Some(context_popup_id) = self.context_popup.take()
+				{
+					self.window_scales.remove(&context_popup_id);
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(context_popup_id),
+					))
+				} else {
+					Task::none()
+				};
+
 				let close_popup = if let Some(open_popup_id) = self.open_popup.take() {
 					self.window_scales.remove(&open_popup_id.0);
 					iced_runtime::task::effect(iced_runtime::Action::Window(
@@ -198,14 +278,15 @@ impl Bar {
 				} else {
 					Task::none()
 				};
+				let close_popups = Task::batch([close_context_popup, close_popup]);
 
 				match msg {
-					ModuleMessage::OpenPowerMenu => close_popup.chain(Task::future(async {
+					ModuleMessage::OpenPowerMenu => close_popups.chain(Task::future(async {
 						// std::thread::sleep(Duration::from_millis(100));
 						open_power_menu();
 						BarMessage::Noop
 					})),
-					ModuleMessage::OpenSettings => close_popup.chain(Task::future(async {
+					ModuleMessage::OpenSettings => close_popups.chain(Task::future(async {
 						open_settings();
 						BarMessage::Noop
 					})),
@@ -221,10 +302,9 @@ impl Bar {
 				}
 			}
 			BarMessage::Module(_, section, index, message) => {
-				let cf = self.config_file.clone();
 				if let Some(module) = self.module_mut(section, index) {
 					return module
-						.update(message, &cf)
+						.update(message)
 						.map(move |msg| BarMessage::Module(None, section, index, msg));
 				}
 
@@ -237,14 +317,39 @@ impl Bar {
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
 		self.layer_heights.remove(&id);
 		self.window_scales.remove(&id);
-		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
-			self.open_popup = None;
+		if self.context_popup == Some(id) {
+			self.context_popup = None;
+			return Task::none();
+		}
+
+		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id)
+			&& let Some((_, section, index)) = self.open_popup.take()
+		{
+			let close_context_popup = if let Some(context_popup_id) = self.context_popup.take() {
+				self.window_scales.remove(&context_popup_id);
+				iced_runtime::task::effect(iced_runtime::Action::Window(
+					iced_runtime::window::Action::Close(context_popup_id),
+				))
+			} else {
+				Task::none()
+			};
+
+			return if let Some(module) = self.module_mut(section, index) {
+				close_context_popup.chain(
+					module
+						.update(ModuleMessage::PopupClosed)
+						.map(move |msg| BarMessage::Module(None, section, index, msg)),
+				)
+			} else {
+				close_context_popup
+			};
 		}
 		Task::none()
 	}
 
 	fn sync_layer_scale(&mut self, id: Id) -> Task<BarMessage> {
-		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
+		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) || self.context_popup == Some(id)
+		{
 			return Task::none();
 		}
 
@@ -283,7 +388,12 @@ impl Bar {
 	}
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
-		if let Some((wid, section, index)) = &self.open_popup
+		if self.context_popup == Some(id) {
+			neo_card(text("Nightlight context menu").color(COLORS.text))
+				.padding(8)
+				.background(COLORS.white)
+				.into()
+		} else if let Some((wid, section, index)) = &self.open_popup
 			&& *wid == id
 		{
 			// neo_card("A").background(COLORS.background).into()
@@ -357,6 +467,27 @@ impl Bar {
 		}
 	}
 
+	fn broadcast_module_message(&mut self, message: ModuleMessage) -> Task<BarMessage> {
+		let mut tasks = Vec::new();
+		Self::update_modules(Section::Left, &mut self.left, &message, &mut tasks);
+		Self::update_modules(Section::Center, &mut self.center, &message, &mut tasks);
+		Self::update_modules(Section::Right, &mut self.right, &message, &mut tasks);
+		Task::batch(tasks)
+	}
+
+	fn update_modules(
+		section: Section, modules: &mut [Module], message: &ModuleMessage,
+		tasks: &mut Vec<Task<BarMessage>>,
+	) {
+		for (index, module) in modules.iter_mut().enumerate() {
+			tasks.push(
+				module
+					.update(message.clone())
+					.map(move |msg| BarMessage::Module(None, section, index, msg)),
+			);
+		}
+	}
+
 	fn style(&self, _theme: &Theme) -> iced::theme::Style {
 		let _ = self;
 		iced::theme::Style {
@@ -367,7 +498,28 @@ impl Bar {
 	}
 
 	fn subscription(&self) -> Subscription<BarMessage> {
+		let config_watch = Subscription::run(|| {
+			ConfigFile::watch().map_or_else(
+				|error| {
+					log::warn!("Error watching config file: {error}");
+					futures::stream::once(async { BarMessage::Noop }).boxed()
+				},
+				|watch| {
+					watch
+						.map(|res| match res {
+							Ok(()) => BarMessage::ConfigUpdated,
+							Err(error) => {
+								log::warn!("Invalid config file: {error}");
+								BarMessage::Noop
+							}
+						})
+						.boxed()
+				},
+			)
+		});
+
 		let mut subscriptions = vec![
+			config_watch,
 			iced::window::events().map(|(id, event)| BarMessage::WindowEvent(id, event)),
 			iced::window::close_events().map(BarMessage::WindowClosed),
 			resume_events(),
@@ -414,6 +566,7 @@ enum Section {
 enum BarMessage {
 	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
+	ConfigUpdated,
 	Resumed,
 	RestartAfterResume,
 	Module(Option<Id>, Section, usize, ModuleMessage),

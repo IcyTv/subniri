@@ -20,5 +20,6 @@ jiff = "0.2.24"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
 miette = { version = "7.6.0", features = ["fancy"] }
 notify = "8.2.0"
+strum = { version = "0.28.0", features = ["derive"] }
 tokio = { workspace = true, features = ["sync", "time"] }
 url = "2.5.8"

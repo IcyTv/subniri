@@ -4,7 +4,7 @@ use std::{
 };
 
 use iced::{
-	Animation, Color, Element, Event, Length, Padding, Rectangle,
+	Animation, Color, Element, Event, Length, Padding, Point, Rectangle,
 	advanced::{
 		Widget, layout, mouse, renderer,
 		widget::{Tree, tree},
@@ -303,6 +303,7 @@ struct State {
 	percentage: f32,
 	pressed: Animation<bool>,
 	hovered: bool,
+	last_cursor_position: Option<Point>,
 }
 
 fn expanded_bounds(bounds: Rectangle, radius: f32) -> Rectangle {
@@ -336,6 +337,7 @@ where
 			percentage: self.percentage_from_value(self.value),
 			pressed: Animation::new(false).duration(Duration::from_millis(50)),
 			hovered: false,
+			last_cursor_position: None,
 		})
 	}
 
@@ -354,6 +356,9 @@ where
 		let over = cursor.is_over(interaction_bounds);
 
 		state.hovered = over;
+		if let Some(position) = cursor.position() {
+			state.last_cursor_position = Some(position);
+		}
 
 		let percentage = self.percentage_from_value(self.value);
 		if !state.pressed.value() && (state.percentage - percentage).abs() > f32::EPSILON {
@@ -365,6 +370,7 @@ where
 				state.pressed.go_mut(true, Instant::now());
 
 				let cursor_pos = cursor.position().unwrap_or_default();
+				state.last_cursor_position = Some(cursor_pos);
 				let x = cursor_pos.x;
 				let x = x.clamp(bounds.x, bounds.x + bounds.width) - bounds.x;
 				let percentage = x / bounds.width;
@@ -379,6 +385,30 @@ where
 			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused)
 				if state.pressed.value() =>
 			{
+				// On niri layer-shell surfaces, we may not receive the button release once
+				// the cursor leaves the surface. Ideally, we would keep the drag alive and
+				// handle the real release while unfocused, which is the more natural UX.
+				// Until iced/Wayland gives us that reliably, finalize based on the best
+				// cursor position we have and snap horizontal exits to the nearest side.
+				if let Some(position) = cursor.position().or(state.last_cursor_position) {
+					if position.x <= bounds.x {
+						state.percentage = 0.0;
+					} else if position.x >= bounds.x + bounds.width {
+						state.percentage = 1.0;
+					} else if matches!(event, Event::Mouse(mouse::Event::CursorLeft)) {
+						let center = bounds.x + bounds.width / 2.0;
+						state.percentage = if position.x <= center { 0.0 } else { 1.0 };
+					}
+				}
+
+				let value = self.value_from_percentage(state.percentage);
+				if let Some(on_change_live) = &self.on_change_live {
+					shell.publish(on_change_live(value.clone()));
+				}
+				if let Some(on_change) = &self.on_change.as_deref() {
+					shell.publish(on_change(value));
+				}
+
 				state.pressed.go_mut(false, Instant::now());
 				shell.request_redraw();
 				shell.capture_event();
@@ -397,6 +427,7 @@ where
 				shell.capture_event();
 			}
 			Event::Mouse(mouse::Event::CursorMoved { position }) if state.pressed.value() => {
+				state.last_cursor_position = Some(*position);
 				let x = position.x;
 				let x = x.clamp(bounds.x, bounds.x + bounds.width) - bounds.x;
 				let percentage = x / bounds.width;

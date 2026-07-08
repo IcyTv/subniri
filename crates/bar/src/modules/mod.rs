@@ -26,8 +26,11 @@ pub enum Module {
 
 #[derive(Debug, Clone)]
 pub enum ModuleMessage {
+	ConfigUpdated(ConfigFile),
+	PopupClosed,
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
+	OpenContextMenu(Rectangle),
 
 	OpenPowerMenu,
 	OpenSettings,
@@ -103,8 +106,14 @@ impl Module {
 		}
 	}
 
-	pub fn update(&mut self, message: ModuleMessage, config: &ConfigFile) -> Task<ModuleMessage> {
+	pub fn update(&mut self, message: ModuleMessage) -> Task<ModuleMessage> {
 		match (self, message) {
+			(Self::SystemMenu(menu), ModuleMessage::ConfigUpdated(config)) => {
+				menu.sync_config(&config);
+			}
+			(Self::SystemMenu(menu), ModuleMessage::PopupClosed) => {
+				menu.popup_closed();
+			}
 			(
 				Self::SystemMenu(_),
 				ModuleMessage::SystemMenu(system_menu::Message::OpenPowerMenu),
@@ -115,6 +124,10 @@ impl Module {
 				Self::SystemMenu(_),
 				ModuleMessage::SystemMenu(system_menu::Message::OpenSettings),
 			) => return Task::done(ModuleMessage::OpenSettings),
+			(
+				Self::SystemMenu(_),
+				ModuleMessage::SystemMenu(system_menu::Message::OpenNightlightContextMenu(bounds)),
+			) => return Task::done(ModuleMessage::OpenContextMenu(bounds)),
 			(Self::Bluetooth(bluetooth), ModuleMessage::BluetoothInitialized(result)) => {
 				match result {
 					Ok(initialized) => *bluetooth = Some(initialized),
@@ -139,7 +152,7 @@ impl Module {
 				taskbar.update(message);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
-				return menu.update(message, config).map(ModuleMessage::SystemMenu);
+				return menu.update(message).map(ModuleMessage::SystemMenu);
 			}
 			(_, ModuleMessage::Pressed(kind, bounds)) => {
 				return Task::done(ModuleMessage::OpenPopup(kind, bounds));

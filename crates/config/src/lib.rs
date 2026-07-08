@@ -434,7 +434,7 @@ pub struct Spotify {
 	enabled: bool,
 }
 
-#[derive(Debug, Clone, Config)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, Config, strum::VariantArray)]
 pub enum SystemMenuWidgets {
 	Wifi,
 	Bluetooth,

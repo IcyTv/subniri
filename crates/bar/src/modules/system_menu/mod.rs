@@ -1,13 +1,12 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use config::{ConfigFile, SystemMenuWidgets};
 use daemon::NightlightProxy;
-use futures::{StreamExt as _, stream};
 use iced::{
-	Element, Font, Length, Subscription, Task,
+	Element, Font, Length, Padding, Rectangle, Subscription, Task,
 	alignment::Vertical,
 	font,
-	widget::{column, grid, image, row, svg, text},
+	widget::{column, container, grid, image, row, stack, svg, text},
 };
 use jiff::{
 	SpanRound, Unit,
@@ -19,23 +18,37 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
+use strum::VariantArray;
+use zbus::Connection;
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
 mod bluetooth;
+mod nightlight;
 mod wifi;
 
 #[derive(Debug, Clone)]
 pub enum Message {
 	UptimeUpdated(jiff::Span),
+
 	Wifi(wifi::Message),
 	Bluetooth(bluetooth::Message),
+	Nightlight(nightlight::Message),
+
 	OpenPowerMenu,
 	OpenSettings,
 
 	NightlightEnabled(bool),
 	BrightnessChanged(f64),
 	TemperatureChanged(u32),
+
+	ChangeBrightness(f64),
+	ChangeTemperature(u32),
+
+	EditingChanged(bool),
+	OpenNightlightContextMenu(Rectangle),
+	AddWidget(SystemMenuWidgets),
+	RemoveWidget(SystemMenuWidgets),
 
 	Noop,
 }
@@ -46,11 +59,12 @@ pub struct SystemMenu {
 	username: String,
 	avatar: image::Handle,
 	uptime: jiff::Span,
+
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
-	nightlight_enabled: bool,
-	temperature: u32,
-	brightness: f64,
+	nightlight: Box<nightlight::Nightlight>,
+
+	editing: bool,
 }
 
 impl SystemMenu {
@@ -69,11 +83,12 @@ impl SystemMenu {
 			username,
 			avatar,
 			uptime,
+
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
-			nightlight_enabled: config.nightlight.enabled,
-			brightness: config.nightlight.day.brightness,
-			temperature: config.nightlight.day.temperature,
+			nightlight: Box::new(nightlight::Nightlight::new(config)),
+
+			editing: false,
 		}
 	}
 
@@ -85,9 +100,6 @@ impl SystemMenu {
 	}
 
 	pub fn subscription() -> Subscription<Message> {
-		// TODO: Don't block...
-		let nightlight = Subscription::run(|| futures::executor::block_on(nighlight_stream()));
-
 		Subscription::batch([
 			iced::time::repeat(
 				|| async move {
@@ -101,14 +113,11 @@ impl SystemMenu {
 			),
 			wifi::Wifi::subscription().map(Message::Wifi),
 			bluetooth::Bluetooth::subscription().map(Message::Bluetooth),
-			nightlight,
+			nightlight::Nightlight::subscription().map(Message::Nightlight),
 		])
 	}
 
-	pub fn update(&mut self, message: Message, config: &ConfigFile) -> Task<Message> {
-		// FIXME: I absolutely hate this
-		self.widgets.clone_from(&config.system_menu.widgets);
-
+	pub fn update(&mut self, message: Message) -> Task<Message> {
 		if matches!(
 			message,
 			Message::NightlightEnabled(_)
@@ -124,13 +133,68 @@ impl SystemMenu {
 			Message::Bluetooth(message) => {
 				return self.bluetooth.update(message).map(Message::Bluetooth);
 			}
-			Message::NightlightEnabled(enabled) => self.nightlight_enabled = enabled,
-			Message::TemperatureChanged(temp) => self.temperature = temp,
-			Message::BrightnessChanged(brightness) => self.brightness = brightness,
+			Message::Nightlight(message) => {
+				return self.nightlight.update(message).map(Message::Nightlight);
+			}
+
+			Message::NightlightEnabled(enabled) => {
+				self.nightlight.enabled.go_mut(enabled, Instant::now())
+			}
+			Message::TemperatureChanged(temp) => self.nightlight.temperature = temp,
+			Message::BrightnessChanged(brightness) => self.nightlight.brightness = brightness,
+
+			Message::ChangeBrightness(brightness) => {
+				// Optimistic Update
+				let old_brightness = self.nightlight.brightness;
+				self.nightlight.brightness = brightness;
+				return Task::future(async move {
+					match set_brightness(brightness).await {
+						Ok(brightness) => Message::BrightnessChanged(brightness),
+						Err(error) => {
+							log::warn!("Failed to set nightlight brightness: {error}");
+							Message::BrightnessChanged(old_brightness)
+						}
+					}
+				});
+			}
+			Message::ChangeTemperature(temp) => {
+				let old_temp = self.nightlight.temperature;
+				self.nightlight.temperature = temp;
+				return Task::future(async move {
+					match set_temperature(temp).await {
+						Ok(temp) => Message::TemperatureChanged(temp),
+						Err(error) => {
+							log::warn!("Failed to set nightlight temperature: {error}");
+							Message::TemperatureChanged(old_temp)
+						}
+					}
+				});
+			}
+
+			Message::EditingChanged(editing) => self.editing = editing,
+			Message::AddWidget(widget) => self.widgets.push(widget),
+			Message::RemoveWidget(widget) => self.widgets.retain(|w| *w != widget),
 			_ => (),
 		}
 
 		Task::none()
+	}
+
+	pub fn sync_config(&mut self, config: &ConfigFile) {
+		if !self.editing {
+			self.sync_widgets(&config.system_menu.widgets);
+		}
+	}
+
+	pub fn popup_closed(&mut self) {
+		self.editing = false;
+	}
+
+	fn sync_widgets(&mut self, widgets: &[SystemMenuWidgets]) {
+		if self.widgets.as_slice() != widgets {
+			self.widgets.clear();
+			self.widgets.extend_from_slice(widgets);
+		}
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -176,7 +240,13 @@ impl SystemMenu {
 			neo_button(svg(phosphor_icon!("pencil")))
 				.width(32)
 				.height(32)
-				.padding(6),
+				.padding(6)
+				.background(if self.editing {
+					COLORS.decorative.blue
+				} else {
+					COLORS.white
+				})
+				.on_press(Message::EditingChanged(!self.editing)),
 		]
 		.width(Length::Fill)
 		.spacing(8)
@@ -190,10 +260,11 @@ impl SystemMenu {
 
 		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
 
-		if self.nightlight_enabled {
+		if self.nightlight.enabled.value() {
 			let temp = row![
 				svg(phosphor_icon!("sun")).width(16),
-				neo_slider(1000..=6500, self.temperature)
+				neo_slider(1000..=6500, self.nightlight.temperature)
+					.on_change(Message::ChangeTemperature)
 			]
 			.align_y(Vertical::Center)
 			.spacing(4);
@@ -202,7 +273,9 @@ impl SystemMenu {
 
 			let brightness = row![
 				svg(phosphor_icon!("lightbulb")).width(16),
-				neo_slider(0.0..=1.0, self.brightness),
+				neo_slider(0.2..=1.0, self.nightlight.brightness)
+					.step(0.01)
+					.on_change(Message::ChangeBrightness)
 			]
 			.align_y(Vertical::Center)
 			.spacing(4);
@@ -210,42 +283,37 @@ impl SystemMenu {
 			grid = grid.push(brightness);
 		}
 
-		for widget in &self.widgets {
-			let widget = match widget {
-				SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
-				SystemMenuWidgets::Bluetooth => self.bluetooth.view().map(Message::Bluetooth),
-				SystemMenuWidgets::Speaker => neo_toggle_button(
-					phosphor_icon!("speaker-high"),
-					"Default Sink",
-					"-- %",
-					true,
-					Some(COLORS.white),
-				),
-				SystemMenuWidgets::Microphone => neo_toggle_button(
-					phosphor_icon!("microphone"),
-					"Default Source",
-					"-- %",
-					false,
-					Some(COLORS.white),
-				),
-				SystemMenuWidgets::Vpn => neo_toggle_button(
-					phosphor_icon!("shield-slash"),
-					"VPN",
-					"Disconnected",
-					false,
-					Some(COLORS.white),
-				),
-				SystemMenuWidgets::Nightlight => neo_toggle_button(
-					phosphor_icon!("moon"),
-					"Nightlight",
-					"Off",
-					false,
-					Some(COLORS.white),
-				),
+		if !self.editing {
+			for widget in &self.widgets {
+				let widget = self.view_widget(*widget);
+				grid = grid.push(widget);
 			}
-			.width(Length::Fill)
-			.height(64);
-			grid = grid.push(widget);
+		} else {
+			let mut all = SystemMenuWidgets::VARIANTS.to_vec();
+
+			// TODO: This can be done more efficiently...
+			all.sort_by(|a, b| {
+				let a_index = self.widgets.iter().position(|w| w == a);
+				let b_index = self.widgets.iter().position(|w| w == b);
+
+				if let Some(a_index) = a_index {
+					if let Some(b_index) = b_index {
+						a_index.cmp(&b_index)
+					} else {
+						std::cmp::Ordering::Less
+					}
+				} else if b_index.is_some() {
+					std::cmp::Ordering::Greater
+				} else {
+					std::cmp::Ordering::Equal
+				}
+			});
+
+			for widget in all {
+				let is_addable = !self.widgets.contains(&widget);
+				let widget = self.view_editable_widget(widget, is_addable);
+				grid = grid.push(widget);
+			}
 		}
 
 		content = content.push(grid);
@@ -256,6 +324,92 @@ impl SystemMenu {
 			.radius(MODULE_RADIUS)
 			.into()
 	}
+
+	fn view_widget(&self, widget: SystemMenuWidgets) -> Element<'_, Message> {
+		match widget {
+			SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
+			SystemMenuWidgets::Bluetooth => self.bluetooth.view().map(Message::Bluetooth),
+			SystemMenuWidgets::Speaker => neo_toggle_button(
+				phosphor_icon!("speaker-high"),
+				"Default Sink",
+				"-- %",
+				true,
+				Some(COLORS.white),
+			),
+			SystemMenuWidgets::Microphone => neo_toggle_button(
+				phosphor_icon!("microphone"),
+				"Default Source",
+				"-- %",
+				false,
+				Some(COLORS.white),
+			),
+			SystemMenuWidgets::Vpn => neo_toggle_button(
+				phosphor_icon!("shield-slash"),
+				"VPN",
+				"Disconnected",
+				false,
+				Some(COLORS.white),
+			),
+			SystemMenuWidgets::Nightlight => self
+				.nightlight
+				.view()
+				.map(Message::Nightlight)
+				.on_context_menu_with_bounds(Message::OpenNightlightContextMenu),
+		}
+		.width(Length::Fill)
+		.height(64)
+		.into()
+	}
+
+	fn view_editable_widget(
+		&self, widget: SystemMenuWidgets, is_addable: bool,
+	) -> Element<'_, Message> {
+		// TODO: Disable the interaction on editing. Maybe I don't have to keep a state there, and
+		// I can just use a capturing mouse_area?
+		let content = container(self.view_widget(widget)).padding(Padding {
+			top: 6.0,
+			right: 6.0,
+			bottom: 0.0,
+			left: 0.0,
+		});
+
+		let badge = container(
+			neo_button(if is_addable {
+				svg(phosphor_icon!("plus"))
+			} else {
+				svg(phosphor_icon!("x"))
+			})
+			.padding(1)
+			.shadow_width(2.0)
+			.width(20)
+			.height(20)
+			.on_press(if is_addable {
+				Message::AddWidget(widget)
+			} else {
+				Message::RemoveWidget(widget)
+			}),
+		)
+		.align_right(Length::Fill)
+		.align_top(Length::Fill);
+
+		stack![content, badge].into()
+	}
+}
+
+async fn set_brightness(brightness: f64) -> zbus::Result<f64> {
+	let conn = Connection::session().await?;
+	let proxy = NightlightProxy::new(&conn).await?;
+
+	proxy.set_brightness(brightness).await?;
+
+	Ok(brightness)
+}
+
+async fn set_temperature(temperature: u32) -> zbus::Result<u32> {
+	let conn = Connection::session().await?;
+	let proxy = NightlightProxy::new(&conn).await?;
+	proxy.set_temperature(temperature).await?;
+	Ok(temperature)
 }
 
 const UPTIME_PRINTER: SpanPrinter = SpanPrinter::new()
@@ -298,70 +452,4 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 			.smallest(smallest)
 			.relative(&boot_time),
 	)?)
-}
-
-async fn nighlight_stream() -> stream::BoxStream<'static, Message> {
-	let connection = match zbus::Connection::session().await {
-		Ok(connection) => connection,
-		Err(error) => {
-			log::warn!("Failed to connect to session bus for nightlight signals: {error}");
-			return stream::once(async { Message::Noop }).boxed();
-		}
-	};
-
-	log::trace!("Connected");
-
-	let proxy = match NightlightProxy::new(&connection).await {
-		Ok(proxy) => proxy,
-		Err(error) => {
-			log::warn!("Failed to create nightlight proxy: {error}");
-			return stream::once(async { Message::Noop }).boxed();
-		}
-	};
-
-	log::trace!("got proxy");
-
-	let enabled_changed = proxy.receive_enabled_changed();
-	let brightness_changed = proxy.receive_brightness_changed();
-	let temperature_changed = proxy.receive_temperature_changed();
-
-	// TODO: Should we just be using receive_state_changed signal?
-	let (enabled, brightness, temperature) =
-		tokio::join!(enabled_changed, brightness_changed, temperature_changed,);
-
-	log::trace!("Got property streams");
-
-	let enabled = enabled.then(|enabled| async move {
-		match enabled.get().await {
-			Ok(value) => Message::NightlightEnabled(value),
-			Err(error) => {
-				log::warn!("Failed to read nightlight enabled value: {error}");
-				Message::Noop
-			}
-		}
-	});
-	let brightness = brightness.then(|brightness| async move {
-		match brightness.get().await {
-			Ok(value) => Message::BrightnessChanged(value),
-			Err(error) => {
-				log::warn!("Failed to read nightlight brightness value: {error}");
-				Message::Noop
-			}
-		}
-	});
-	let temperature = temperature.then(|temperature| async move {
-		log::trace!("Temp changed");
-		match temperature.get().await {
-			Ok(value) => {
-				log::trace!("Temp: {value:?}");
-				Message::TemperatureChanged(value)
-			}
-			Err(error) => {
-				log::warn!("Failed to read nightlight temperature value: {error}");
-				Message::Noop
-			}
-		}
-	});
-
-	stream::select(stream::select(enabled, brightness), temperature).boxed()
 }
