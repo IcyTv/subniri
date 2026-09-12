@@ -140,7 +140,7 @@ where
 		tree::State::new(State::new(self.toggled))
 	}
 
-	fn diff(&self, tree: &mut Tree) {
+	fn diff(&mut self, tree: &mut Tree) {
 		let state = tree.state.downcast_mut::<State>();
 
 		if state.toggled.value() != self.toggled {

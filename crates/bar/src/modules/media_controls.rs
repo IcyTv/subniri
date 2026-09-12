@@ -251,7 +251,7 @@ impl MediaControls {
 				.spacing(5.)
 				.align_y(Vertical::Center),
 			)
-			.max_width(300),
+			.width(300),
 		)
 		.padding(Padding {
 			left: 8.0,

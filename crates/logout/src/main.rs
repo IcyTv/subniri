@@ -7,9 +7,9 @@ use iced::{
 	theme::Style,
 	widget::{Column, column, container, mouse_area, row, space, svg, text},
 };
-use iced_layershell::{
-	application,
-	reexport::{Anchor, KeyboardInteractivity, Layer, core::font},
+use iced_exwlshell::{
+	layershell::application,
+	reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, core::font},
 	settings::{LayerShellSettings, StartMode},
 	to_layer_message,
 };
@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	.style(Logout::style)
 	.subscription(Logout::subscription)
 	.layer_settings(LayerShellSettings {
-		size: Some((0, 0)),
+		size: LayerSize::px(0, 0),
 		anchor: Anchor::all(),
 		start_mode: StartMode::Active,
 		layer: Layer::Overlay,

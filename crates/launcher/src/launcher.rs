@@ -17,8 +17,8 @@ use iced::{
 	widget::{column, container, image, row, space, svg, text, text::Rich, text_input},
 	window::Id,
 };
-use iced_layershell::{
-	reexport::{Anchor, KeyboardInteractivity, Layer, NewLayerShellSettings, OutputOption},
+use iced_exwlshell::{
+	reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, NewLayerShellSettings, OutputOption},
 	to_layer_message,
 };
 use neo_widgets::{
@@ -383,7 +383,7 @@ impl Launcher {
 		let id = iced::window::Id::unique();
 		let new = Message::NewLayerShell {
 			settings: NewLayerShellSettings {
-				size: Some((0, 0)),
+				size: LayerSize::px(0, 0),
 				layer: Layer::Overlay,
 				anchor: Anchor::all(),
 				exclusive_zone: None,
@@ -581,7 +581,6 @@ impl Launcher {
 			.style(|_, _| text_input::Style {
 				background: iced::Background::Color(COLORS.white),
 				border: Border::default().width(0),
-				icon: COLORS.black,
 				value: COLORS.text,
 				selection: COLORS.decorative.pink,
 				placeholder: COLORS.text.scale_alpha(0.7),

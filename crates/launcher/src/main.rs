@@ -2,9 +2,9 @@ use std::sync::Arc;
 
 use clap::{Parser, builder::PossibleValue};
 use config::{ConfigFile, LauncherProvider};
-use iced_layershell::{
+use iced_exwlshell::{
 	daemon,
-	reexport::{Anchor, KeyboardInteractivity, Layer},
+	reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize},
 	settings::{LayerShellSettings, StartMode},
 };
 
@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	.style(Launcher::style)
 	.subscription(Launcher::subscription)
 	.layer_settings(LayerShellSettings {
-		size: None,
+		size: LayerSize::px(0, 0),
 		anchor: Anchor::all(),
 		start_mode: StartMode::Background,
 		layer: Layer::Overlay,

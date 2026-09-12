@@ -3,7 +3,7 @@ version = "0.0.1"
 authors = ["IcyTv"]
 description = "Desktop shell for niri"
 edition = "2024"
-documentation = "https://github.com/IcyTv/subniri-slint"
+documentation = "https://github.com/IcyTv/subniri"
 
 [workspace]
 resolver = "3"
@@ -19,12 +19,10 @@ daemon = { path = "./crates/daemon" }
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
 futures = "0.3.32"
-iced = { version = "0.15.0-dev", features = [
+iced = { features = [
   "advanced",
   "crisp",
-  "hinting",
   "image",
-  "lazy",
   "linux-theme-detection",
   "svg",
   "sysinfo",
@@ -34,9 +32,10 @@ iced = { version = "0.15.0-dev", features = [
   "wgpu-bare",
   "tokio",
   "canvas",
-], git = "https://github.com/IcyTv/iced", default-features = false, rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
-iced_runtime = { git = "https://github.com/IcyTv/iced", version = "0.15.0-dev", rev = "45e9c2cebd53363e93b6a2382f7dadb1d38c7f27" }
-iced_layershell = { git = "https://github.com/IcyTv/exwlshelleventloop", version = "0.18.1", rev = "3b5118610c24090a4196c0f845d7b6bdb059fefe" }
+], git = "https://github.com/IcyTv/iced", default-features = false, branch = "master" }
+iced_runtime = { git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_exwlshell = { git = "https://github.com/IcyTv/exwlshelleventloop", branch = "master" }
+iced_wayland_subscriber = { git = "https://github.com/IcyTv/exwlshelleventloop", branch = "master" }
 icon = "0.2.0"
 image = "0.25.10"
 indexer-common = { path = "crates/indexer-common" }

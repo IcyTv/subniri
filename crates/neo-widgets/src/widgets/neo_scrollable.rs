@@ -428,16 +428,12 @@ where
 		neo_surface::size(self.width, self.height)
 	}
 
-	fn children(&self) -> Vec<Tree> {
-		vec![Tree::new(&self.content)]
-	}
-
 	fn tag(&self) -> tree::Tag {
 		tree::Tag::of::<State>()
 	}
 
-	fn diff(&self, tree: &mut Tree) {
-		tree.diff_children(std::slice::from_ref(&self.content));
+	fn diff(&mut self, tree: &mut Tree) {
+		tree.diff_children(std::slice::from_mut(&mut self.content));
 	}
 
 	fn state(&self) -> tree::State {

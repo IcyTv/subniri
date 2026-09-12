@@ -16,7 +16,7 @@ workspace = true
 [dependencies]
 clap.workspace = true
 iced.workspace = true
-iced_layershell.workspace = true
+iced_exwlshell.workspace = true
 futures.workspace = true
 log.workspace = true
 neo-widgets.workspace = true

@@ -4,7 +4,7 @@ use iced::{
 	Element, Font, Length, Subscription,
 	alignment::Vertical,
 	font, time,
-	widget::{column, row, svg, text},
+	widget::{column, row, rule, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
@@ -75,9 +75,17 @@ impl Clock {
 
 	pub fn view_popup(&self) -> Element<'_, Message> {
 		neo_card(
-			column![neo_card(
-				text(&self.time_secs).size(38).weight(font::Weight::Bold)
-			)]
+			column![
+				// neo_card(
+				text(&self.time_secs).size(38).weight(font::Weight::Bold),
+				// )
+				rule::horizontal(1).style(|_| rule::Style {
+					color: COLORS.black,
+					radius: 0.0.into(),
+					fill_mode: rule::FillMode::Full,
+					snap: true,
+				}),
+			]
 			.spacing(10),
 		)
 		.background(COLORS.decorative.purple)

@@ -7,10 +7,11 @@ use iced::Length;
 use iced::widget::{container, row, stack, text};
 use iced::window::Id;
 use iced::{Color, Element, Subscription, Task, Theme};
-use iced_layershell::actions::{IcedNewPopupSettings, PopupPlacement, PopupSize};
-use iced_layershell::reexport::{Anchor, xdg_positioner::ConstraintAdjustment};
-use iced_layershell::settings::{LayerShellSettings, StartMode};
-use iced_layershell::{Settings, daemon, to_layer_message};
+use iced_exwlshell::actions::IcedNewPopupSettings;
+use iced_exwlshell::reexport::{Anchor, LayerSize, PixelSize, PopupAnchor, PopupGravity};
+use iced_exwlshell::settings::{LayerShellSettings, StartMode};
+use iced_exwlshell::{Settings, daemon, to_layer_message};
+use iced_wayland_subscriber::shell::{ShellEvent, ShellReceiver};
 use neo_widgets::{
 	style::{COLORS, neo_theme},
 	widgets::neo_card,
@@ -31,13 +32,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let (doc, config) = ConfigFile::load()?;
 
+	let (shell_broadcast, shell_events) = iced_wayland_subscriber::shell::channel();
+
 	let app = daemon(
 		{
 			let conn = connection.clone();
 			// FIXME: Don't clone
 			let doc = doc.clone();
 			let config = config.clone();
-			move || Bar::new(&conn, doc.clone(), config.clone())
+			let events = shell_events.clone();
+			move || Bar::new(&conn, doc.clone(), config.clone(), events.clone())
 		},
 		Bar::namespace,
 		Bar::update,
@@ -50,10 +54,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	.settings(Settings {
 		with_connection: Some(connection.into()),
 		default_text_size: 18.into(),
+		shell_broadcast,
 		..Default::default()
 	})
 	.layer_settings(LayerShellSettings {
-		size: Some((0, BASE_BAR_HEIGHT)),
+		size: LayerSize::fill_width(BASE_BAR_HEIGHT),
 		exclusive_zone: BASE_BAR_HEIGHT.cast_signed(),
 		anchor: Anchor::Top | Anchor::Left | Anchor::Right,
 		start_mode: StartMode::AllScreens,
@@ -84,13 +89,18 @@ struct Bar {
 	context_popup: Option<Id>,
 	layer_heights: HashMap<Id, u32>,
 	window_scales: HashMap<Id, f32>,
+	window_output_names: HashMap<Id, String>,
+	shell_events: ShellReceiver,
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 }
 
 impl Bar {
 	fn new(
-		connection: &Connection, config_doc: kdl::KdlDocument, config_file: ConfigFile,
+		connection: &Connection,
+		config_doc: kdl::KdlDocument,
+		config_file: ConfigFile,
+		shell_events: ShellReceiver,
 	) -> (Self, Task<BarMessage>) {
 		let _ = connection;
 
@@ -107,6 +117,8 @@ impl Bar {
 			context_popup: None,
 			layer_heights: HashMap::new(),
 			window_scales: HashMap::new(),
+			window_output_names: HashMap::new(),
+			shell_events,
 			config_doc,
 			config_file,
 		};
@@ -185,27 +197,26 @@ impl Bar {
 				};
 				self.open_popup = Some((id, section, index));
 
+				let popup_settings = if let Some(parent_id) = source_id {
+					IcedNewPopupSettings::new(
+						parent_id,
+						PixelSize::px(480, 640),
+						(bounds.x.round() as i32, bounds.y.round() as i32),
+						PixelSize::px(bounds.width.round() as u32, bounds.height.round() as u32),
+					)
+				} else {
+					IcedNewPopupSettings::on_current_surface(
+						PixelSize::px(480, 640),
+						(bounds.x.round() as i32, bounds.y.round() as i32),
+						PixelSize::px(bounds.width.round() as u32, bounds.height.round() as u32),
+					)
+				}
+				.anchor(PopupAnchor::Bottom)
+				.gravity(PopupGravity::Bottom);
+
 				Task::batch([close_context_popup, close_module_popup])
 					.chain(Task::done(BarMessage::NewPopUp {
-						settings: IcedNewPopupSettings {
-							size: PopupSize::FitContent {
-								min: (1, 1),
-								max: (480, 640),
-							},
-							#[allow(clippy::cast_possible_truncation)]
-							anchor_rect: (
-								bounds.x.round() as i32,
-								bounds.y.round() as i32,
-								bounds.width.round() as i32,
-								bounds.height.round() as i32,
-							),
-							offset: (0, 8),
-							placement: PopupPlacement::BottomCenter,
-							constraint_adjustment: ConstraintAdjustment::SlideX
-								| ConstraintAdjustment::SlideY
-								| ConstraintAdjustment::FlipX
-								| ConstraintAdjustment::FlipY,
-						},
+						settings: popup_settings,
 						id,
 					}))
 					.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
@@ -231,26 +242,17 @@ impl Bar {
 
 				self.context_popup = Some(id);
 
+				let popup_settings = IcedNewPopupSettings::new(
+					source_id,
+					PixelSize::px(240, 160),
+					(bounds.x.round() as i32 + 8, bounds.y.round() as i32),
+					PixelSize::px(bounds.width.round() as u32, bounds.height.round() as u32),
+				)
+				.anchor(PopupAnchor::Bottom)
+				.gravity(PopupGravity::Bottom);
+
 				close_context_popup.chain(Task::done(BarMessage::NewPopUp {
-					settings: IcedNewPopupSettings {
-						size: PopupSize::FitContent {
-							min: (1, 1),
-							max: (240, 160),
-						},
-						#[allow(clippy::cast_possible_truncation)]
-						anchor_rect: (
-							bounds.x.round() as i32,
-							bounds.y.round() as i32,
-							bounds.width.round() as i32,
-							bounds.height.round() as i32,
-						),
-						offset: (8, 0),
-						placement: PopupPlacement::BottomCenter,
-						constraint_adjustment: ConstraintAdjustment::SlideX
-							| ConstraintAdjustment::SlideY
-							| ConstraintAdjustment::FlipX
-							| ConstraintAdjustment::FlipY,
-					},
+					settings: popup_settings,
 					id,
 				}))
 			}
@@ -293,6 +295,19 @@ impl Bar {
 					_ => unreachable!(),
 				}
 			}
+			BarMessage::ShellEvent(ShellEvent::WindowOutputChanged { window, output }) => {
+				if let Some(info) = output {
+					if let Some(name) = info.name {
+						self.window_output_names.insert(window, name);
+					}
+					if let Some((_, height)) = info.logical_size {
+						let scale = scale_for_screen(height.max(0).cast_unsigned());
+						self.window_scales.insert(window, scale);
+						return self.sync_layer_scale(window);
+					}
+				}
+				Task::none()
+			}
 			BarMessage::SetPopupId(section, index, _kind, id) => {
 				if let Some(module) = self.module_mut(section, index) {
 					module.set_popup_id(id);
@@ -317,6 +332,7 @@ impl Bar {
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
 		self.layer_heights.remove(&id);
 		self.window_scales.remove(&id);
+		self.window_output_names.remove(&id);
 		if self.context_popup == Some(id) {
 			self.context_popup = None;
 			return Task::none();
@@ -359,9 +375,10 @@ impl Bar {
 		}
 
 		Task::batch([
-			Task::done(BarMessage::SizeChange {
+			Task::done(BarMessage::LayoutChange {
 				id,
-				size: (0, height),
+				anchor: Anchor::Top | Anchor::Left | Anchor::Right,
+				size: LayerSize::fill_width(height),
 			}),
 			Task::done(BarMessage::ExclusiveZoneChange {
 				id,
@@ -375,11 +392,7 @@ impl Bar {
 			return *scale;
 		}
 
-		let Some((_, height)) = iced_layershell::window::output_logical_size(id) else {
-			return 1.0;
-		};
-
-		scale_for_screen(height.max(0).cast_unsigned())
+		1.0
 	}
 
 	#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -389,26 +402,38 @@ impl Bar {
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
 		if self.context_popup == Some(id) {
-			neo_card(text("Nightlight context menu").color(COLORS.text))
-				.padding(8)
-				.background(COLORS.white)
-				.into()
+			container(
+				neo_card(text("Nightlight context menu").color(COLORS.text))
+					.padding(8)
+					.background(COLORS.white),
+			)
+			.width(Length::Fill)
+			.align_x(iced::alignment::Horizontal::Center)
+			.into()
 		} else if let Some((wid, section, index)) = &self.open_popup
 			&& *wid == id
 		{
 			// neo_card("A").background(COLORS.background).into()
 			if let Some(module) = self.module(*section, *index) {
-				module
-					.view_popup()
-					.map(move |message| BarMessage::Module(Some(id), *section, *index, message))
+				container(
+					module
+						.view_popup()
+						.map(move |message| BarMessage::Module(Some(id), *section, *index, message)),
+				)
+				.width(Length::Fill)
+				.align_x(iced::alignment::Horizontal::Center)
+				.into()
 			} else {
-				neo_card(text("Something went wrong").color(COLORS.text))
-					.background(COLORS.feedback.danger90)
-					.into()
+				container(
+					neo_card(text("Something went wrong").color(COLORS.text))
+						.background(COLORS.feedback.danger90),
+				)
+				.width(Length::Fill)
+				.align_x(iced::alignment::Horizontal::Center)
+				.into()
 			}
 		} else {
-			let output_name = iced_layershell::window::output_name(id);
-			let output_name = output_name.as_deref();
+			let output_name = self.window_output_names.get(&id).map(String::as_str);
 
 			stack![
 				container(self.section(id, Section::Left, &self.left, output_name))
@@ -519,10 +544,9 @@ impl Bar {
 		});
 
 		let mut subscriptions = vec![
-			config_watch,
-			iced::window::events().map(|(id, event)| BarMessage::WindowEvent(id, event)),
-			iced::window::close_events().map(BarMessage::WindowClosed),
+			self.shell_events.listen().map(BarMessage::ShellEvent),
 			resume_events(),
+			config_watch,
 		];
 
 		subscriptions.extend(Self::module_subscriptions(Section::Left, &self.left));
@@ -564,6 +588,7 @@ enum Section {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 enum BarMessage {
+	ShellEvent(ShellEvent),
 	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
 	ConfigUpdated,
