@@ -31,6 +31,9 @@ pub enum ModuleMessage {
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
 	OpenContextMenu(Rectangle),
+	OpenTrayContextMenu { service: String, bounds: Rectangle },
+	InvokeTrayContextMenu { service: String, x: i32, y: i32 },
+	CloseContextMenus,
 
 	OpenPowerMenu,
 	OpenSettings,
@@ -144,7 +147,21 @@ impl Module {
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
-			(Self::Clock(clock), ModuleMessage::Clock(message)) => clock.update(message),
+			(Self::Clock(clock), ModuleMessage::Clock(message)) => {
+				if let Some(action) = clock.update(message) {
+					return Task::done(match action {
+						clock::PopupAction::Open(bounds) => ModuleMessage::OpenContextMenu(bounds),
+						clock::PopupAction::NativeContextMenu { service, bounds } => {
+							ModuleMessage::OpenTrayContextMenu { service, bounds }
+						}
+						clock::PopupAction::CloseAll => ModuleMessage::CloseContextMenus,
+					});
+				}
+			}
+			(Self::Clock(clock), ModuleMessage::InvokeTrayContextMenu { service, x, y }) => {
+				clock.open_tray_context_menu(service, x, y);
+			}
+			(Self::Clock(clock), ModuleMessage::PopupClosed) => clock.on_popup_closed(),
 			(Self::MediaControls(controls), ModuleMessage::MediaControls(message)) => {
 				return controls.update(message).map(ModuleMessage::MediaControls);
 			}
@@ -169,7 +186,7 @@ impl Module {
 				bluetooth.subscription().map(ModuleMessage::Bluetooth)
 			}
 			Self::Volume(Ok(volume)) => volume.subscription().map(ModuleMessage::Volume),
-			Self::Clock(_) => clock::Clock::subscription().map(ModuleMessage::Clock),
+			Self::Clock(clock) => clock.subscription().map(ModuleMessage::Clock),
 			Self::MediaControls(controls) => {
 				controls.subscription().map(ModuleMessage::MediaControls)
 			}
@@ -237,6 +254,16 @@ impl Module {
 			Self::Clock(clock) => clock.view_popup().map(ModuleMessage::Clock),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
+				.into(),
+		}
+	}
+
+	pub fn view_context_menu(&self, depth: usize) -> Element<'_, ModuleMessage> {
+		match self {
+			Self::Clock(clock) => clock.view_context_menu(depth).map(ModuleMessage::Clock),
+			_ => neo_card(text("Nightlight context menu").color(COLORS.text))
+				.padding(8)
+				.background(COLORS.white)
 				.into(),
 		}
 	}

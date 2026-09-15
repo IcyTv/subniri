@@ -20,19 +20,18 @@ use wayrs_protocols::wlr_gamma_control_unstable_v1::{
 };
 use zbus::object_server::SignalEmitter;
 
-use crate::{NIGHTLIGHT_BUS_NAME, NIGHTLIGHT_OBJECT_PATH, NightlightPreset};
+use crate::{NIGHTLIGHT_OBJECT_PATH, NightlightPreset};
 
 pub async fn run<F>(
-	config: config::Nightlight, shutdown_signal: F,
+	connection: zbus::Connection, config: config::Nightlight, shutdown_signal: F,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
 	F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
 	let service = NightlightDbus::new(config.clone()).await?;
-	let connection = zbus::connection::Builder::session()?
-		.name(NIGHTLIGHT_BUS_NAME)?
-		.serve_at(NIGHTLIGHT_OBJECT_PATH, service.clone())?
-		.build()
+	connection
+		.object_server()
+		.at(NIGHTLIGHT_OBJECT_PATH, service.clone())
 		.await?;
 
 	let mut sched = if config.enabled {
@@ -51,7 +50,7 @@ where
 	tokio::select! {
 		result = shutdown_signal => {
 			result?;
-			log::info!("Shutting down");
+			log::info!("Shutting down nightlight");
 			if let Some(reconciler) = preset_reconciler.take() {
 				reconciler.abort();
 			}
@@ -71,7 +70,10 @@ where
 			return Err("nightlight preset reconciler stopped unexpectedly".into());
 		}
 	}
-	drop(connection);
+	connection
+		.object_server()
+		.remove::<NightlightDbus, _>(NIGHTLIGHT_OBJECT_PATH)
+		.await?;
 
 	Ok(())
 }

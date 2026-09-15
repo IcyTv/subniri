@@ -62,8 +62,14 @@ url = "2.5.8"
 wayland-client = "0.31.14"
 zbus = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8", features = [
   "tokio",
+  "chrono",
+  "uuid",
 ] }
-zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
+zbus_xml = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8", features = [
+  "chrono",
+  "uuid",
+] }
 
 [profile.release]
 codegen-units = 1

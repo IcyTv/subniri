@@ -318,8 +318,10 @@ impl SystemMenu {
 
 		content = content.push(grid);
 
+		pub const POPUP_SIZE: (u32, u32) = (480, 640);
+
 		neo_card(content)
-			.width(480)
+			.width(POPUP_SIZE.0 as f32)
 			.background(COLORS.decorative.blue)
 			.radius(MODULE_RADIUS)
 			.into()

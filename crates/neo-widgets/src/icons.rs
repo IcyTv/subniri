@@ -78,6 +78,41 @@ pub fn resolve_icon(app_id: impl AsRef<str>, size: u32, scale: u32) -> ResolvedI
 	resolve_with(|resolver| resolver.get_icon_by_app_id(app_id, size, scale))
 }
 
+pub fn resolve_icon_name(icon_name: impl AsRef<str>, size: u32, scale: u32) -> ResolvedIcon {
+	try_resolve_icon_name(icon_name, size, scale).unwrap_or_else(default_icon)
+}
+
+pub fn resolve_icon_name_in_path(
+	icon_name: impl AsRef<str>, icon_path: impl AsRef<Path>, size: u32, scale: u32,
+) -> ResolvedIcon {
+	try_resolve_icon_name_in_path(icon_name, icon_path, size, scale).unwrap_or_else(default_icon)
+}
+
+pub fn try_resolve_icon_name(
+	icon_name: impl AsRef<str>, size: u32, scale: u32,
+) -> Option<ResolvedIcon> {
+	let resolver = icon_resolver();
+	let Ok(resolver) = resolver.lock() else {
+		return None;
+	};
+	resolver
+		.find_icon(icon_name.as_ref(), size, scale)
+		.map(ResolvedIcon::from_icon_file)
+}
+
+pub fn try_resolve_icon_name_in_path(
+	icon_name: impl AsRef<str>, icon_path: impl AsRef<Path>, size: u32, scale: u32,
+) -> Option<ResolvedIcon> {
+	let resolver = icon_resolver();
+	let Ok(mut resolver) = resolver.lock() else {
+		return None;
+	};
+	resolver.add_icon_dir(icon_path);
+	resolver
+		.find_icon(icon_name.as_ref(), size, scale)
+		.map(ResolvedIcon::from_icon_file)
+}
+
 pub fn resolve_from_desktop_entry(
 	desktop_entry: impl AsRef<str>, size: u32, scale: u32,
 ) -> ResolvedIcon {
@@ -241,6 +276,18 @@ impl ApplicationIconResolver {
 			self.generation = self.generation.wrapping_add(1);
 			self.sweep();
 		}
+	}
+
+	fn add_icon_dir(&mut self, path: impl AsRef<Path>) {
+		let path = path.as_ref();
+		if !path.is_dir() || self.additional_icon_dirs.iter().any(|dir| dir == path) {
+			return;
+		}
+
+		self.additional_icon_dirs.push(path.to_path_buf());
+		self.rebuild_icons_cache();
+		self.generation = self.generation.wrapping_add(1);
+		self.sweep();
 	}
 
 	fn find_icon(&self, icon_name: &str, size: u32, scale: u32) -> Option<IconFile> {

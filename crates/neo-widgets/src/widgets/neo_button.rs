@@ -21,14 +21,17 @@ use super::neo_surface::{self, NeoContentSurfaceStyle};
 #[derive(Debug, Clone, Copy)]
 pub struct NeoButtonStyle {
 	pub surface: NeoContentSurfaceStyle,
+	pub hovered: NeoSurfaceStyle,
 	pub focused: NeoContentSurfaceStyle,
 	pub disabled_background: Color,
 }
 
 impl Default for NeoButtonStyle {
 	fn default() -> Self {
+		let surface = NeoContentSurfaceStyle::default();
 		Self {
-			surface: NeoContentSurfaceStyle::default(),
+			surface,
+			hovered: surface.surface,
 			focused: NeoContentSurfaceStyle {
 				surface: NeoSurfaceStyle {
 					background: COLORS.decorative.pink,
@@ -52,6 +55,7 @@ pub fn neo_button<'a, Message, Theme, Renderer>(
 pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
 	content: Element<'a, Message, Theme, Renderer>,
 	on_press: Option<OnPress<'a, Message>>,
+	on_press_started: Option<OnPress<'a, Message>>,
 	on_context_menu: Option<OnPress<'a, Message>>,
 	style: NeoButtonStyle,
 	width: Length,
@@ -80,6 +84,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		Self {
 			content: content.into(),
 			on_press: None,
+			on_press_started: None,
 			on_context_menu: None,
 			style: NeoButtonStyle::default(),
 			width: Length::Shrink,
@@ -105,6 +110,14 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		F: Fn(Rectangle) -> Message + 'a,
 	{
 		self.on_press = Some(OnPress::WithBounds(Rc::new(callback)));
+		self
+	}
+
+	pub fn on_press_started_with_bounds<F>(mut self, callback: F) -> Self
+	where
+		F: Fn(Rectangle) -> Message + 'a,
+	{
+		self.on_press_started = Some(OnPress::WithBounds(Rc::new(callback)));
 		self
 	}
 
@@ -138,6 +151,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 
 	pub fn background(mut self, color: Color) -> Self {
 		self.style.surface.surface.background = color;
+		self.style.hovered.background = color;
 		self
 	}
 
@@ -146,8 +160,14 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn hover_background(mut self, color: Color) -> Self {
+		self.style.hovered.background = color;
+		self
+	}
+
 	pub fn radius(mut self, radius: f32) -> Self {
 		self.style.surface.surface.radius = radius;
+		self.style.hovered.radius = radius;
 		self
 	}
 
@@ -158,6 +178,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 
 	pub fn shadow_width(mut self, shadow_width: f32) -> Self {
 		self.style.surface.surface.shadow_width = shadow_width;
+		self.style.hovered.shadow_width = shadow_width;
 		self
 	}
 
@@ -194,6 +215,16 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 					OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
 				}
 			}),
+			on_press_started: self.on_press_started.map(
+				|on_press_started| match on_press_started {
+					OnPress::Message(message) => OnPress::Message(func.clone()(message)),
+					OnPress::WithBounds(callback) => {
+						let func = func.clone();
+
+						OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
+					}
+				},
+			),
 			on_context_menu: self
 				.on_context_menu
 				.map(|on_context_menu| match on_context_menu {
@@ -289,6 +320,9 @@ where
 		let bounds = layout.bounds();
 		let over = cursor.is_over(bounds);
 
+		if state.hovered != over {
+			shell.request_redraw();
+		}
 		state.hovered = over;
 
 		if self.enabled {
@@ -330,6 +364,12 @@ where
 			{
 				state.focused = self.focusable;
 				state.pressed = state.pressed.clone().go(true, Instant::now());
+				if let Some(message) = self.on_press_started.clone() {
+					shell.publish(match message {
+						OnPress::Message(message) => message,
+						OnPress::WithBounds(callback) => callback(bounds),
+					});
+				}
 
 				shell.request_redraw();
 				shell.capture_event();
@@ -382,7 +422,9 @@ where
 		_renderer: &Renderer,
 	) -> mouse::Interaction {
 		if self.enabled
-			&& (self.on_press.is_some() || self.on_context_menu.is_some())
+			&& (self.on_press.is_some()
+				|| self.on_press_started.is_some()
+				|| self.on_context_menu.is_some())
 			&& cursor.is_over(layout.bounds())
 		{
 			mouse::Interaction::Pointer
@@ -406,6 +448,8 @@ where
 		let child_layout = layout.child(0);
 		let surface = if state.focused {
 			self.style.focused.surface
+		} else if self.enabled && cursor.is_over(bounds) {
+			self.style.hovered
 		} else {
 			self.style.surface.surface
 		};

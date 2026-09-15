@@ -1,15 +1,30 @@
 #![allow(clippy::missing_errors_doc)]
 
+use zbus::{
+	names::{BusName, InterfaceName},
+	zvariant::ObjectPath,
+};
+
+pub mod calendar;
 pub mod nightlight;
 
-pub const NIGHTLIGHT_BUS_NAME: &str = "de.icytv.subniri.Daemon";
-pub const NIGHTLIGHT_OBJECT_PATH: &str = "/de/icytv/subniri/Nightlight";
-pub const NIGHTLIGHT_INTERFACE: &str = "de.icytv.subniri.Nightlight";
+pub const DEFAULT_BUS_NAME: BusName<'_> =
+	BusName::from_static_str_checked("de.icytv.subniri.Daemon");
+
+pub const NIGHTLIGHT_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Nightlight");
+pub const NIGHTLIGHT_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked("de.icytv.subniri.Nightlight");
+
+pub const CALENDAR_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Calendar");
+pub const CALENDAR_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked("de.icytv.subniri.Calendar");
 
 #[zbus::proxy(
-	interface = "de.icytv.subniri.Nightlight",
-	default_service = "de.icytv.subniri.Daemon",
-	default_path = "/de/icytv/subniri/Nightlight"
+	interface = NIGHTLIGHT_INTERFACE,
+	default_service = DEFAULT_BUS_NAME,
+	default_path = NIGHTLIGHT_OBJECT_PATH
 )]
 pub trait Nightlight {
 	#[zbus(property)]

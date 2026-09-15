@@ -979,8 +979,10 @@ impl Volume {
 		])
 		.width(Length::Fill);
 
+		pub const POPUP_SIZE: (u32, u32) = (320, 240);
+
 		neo_card(column![output, input].spacing(12))
-			.width(320)
+			.width(POPUP_SIZE.0 as f32)
 			.background(COLORS.decorative.yellow)
 			.radius(MODULE_RADIUS)
 			.into()

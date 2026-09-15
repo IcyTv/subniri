@@ -18,7 +18,9 @@ use iced::{
 	window::Id,
 };
 use iced_exwlshell::{
-	reexport::{Anchor, KeyboardInteractivity, Layer, LayerSize, NewLayerShellSettings, OutputOption},
+	reexport::{
+		Anchor, KeyboardInteractivity, Layer, LayerSize, NewLayerShellSettings, OutputOption,
+	},
 	to_layer_message,
 };
 use neo_widgets::{

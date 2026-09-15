@@ -21,5 +21,8 @@ pub use neo_toggle::{NeoToggle, neo_toggle};
 mod neo_toggle_button;
 pub use neo_toggle_button::neo_toggle_button;
 
+mod neo_tumbler;
+pub use neo_tumbler::neo_tumbler;
+
 mod spinner;
 pub use spinner::{Spinner, spinner};

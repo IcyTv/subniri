@@ -227,20 +227,23 @@ fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element
 		workspace_preview(&windows)
 	};
 
+	let surface = NeoSurfaceStyle {
+		background: if workspace.is_active {
+			COLORS.decorative.yellow
+		} else {
+			COLORS.white
+		},
+		shadow_width: 2.0,
+		..Default::default()
+	};
+
 	neo_button(content)
 		.style(NeoButtonStyle {
 			surface: NeoContentSurfaceStyle {
-				surface: NeoSurfaceStyle {
-					background: if workspace.is_active {
-						COLORS.decorative.yellow
-					} else {
-						COLORS.white
-					},
-					shadow_width: 2.0,
-					..Default::default()
-				},
+				surface,
 				padding: 4.0.into(),
 			},
+			hovered: surface,
 			..Default::default()
 		})
 		.height(MODULE_HEIGHT - 20.)
