@@ -1,5 +1,5 @@
 use std::{
-	collections::HashSet,
+	collections::{HashMap, HashSet},
 	hash::{Hash, Hasher},
 	sync::{Arc, Mutex, MutexGuard},
 };
@@ -15,7 +15,7 @@ use zbus::{
 
 use super::Message;
 use super::dbusmenu::DbusMenuProxy;
-use super::item::{self, TrayItem};
+use super::item::{self, ItemAddress, TrayItem};
 
 const WATCHER_SERVICE: &str = "org.kde.StatusNotifierWatcher";
 const WATCHER_PATH: &str = "/StatusNotifierWatcher";
@@ -223,6 +223,8 @@ fn try_events(
 		let state = Arc::new(Mutex::new(WatcherState::default()));
 		let (menu_event_tx, menu_events) = async_channel::unbounded();
 		let mut menu_signal_task: Option<tokio::task::JoinHandle<()>> = None;
+		let (item_event_tx, item_events) = async_channel::unbounded();
+		let mut item_signal_tasks = HashMap::<String, tokio::task::JoinHandle<()>>::new();
 
 		// Clients often register immediately when the well-known name gets an owner.
 		connection
@@ -262,9 +264,12 @@ fn try_events(
 			.await?;
 		for service in services {
 			state.lock().map(|mut state| state.items.insert(service.clone())).ok();
-			if let Some(event) = read_item(&connection, service).await {
-				yield event;
-			}
+			spawn_item_watch(
+				&mut item_signal_tasks,
+				connection.clone(),
+				service,
+				item_event_tx.clone(),
+			);
 		}
 
 		loop {
@@ -315,17 +320,36 @@ fn try_events(
 						yield menu_event;
 					}
 				}
+				item_event = item_events.recv() => {
+					if let Ok(item_event) = item_event {
+						let is_active = match &item_event {
+							Message::Registered(service, _) => state
+								.lock()
+								.is_ok_and(|state| state.items.contains(service)),
+							_ => false,
+						};
+						if is_active {
+							yield item_event;
+						}
+					}
+				}
 				Some(signal) = registered.next() => {
 					if let Ok(service) = signal.body().deserialize::<String>() {
 						state.lock().map(|mut state| state.items.insert(service.clone())).ok();
-						if let Some(event) = read_item(&connection, service).await {
-							yield event;
-						}
+						spawn_item_watch(
+							&mut item_signal_tasks,
+							connection.clone(),
+							service,
+							item_event_tx.clone(),
+						);
 					}
 				}
 				Some(signal) = unregistered.next() => {
 					if let Ok(service) = signal.body().deserialize::<String>() {
 						state.lock().map(|mut state| state.items.remove(&service)).ok();
+						if let Some(task) = item_signal_tasks.remove(&service) {
+							task.abort();
+						}
 						yield Message::Removed(service);
 					}
 				}
@@ -339,6 +363,9 @@ fn try_events(
 							.map(|mut state| state.remove_owner(&name))
 							.unwrap_or_default();
 						for service in removed {
+							if let Some(task) = item_signal_tasks.remove(&service) {
+								task.abort();
+							}
 							yield Message::Removed(service);
 						}
 					}
@@ -347,6 +374,93 @@ fn try_events(
 			}
 		}
 	}
+}
+
+fn spawn_item_watch(
+	tasks: &mut HashMap<String, tokio::task::JoinHandle<()>>, connection: Connection,
+	service: String, events: async_channel::Sender<Message>,
+) {
+	if let Some(task) = tasks.remove(&service) {
+		task.abort();
+	}
+	let task_service = service.clone();
+	tasks.insert(
+		service,
+		tokio::spawn(async move {
+			watch_item(connection, task_service, events).await;
+		}),
+	);
+}
+
+async fn watch_item(
+	connection: Connection, service: String, events: async_channel::Sender<Message>,
+) {
+	let address = match ItemAddress::parse(&service) {
+		Ok(address) => address,
+		Err(error) => {
+			log::warn!("Failed to parse tray item address {service}: {error}");
+			return;
+		}
+	};
+	let proxy = match Proxy::new_owned(
+		connection.clone(),
+		address.bus_name,
+		address.object_path,
+		item::ITEM_INTERFACE.to_string(),
+	)
+	.await
+	{
+		Ok(proxy) => proxy,
+		Err(error) => {
+			log::warn!("Failed to create tray item watcher for {service}: {error}");
+			return;
+		}
+	};
+	let mut signals = match proxy.receive_all_signals().await {
+		Ok(signals) => signals,
+		Err(error) => {
+			log::warn!("Failed to watch tray item {service}: {error}");
+			if let Some(item) = read_item(&connection, service).await {
+				let _ = events.send(item).await;
+			}
+			return;
+		}
+	};
+
+	if let Some(item) = read_item(&connection, service.clone()).await
+		&& events.send(item).await.is_err()
+	{
+		return;
+	}
+
+	while let Some(signal) = signals.next().await {
+		let header = signal.header();
+		let Some(member) = header.member().map(|member| member.as_str()) else {
+			continue;
+		};
+		if !refreshes_tray_item(member) {
+			continue;
+		}
+		if let Some(item) = read_item(&connection, service.clone()).await
+			&& events.send(item).await.is_err()
+		{
+			return;
+		}
+	}
+}
+
+fn refreshes_tray_item(member: &str) -> bool {
+	matches!(
+		member,
+		"NewTitle"
+			| "NewIcon"
+			| "NewAttentionIcon"
+			| "NewOverlayIcon"
+			| "NewToolTip"
+			| "NewStatus"
+			| "NewMenu"
+			| "NewIconThemePath"
+	)
 }
 
 async fn watch_dbusmenu(
@@ -473,5 +587,27 @@ async fn read_item(connection: &Connection, service: String) -> Option<Message> 
 			log::warn!("Failed to read tray item {service}: {error}");
 			None
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::refreshes_tray_item;
+
+	#[test]
+	fn standard_item_change_signals_refresh_the_snapshot() {
+		for member in [
+			"NewTitle",
+			"NewIcon",
+			"NewAttentionIcon",
+			"NewOverlayIcon",
+			"NewToolTip",
+			"NewStatus",
+			"NewMenu",
+			"NewIconThemePath",
+		] {
+			assert!(refreshes_tray_item(member), "ignored {member}");
+		}
+		assert!(!refreshes_tray_item("Activate"));
 	}
 }

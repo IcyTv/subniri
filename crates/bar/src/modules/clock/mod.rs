@@ -89,7 +89,9 @@ impl Clock {
 
 		let tray = self.tray.subscription().map(Message::Tray);
 
-		Subscription::batch([tick, tray])
+		let calendar = self.calendar.subscription().map(Message::Calendar);
+
+		Subscription::batch([tick, tray, calendar])
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -139,7 +141,7 @@ impl Clock {
 			.spacing(10),
 		)
 		.background(COLORS.decorative.purple)
-		.width(340.0)
+		.width(400.0)
 		.into()
 	}
 

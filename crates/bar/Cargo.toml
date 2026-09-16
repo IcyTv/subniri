@@ -49,3 +49,4 @@ wayland-client.workspace = true
 zbus.workspace = true
 zbus_xml.workspace = true
 serde = { workspace = true, features = ["derive"] }
+chrono = "0.4.45"

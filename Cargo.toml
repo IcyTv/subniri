@@ -60,13 +60,13 @@ small-map = "0.1.5"
 tokio = { version = "1.52.3", features = ["full"] }
 url = "2.5.8"
 wayland-client = "0.31.14"
-zbus = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8", features = [
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "6bad131", features = [
   "tokio",
   "chrono",
   "uuid",
 ] }
-zbus_xml = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
-zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8", features = [
+zbus_xml = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "6bad131", features = [
   "chrono",
   "uuid",
 ] }
@@ -91,5 +91,5 @@ unimplemented = "deny"
 
 [patch.crates-io]
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }
-zbus = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
-zvariant = { git = "https://github.com/IcyTv/zbus", rev = "d12583f8" }
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }

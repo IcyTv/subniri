@@ -3,7 +3,7 @@ use zbus::{Connection, Proxy, names::OwnedBusName, zvariant::OwnedObjectPath};
 use super::dbusmenu::{self, DbusMenuProxy};
 use super::icon::TrayIcon;
 
-const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
+pub(super) const ITEM_INTERFACE: &str = "org.kde.StatusNotifierItem";
 const DEFAULT_ITEM_PATH: &str = "/StatusNotifierItem";
 
 #[derive(Debug, Clone)]
@@ -183,7 +183,7 @@ pub struct ItemAddress {
 }
 
 impl ItemAddress {
-	fn parse(service: &str) -> zbus::Result<Self> {
+	pub(super) fn parse(service: &str) -> zbus::Result<Self> {
 		let (bus_name, object_path) = service.split_once('/').map_or_else(
 			|| (service.to_string(), DEFAULT_ITEM_PATH.to_string()),
 			|(bus_name, path)| (bus_name.to_string(), format!("/{path}")),
