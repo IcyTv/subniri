@@ -56,7 +56,20 @@
         inherit (pkgs) lib;
 
         rustToolchain = pkgs.rust-bin.stable.latest.minimal;
-        rustLib = pkgs.rustBuilder.rustLib;
+        rustLib =
+          pkgs.rustBuilder.rustLib
+          // {
+            fetchCratesIo = {
+              name,
+              version,
+              sha256,
+            }:
+              pkgs.buildPackages.fetchurl {
+                name = "${name}-${version}.tar.gz";
+                url = "https://static.crates.io/crates/${name}/${name}-${version}.crate";
+                inherit sha256;
+              };
+          };
 
         mkOverride = args: rustLib.makeOverride args;
         appendList = attr: values: drv: (drv.${attr} or []) ++ values;
@@ -266,7 +279,13 @@
         };
 
         rustPkgs = pkgs.rustBuilder.makePackageSet {
-          packageFun = import ./Cargo.nix;
+          packageFun = args:
+            (import ./Cargo.nix) (
+              args
+              // {
+                rustLib = args.rustLib // {inherit (rustLib) fetchCratesIo;};
+              }
+            );
 
           inherit rustToolchain workspaceSrc;
 
