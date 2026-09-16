@@ -224,8 +224,8 @@
             to = ''iced_wgpu = { version = "0.15.0-dev", path = "wgpu" }'';
           }
           {
-            from = "workspace = true";
-            to = "# removed workspace lint inheritance for cargo2nix";
+            from = "[lints]\nworkspace = true";
+            to = "[lints]\n# removed workspace lint inheritance for cargo2nix";
           }
         ];
 
