@@ -39,7 +39,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "624a74d94e030a5fb80030a4cf655fc010a80e5fc838914ab500a070c02e9fcd";
+  nixifiedLockHash = "77b73dd77f0ad48b33c773665f02f7ad6ae7232b594ed2ab20578a551642e8e9";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -1010,6 +1010,7 @@ in
       wayland_client = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wayland-client."0.31.15" { inherit profileName; }).out;
       zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
       zbus_xml = (rustPackages."git+https://github.com/IcyTv/zbus".zbus_xml."5.2.1" { inherit profileName; }).out;
+      zvariant = (rustPackages."git+https://github.com/IcyTv/zbus".zvariant."5.15.0" { inherit profileName; }).out;
     };
   });
   
