@@ -79,7 +79,7 @@ impl SystemMenu {
 		let uptime = uptime().unwrap_or_default();
 
 		Self {
-			widgets: vec![],
+			widgets: config.system_menu.widgets.clone(),
 			username,
 			avatar,
 			uptime,
