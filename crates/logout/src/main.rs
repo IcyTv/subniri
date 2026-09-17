@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	.style(Logout::style)
 	.subscription(Logout::subscription)
 	.layer_settings(LayerShellSettings {
-		size: LayerSize::px(0, 0),
+		size: LayerSize::FILL,
 		anchor: Anchor::all(),
 		start_mode: StartMode::Active,
 		layer: Layer::Overlay,
