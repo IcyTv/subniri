@@ -321,12 +321,12 @@ in {
 
         systemMenu.widgets = mkOption {
           type = types.listOf (types.enum [
-            "Wifi"
-            "Bluetooth"
-            "Speaker"
-            "Microphone"
-            "Vpn"
-            "Nightlight"
+            "wifi"
+            "bluetooth"
+            "speaker"
+            "microphone"
+            "vpn"
+            "nightlight"
           ]);
           default = [];
           description = "Widgets to display in the system menu.";
