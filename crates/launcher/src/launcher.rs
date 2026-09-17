@@ -385,7 +385,7 @@ impl Launcher {
 		let id = iced::window::Id::unique();
 		let new = Message::NewLayerShell {
 			settings: NewLayerShellSettings {
-				size: LayerSize::px(0, 0),
+				size: LayerSize::FILL,
 				layer: Layer::Overlay,
 				anchor: Anchor::all(),
 				exclusive_zone: None,

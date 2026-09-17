@@ -76,7 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	.style(Launcher::style)
 	.subscription(Launcher::subscription)
 	.layer_settings(LayerShellSettings {
-		size: LayerSize::px(0, 0),
+		size: LayerSize::FILL,
 		anchor: Anchor::all(),
 		start_mode: StartMode::Background,
 		layer: Layer::Overlay,
