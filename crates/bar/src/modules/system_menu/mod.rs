@@ -46,11 +46,29 @@ pub enum Message {
 	ChangeTemperature(u32),
 
 	EditingChanged(bool),
-	OpenNightlightContextMenu(Rectangle),
+	OpenContextMenu(ContextMenu, usize, Rectangle),
 	AddWidget(SystemMenuWidgets),
 	RemoveWidget(SystemMenuWidgets),
 
 	Noop,
+}
+
+impl Message {
+	pub fn closes_context_menus(&self) -> bool {
+		matches!(
+			self,
+			Self::Nightlight(
+				nightlight::Message::Toggle
+					| nightlight::Message::Suspend(_)
+					| nightlight::Message::SetPreset(_)
+			)
+		)
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ContextMenu {
+	Nightlight(nightlight::ContextMenu),
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +81,8 @@ pub struct SystemMenu {
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight: Box<nightlight::Nightlight>,
+
+	context_menus: Vec<ContextMenu>,
 
 	editing: bool,
 }
@@ -87,6 +107,8 @@ impl SystemMenu {
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
 			nightlight: Box::new(nightlight::Nightlight::new(config)),
+
+			context_menus: Vec::new(),
 
 			editing: false,
 		}
@@ -188,6 +210,11 @@ impl SystemMenu {
 
 	pub fn popup_closed(&mut self) {
 		self.editing = false;
+		self.close_context_menus();
+	}
+
+	pub fn close_context_menus(&mut self) {
+		self.context_menus.clear();
 	}
 
 	fn sync_widgets(&mut self, widgets: &[SystemMenuWidgets]) {
@@ -327,6 +354,37 @@ impl SystemMenu {
 			.into()
 	}
 
+	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {
+		match self.context_menus.get(depth).copied() {
+			Some(ContextMenu::Nightlight(menu)) => {
+				self.nightlight
+					.view_context_menu(menu)
+					.map(move |message| match message {
+						nightlight::Message::OpenContextMenu(menu, bounds) => {
+							Message::OpenContextMenu(
+								ContextMenu::Nightlight(menu),
+								depth + 1,
+								bounds,
+							)
+						}
+						message => Message::Nightlight(message),
+					})
+			}
+			_ => neo_card(text("No context menu").color(COLORS.text))
+				.padding(8)
+				.background(COLORS.white)
+				.into(),
+		}
+	}
+
+	pub fn open_context_menu(&mut self, menu: ContextMenu, depth: usize) {
+		if depth > self.context_menus.len() {
+			return;
+		}
+		self.context_menus.truncate(depth);
+		self.context_menus.push(menu);
+	}
+
 	fn view_widget(&self, widget: SystemMenuWidgets) -> Element<'_, Message> {
 		match widget {
 			SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
@@ -356,7 +414,13 @@ impl SystemMenu {
 				.nightlight
 				.view()
 				.map(Message::Nightlight)
-				.on_context_menu_with_bounds(Message::OpenNightlightContextMenu),
+				.on_context_menu_with_mouse_position(|position| {
+					Message::OpenContextMenu(
+						ContextMenu::Nightlight(nightlight::ContextMenu::Root),
+						0,
+						Rectangle::new(position, iced::Size::new(1.0, 1.0)),
+					)
+				}),
 		}
 		.width(Length::Fill)
 		.height(64)

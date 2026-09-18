@@ -4,7 +4,7 @@ use std::{
 };
 
 use iced::{
-	Animation, Color, Element, Event, Length, Padding, Rectangle,
+	Animation, Color, Element, Event, Length, Padding, Point, Rectangle,
 	advanced::{
 		Layout, Widget, layout, mouse, renderer,
 		widget::{self, Tree, operation::Focusable, tree},
@@ -68,6 +68,7 @@ pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer
 enum OnPress<'a, Message> {
 	Message(Message),
 	WithBounds(Rc<dyn Fn(Rectangle) -> Message + 'a>),
+	WithMousePosition(Rc<dyn Fn(Point) -> Message + 'a>),
 }
 
 impl<Message: Clone> Clone for OnPress<'_, Message> {
@@ -75,6 +76,7 @@ impl<Message: Clone> Clone for OnPress<'_, Message> {
 		match self {
 			Self::Message(message) => Self::Message(message.clone()),
 			Self::WithBounds(callback) => Self::WithBounds(callback.clone()),
+			Self::WithMousePosition(callback) => Self::WithMousePosition(callback.clone()),
 		}
 	}
 }
@@ -113,11 +115,27 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn on_press_with_mouse_position<F>(mut self, callback: F) -> Self
+	where
+		F: Fn(Point) -> Message + 'a,
+	{
+		self.on_press = Some(OnPress::WithMousePosition(Rc::new(callback)));
+		self
+	}
+
 	pub fn on_press_started_with_bounds<F>(mut self, callback: F) -> Self
 	where
 		F: Fn(Rectangle) -> Message + 'a,
 	{
 		self.on_press_started = Some(OnPress::WithBounds(Rc::new(callback)));
+		self
+	}
+
+	pub fn on_press_started_with_mouse_position<F>(mut self, callback: F) -> Self
+	where
+		F: Fn(Point) -> Message + 'a,
+	{
+		self.on_press_started = Some(OnPress::WithMousePosition(Rc::new(callback)));
 		self
 	}
 
@@ -131,6 +149,14 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		F: Fn(Rectangle) -> Message + 'a,
 	{
 		self.on_context_menu = Some(OnPress::WithBounds(Rc::new(callback)));
+		self
+	}
+
+	pub fn on_context_menu_with_mouse_position<F>(mut self, callback: F) -> Self
+	where
+		F: Fn(Point) -> Message + 'a,
+	{
+		self.on_context_menu = Some(OnPress::WithMousePosition(Rc::new(callback)));
 		self
 	}
 
@@ -214,6 +240,11 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 
 					OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
 				}
+				OnPress::WithMousePosition(callback) => {
+					let func = func.clone();
+
+					OnPress::WithMousePosition(Rc::new(move |position| func(callback(position))))
+				}
 			}),
 			on_press_started: self.on_press_started.map(
 				|on_press_started| match on_press_started {
@@ -222,6 +253,13 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 						let func = func.clone();
 
 						OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
+					}
+					OnPress::WithMousePosition(callback) => {
+						let func = func.clone();
+
+						OnPress::WithMousePosition(Rc::new(move |position| {
+							func(callback(position))
+						}))
 					}
 				},
 			),
@@ -233,6 +271,13 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 						let func = func.clone();
 
 						OnPress::WithBounds(Rc::new(move |bounds| func(callback(bounds))))
+					}
+					OnPress::WithMousePosition(callback) => {
+						let func = func.clone();
+
+						OnPress::WithMousePosition(Rc::new(move |position| {
+							func(callback(position))
+						}))
 					}
 				}),
 			style: self.style,
@@ -355,6 +400,9 @@ where
 					shell.publish(match message {
 						OnPress::Message(message) => message,
 						OnPress::WithBounds(callback) => callback(bounds),
+						OnPress::WithMousePosition(callback) => {
+							callback(cursor.position().unwrap_or_else(|| bounds.center()))
+						}
 					});
 					shell.capture_event();
 				}
@@ -368,6 +416,9 @@ where
 					shell.publish(match message {
 						OnPress::Message(message) => message,
 						OnPress::WithBounds(callback) => callback(bounds),
+						OnPress::WithMousePosition(callback) => {
+							callback(cursor.position().unwrap_or_else(|| bounds.center()))
+						}
 					});
 				}
 
@@ -381,6 +432,9 @@ where
 					shell.publish(match message {
 						OnPress::Message(message) => message,
 						OnPress::WithBounds(callback) => callback(bounds),
+						OnPress::WithMousePosition(callback) => {
+							callback(cursor.position().unwrap_or_else(|| bounds.center()))
+						}
 					});
 					shell.capture_event();
 				}
@@ -401,6 +455,9 @@ where
 					shell.publish(match message {
 						OnPress::Message(message) => message,
 						OnPress::WithBounds(callback) => callback(bounds),
+						OnPress::WithMousePosition(callback) => {
+							callback(cursor.position().unwrap_or_else(|| bounds.center()))
+						}
 					});
 				}
 				// state.pressed = false;

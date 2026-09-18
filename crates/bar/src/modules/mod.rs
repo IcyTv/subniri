@@ -128,9 +128,16 @@ impl Module {
 				ModuleMessage::SystemMenu(system_menu::Message::OpenSettings),
 			) => return Task::done(ModuleMessage::OpenSettings),
 			(
-				Self::SystemMenu(_),
-				ModuleMessage::SystemMenu(system_menu::Message::OpenNightlightContextMenu(bounds)),
-			) => return Task::done(ModuleMessage::OpenContextMenu(bounds)),
+				Self::SystemMenu(menu),
+				ModuleMessage::SystemMenu(system_menu::Message::OpenContextMenu(
+					context_menu,
+					depth,
+					bounds,
+				)),
+			) => {
+				menu.open_context_menu(context_menu, depth);
+				return Task::done(ModuleMessage::OpenContextMenu(bounds));
+			}
 			(Self::Bluetooth(bluetooth), ModuleMessage::BluetoothInitialized(result)) => {
 				match result {
 					Ok(initialized) => *bluetooth = Some(initialized),
@@ -169,7 +176,16 @@ impl Module {
 				taskbar.update(message);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
-				return menu.update(message).map(ModuleMessage::SystemMenu);
+				let closes_context_menus = message.closes_context_menus();
+				if closes_context_menus {
+					menu.close_context_menus();
+				}
+				let update = menu.update(message).map(ModuleMessage::SystemMenu);
+				return if closes_context_menus {
+					Task::batch([update, Task::done(ModuleMessage::CloseContextMenus)])
+				} else {
+					update
+				};
 			}
 			(_, ModuleMessage::Pressed(kind, bounds)) => {
 				return Task::done(ModuleMessage::OpenPopup(kind, bounds));
@@ -261,7 +277,8 @@ impl Module {
 	pub fn view_context_menu(&self, depth: usize) -> Element<'_, ModuleMessage> {
 		match self {
 			Self::Clock(clock) => clock.view_context_menu(depth).map(ModuleMessage::Clock),
-			_ => neo_card(text("Nightlight context menu").color(COLORS.text))
+			Self::SystemMenu(menu) => menu.view_context_menu(depth).map(ModuleMessage::SystemMenu),
+			_ => neo_card(text("Unimplemented context menu").color(COLORS.text))
 				.padding(8)
 				.background(COLORS.white)
 				.into(),
