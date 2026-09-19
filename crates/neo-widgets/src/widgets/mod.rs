@@ -1,5 +1,8 @@
 #![allow(dead_code, unused_imports)]
 
+mod grow;
+pub use grow::{Grow, GrowFrom, grow};
+
 mod neo_button;
 pub use neo_button::{NeoButton, NeoButtonStyle, neo_button};
 

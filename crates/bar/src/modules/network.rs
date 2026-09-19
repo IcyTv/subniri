@@ -88,7 +88,7 @@ impl Network {
 		});
 
 		let anim_tick = if self.scanning.value() {
-			iced::time::every(Duration::from_millis(10)).map(Message::Tick)
+			iced::window::frames().map(Message::Tick)
 		} else {
 			Subscription::none()
 		};

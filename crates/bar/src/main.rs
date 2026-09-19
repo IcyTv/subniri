@@ -1,5 +1,5 @@
 use config::ConfigFile;
-use iced::alignment::Vertical;
+use iced::{alignment::Vertical, animation::Easing};
 use std::{collections::HashMap, env, fs, path::PathBuf, process::Command, time::Duration};
 
 use futures::StreamExt;
@@ -17,7 +17,7 @@ use iced_exwlshell::{Settings, daemon, to_layer_message};
 use iced_wayland_subscriber::shell::{ShellEvent, ShellReceiver};
 use neo_widgets::{
 	style::{COLORS, neo_theme},
-	widgets::neo_card,
+	widgets::{GrowFrom, grow, neo_card},
 };
 use niri_ipc::{Reply, Request, Response, socket::SOCKET_PATH_ENV};
 use tokio::{
@@ -176,8 +176,7 @@ impl Bar {
 			BarMessage::WindowEvent(id, event) => match event {
 				iced::window::Event::Opened { .. }
 				| iced::window::Event::Resized(_)
-				| iced::window::Event::Rescaled(_)
-				| iced::window::Event::RedrawRequested(_) => self.sync_layer_scale(id),
+				| iced::window::Event::Rescaled(_) => self.sync_layer_scale(id),
 				iced::window::Event::Closed => self.window_closed(id),
 				iced::window::Event::Unfocused => self.popup_unfocused(id),
 				_ => Task::none(),
@@ -562,15 +561,24 @@ impl Bar {
 		} else if let Some((wid, section, index)) = &self.open_popup
 			&& *wid == id
 		{
-			if let Some(module) = self.module(*section, *index) {
-				module
-					.view_popup()
-					.map(move |message| BarMessage::Module(Some(id), *section, *index, message))
-			} else {
-				neo_card(text("Something went wrong").color(COLORS.text))
-					.background(COLORS.feedback.danger90)
-					.into()
-			}
+			let content: Element<'_, BarMessage> =
+				if let Some(module) = self.module(*section, *index) {
+					module
+						.view_popup()
+						.map(move |message| BarMessage::Module(Some(id), *section, *index, message))
+				} else {
+					neo_card(text("Something went wrong").color(COLORS.text))
+						.background(COLORS.feedback.danger90)
+						.into()
+				};
+
+			grow(
+				content,
+				Duration::from_millis(50),
+				Easing::EaseOutQuart,
+				GrowFrom::TopCenter,
+			)
+			.into()
 		} else {
 			let output_name = self.window_output_names.get(&id).map(String::as_str);
 
@@ -683,6 +691,7 @@ impl Bar {
 		});
 
 		let window_events = iced::event::listen_with(|event, _status, window| match event {
+			iced::Event::Window(iced::window::Event::RedrawRequested(_)) => None,
 			iced::Event::Window(window_event) => {
 				Some(BarMessage::WindowEvent(window, window_event))
 			}
