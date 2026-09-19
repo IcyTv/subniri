@@ -124,7 +124,7 @@ impl Bar {
 			center: vec![Module::media_controls()],
 			right: vec![
 				Module::volume(),
-				Module::Network,
+				Module::network(),
 				Module::bluetooth(),
 				Module::clock(),
 			],

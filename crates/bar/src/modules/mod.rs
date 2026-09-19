@@ -16,7 +16,7 @@ mod volume;
 #[derive(Debug)]
 pub enum Module {
 	SystemMenu(system_menu::SystemMenu),
-	Network,
+	Network(Option<network::Network>),
 	Bluetooth(Option<bluetooth::Bluetooth>),
 	Clock(clock::Clock),
 	Volume(Result<volume::Volume, String>),
@@ -39,9 +39,11 @@ pub enum ModuleMessage {
 	OpenSettings,
 
 	Clock(clock::Message),
-	Network(network::Message),
 	MediaControls(media_controls::Message),
 	SystemMenu(system_menu::Message),
+
+	NetworkInitialized(Result<network::Network, String>),
+	Network(network::Message),
 
 	BluetoothInitialized(Result<bluetooth::Bluetooth, String>),
 	Bluetooth(bluetooth::Message),
@@ -91,6 +93,10 @@ impl Module {
 		Self::SystemMenu(system_menu::SystemMenu::new(config))
 	}
 
+	pub fn network() -> Self {
+		Self::Network(None)
+	}
+
 	pub fn set_popup_id(&mut self, id: Id) {
 		let _ = (self, id);
 	}
@@ -103,6 +109,9 @@ impl Module {
 			),
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
+			}
+			Self::Network(None) => {
+				Task::perform(network::Network::new(), ModuleMessage::NetworkInitialized)
 			}
 			Self::SystemMenu(menu) => menu.init().map(ModuleMessage::SystemMenu),
 			_ => Task::none(),
@@ -153,6 +162,13 @@ impl Module {
 			}
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
+			}
+			(Self::Network(network), ModuleMessage::NetworkInitialized(result)) => match result {
+				Ok(initialized) => *network = Some(initialized),
+				Err(error) => log::warn!("Failed to initialize Network module: {error}"),
+			},
+			(Self::Network(Some(network)), ModuleMessage::Network(message)) => {
+				return network.update(message).map(ModuleMessage::Network);
 			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => {
 				if let Some(action) = clock.update(message) {
@@ -210,6 +226,7 @@ impl Module {
 			Self::SystemMenu(_) => {
 				system_menu::SystemMenu::subscription().map(ModuleMessage::SystemMenu)
 			}
+			Self::Network(Some(network)) => network.subscription().map(ModuleMessage::Network),
 			_ => Subscription::none(),
 		}
 	}
@@ -237,7 +254,9 @@ impl Module {
 				.into(),
 			// TODO
 			Self::Volume(Err(_e)) => loading(COLORS.decorative.yellow),
-			Self::Network => network::network()
+			Self::Network(None) => loading(COLORS.decorative.green),
+			Self::Network(Some(network)) => network
+				.view()
 				.map(ModuleMessage::Network)
 				.on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::Network, bounds))
 				.into(),
@@ -268,6 +287,7 @@ impl Module {
 			Self::Volume(Ok(vol)) => vol.view_popup().map(ModuleMessage::Volume),
 			Self::Bluetooth(Some(bt)) => bt.view_popup().map(ModuleMessage::Bluetooth),
 			Self::Clock(clock) => clock.view_popup().map(ModuleMessage::Clock),
+			Self::Network(Some(network)) => network.view_popup().map(ModuleMessage::Network),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),

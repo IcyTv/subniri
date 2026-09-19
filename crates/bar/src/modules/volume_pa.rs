@@ -1,4 +1,4 @@
-use std::{cell::RefCell, fmt, hash::Hash, ops::Deref, rc::Rc};
+use std::{cell::RefCell, fmt, rc::Rc};
 
 use async_channel::{Receiver, Sender};
 use float_ord::FloatOrd;
@@ -26,6 +26,7 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card},
 };
 use tokio::task::LocalSet;
+use utilities::Hashable;
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -42,25 +43,8 @@ enum VolumeRequest {
 }
 
 #[derive(Clone)]
-struct EventReceiver(Receiver<Message>);
-
-impl Deref for EventReceiver {
-	type Target = Receiver<Message>;
-
-	fn deref(&self) -> &Self::Target {
-		&self.0
-	}
-}
-
-impl Hash for EventReceiver {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdeadbeefu32.hash(state)
-	}
-}
-
-#[derive(Clone)]
 pub struct Volume {
-	events: EventReceiver,
+	events: Hashable<Receiver<Message>>,
 	requests: Sender<VolumeRequest>,
 	volume: f64,
 	muted: bool,
@@ -130,7 +114,7 @@ impl Volume {
 		});
 
 		Ok(Self {
-			events: EventReceiver(event_rx),
+			events: Hashable::new(event_rx),
 			requests: request_tx,
 			volume: 0.0,
 			muted: true,

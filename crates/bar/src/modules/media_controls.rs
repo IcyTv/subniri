@@ -1,8 +1,8 @@
 use std::{
 	cell::RefCell,
+	collections::HashMap,
 	error::Error,
 	fmt,
-	hash::Hash,
 	num::NonZeroUsize,
 	rc::Rc,
 	time::{Duration, Instant},
@@ -27,7 +27,7 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, spinner},
 };
 use reqwest::{Client, IntoUrl, redirect};
-use small_map::FxSmallMap;
+use utilities::Hashable;
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -45,15 +45,6 @@ pub enum Message {
 	SkipNext,
 	Redraw,
 	Noop,
-}
-
-#[derive(Clone)]
-struct HashableReceiver(Receiver<PlayerCommand>);
-
-impl Hash for HashableReceiver {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdead_beefu32.hash(state);
-	}
 }
 
 #[derive(Debug, Clone)]
@@ -82,7 +73,7 @@ pub struct MediaControls {
 	active_player_position: f32,
 	thumbnail_cache: Rc<RefCell<lru::LruCache<ThumbnailCacheKey, Option<image::Handle>>>>,
 	is_playing: Animation<bool>,
-	cmd_rx: Receiver<PlayerCommand>,
+	cmd_rx: Hashable<Receiver<PlayerCommand>>,
 	cmd_tx: Sender<PlayerCommand>,
 }
 
@@ -102,14 +93,14 @@ impl MediaControls {
 				NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
 			))),
 			is_playing: Animation::new(false).quick(),
-			cmd_rx,
+			cmd_rx: Hashable::new(cmd_rx),
 			cmd_tx,
 		}
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
-		let mpris_sub = Subscription::run_with(HashableReceiver(self.cmd_rx.clone()), |cmd_rx| {
-			mpris_to_msg_stream(cmd_rx.0.clone())
+		let mpris_sub = Subscription::run_with(self.cmd_rx.clone(), |cmd_rx| {
+			mpris_to_msg_stream((**cmd_rx).clone())
 		});
 		if self.is_playing.is_animating(Instant::now()) {
 			Subscription::batch([mpris_sub, iced::window::frames().map(|_| Message::Redraw)])
@@ -124,6 +115,7 @@ impl MediaControls {
 				let art_url = snapshot.art_url.clone();
 				let url = snapshot.url.clone();
 				self.is_playing.go_mut(snapshot.is_playing, Instant::now());
+				self.active_player_position = 0.0;
 				self.active_player = Some((identity.clone(), snapshot));
 
 				let mut tasks = Vec::with_capacity(2);
@@ -145,7 +137,8 @@ impl MediaControls {
 				if self.active_player.as_ref().is_some_and(|p| p.0 == identity) =>
 			{
 				self.active_player = None;
-				let _ = self.cmd_tx.send_blocking(PlayerCommand::CyclePlayer);
+				self.active_player_position = 0.0;
+				self.is_playing.go_mut(false, Instant::now());
 			}
 			Message::MprisDisconnected => {
 				self.active_player = None;
@@ -460,7 +453,7 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 			};
 			mpris.watch();
 
-			let mut players = FxSmallMap::<8, PlayerIdentity, MprisPlayer>::new();
+			let mut players = HashMap::<PlayerIdentity, MprisPlayer>::new();
 			let mut current_player = None;
 
 			loop {
@@ -499,7 +492,7 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 
 async fn handle_player_command(
 	command: Result<PlayerCommand, async_channel::RecvError>,
-	players: &mut FxSmallMap<8, PlayerIdentity, MprisPlayer>,
+	players: &mut HashMap<PlayerIdentity, MprisPlayer>,
 	current_player: &mut Option<PlayerIdentity>,
 ) -> Option<Message> {
 	let command = match command {
@@ -573,7 +566,7 @@ async fn handle_player_command(
 }
 
 async fn manage_mpris_event(
-	event: MprisEvent, players: &mut FxSmallMap<8, PlayerIdentity, MprisPlayer>,
+	event: MprisEvent, players: &mut HashMap<PlayerIdentity, MprisPlayer>,
 	current_player: &mut Option<PlayerIdentity>,
 ) -> Option<Message> {
 	match event {
@@ -780,6 +773,22 @@ pub struct PlayerSnapshot {
 
 #[allow(clippy::too_many_lines)]
 async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
+	const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(3);
+
+	match tokio::time::timeout(SNAPSHOT_TIMEOUT, read_player_snapshot_inner(player)).await {
+		Ok(snapshot) => snapshot,
+		Err(_) => {
+			log::warn!(
+				"Timed out reading snapshot for player '{}'",
+				player.identity().bus()
+			);
+			PlayerSnapshot::default()
+		}
+	}
+}
+
+#[allow(clippy::too_many_lines)]
+async fn read_player_snapshot_inner(player: &MprisPlayer) -> PlayerSnapshot {
 	let Ok(metadata) = player.metadata().await else {
 		log::warn!("Failed to get player metadata");
 		return PlayerSnapshot::default();
@@ -820,16 +829,29 @@ async fn read_player_snapshot(player: &MprisPlayer) -> PlayerSnapshot {
 		})
 		.unwrap_or_default();
 
-	let playback_status = player.playback_status().await;
-	let desktop_entry = player.desktop_entry().await;
-	let can_control = player.can_control().await;
-	let can_next = player.can_next().await;
-	let can_previous = player.can_previous().await;
-	let can_seek = player.can_seek().await;
-	let can_play = player.can_play().await;
-	let can_pause = player.can_pause().await;
-	let shuffle = player.shuffle().await;
-	let loop_status = player.loop_status().await;
+	let (
+		playback_status,
+		desktop_entry,
+		can_control,
+		can_next,
+		can_previous,
+		can_seek,
+		can_play,
+		can_pause,
+		shuffle,
+		loop_status,
+	) = tokio::join!(
+		player.playback_status(),
+		player.desktop_entry(),
+		player.can_control(),
+		player.can_next(),
+		player.can_previous(),
+		player.can_seek(),
+		player.can_play(),
+		player.can_pause(),
+		player.shuffle(),
+		player.loop_status(),
+	);
 
 	let is_playing = playback_status.map_or_else(
 		|e| {

@@ -3,7 +3,6 @@
 use std::{
 	collections::HashMap,
 	fmt,
-	hash::Hash,
 	time::{Duration, Instant},
 };
 
@@ -44,6 +43,7 @@ use pipewire_native_spa::{
 		types::{Id as SpaPodId, ObjectType, PropertyFlags, Type},
 	},
 };
+use utilities::Hashable;
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
@@ -150,19 +150,11 @@ struct PwDeviceState {
 	route: PwRoute,
 }
 
-struct PwEventReceiverHashable(pub async_channel::Receiver<PwEvent>);
-
-impl Hash for PwEventReceiverHashable {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdead_beefu32.hash(state);
-	}
-}
-
 #[derive(Clone)]
 pub struct Volume {
 	connection: Option<PwConnection>,
 	event_tx: async_channel::Sender<PwEvent>,
-	event_rx: async_channel::Receiver<PwEvent>,
+	event_rx: Hashable<async_channel::Receiver<PwEvent>>,
 
 	devices: HashMap<Id, PwNode>,
 	node_proxies: HashMap<Id, Node>,
@@ -469,7 +461,7 @@ impl Volume {
 		Ok(Self {
 			connection: Some(connection),
 			event_tx,
-			event_rx,
+			event_rx: Hashable::new(event_rx),
 
 			devices: HashMap::new(),
 			node_proxies: HashMap::new(),
@@ -484,23 +476,20 @@ impl Volume {
 
 	pub fn subscription(&self) -> Subscription<Message> {
 		Subscription::batch([
-			Subscription::run_with(
-				PwEventReceiverHashable(self.event_rx.clone()),
-				move |event_rx| {
-					let event_rx = event_rx.0.clone();
+			Subscription::run_with(self.event_rx.clone(), move |event_rx| {
+				let event_rx = event_rx.clone();
 
-					async_stream::stream! {
-						while let Ok(event) = event_rx.recv().await {
-							yield Message::PwEvent(event);
-						}
-
-						log::warn!("PipeWire Event stream disconnected");
-						yield Message::PwEvent(PwEvent::ConnectionLost(
-							"PipeWire event stream disconnected".to_string(),
-						));
+				async_stream::stream! {
+					while let Ok(event) = event_rx.recv().await {
+						yield Message::PwEvent(event);
 					}
-				},
-			),
+
+					log::warn!("PipeWire Event stream disconnected");
+					yield Message::PwEvent(PwEvent::ConnectionLost(
+						"PipeWire event stream disconnected".to_string(),
+					));
+				}
+			}),
 			time::every(Duration::from_secs(5)).map(|_| Message::HealthCheck),
 		])
 	}

@@ -1,7 +1,6 @@
 use std::{
 	collections::HashSet,
 	env, fs,
-	hash::Hash,
 	process::Command,
 	sync::Arc,
 	time::{Duration, Instant},
@@ -29,6 +28,7 @@ use neo_widgets::{
 	style::COLORS,
 	widgets::{neo_button, neo_card, neo_scrollable, spinner},
 };
+use utilities::Hashable;
 
 use crate::{
 	dbus::DbusListener,
@@ -65,11 +65,11 @@ pub enum Message {
 }
 
 pub struct Launcher {
-	providers: Arc<[Arc<dyn Provider>]>,
+	providers: Hashable<[Arc<dyn Provider>]>,
 	open: Option<Id>,
 	conn: Option<zbus::Connection>,
 	dbus_tx: Sender<Message>,
-	dbus_rx: Receiver<Message>,
+	dbus_rx: Hashable<Receiver<Message>>,
 	dbus_connected_once: bool,
 	dbus_reconnect_in_flight: bool,
 	search: String,
@@ -97,9 +97,9 @@ impl Launcher {
 
 		(
 			Self {
-				providers,
+				providers: Hashable::from_arc(providers),
 				open: None,
-				dbus_rx,
+				dbus_rx: Hashable::new(dbus_rx),
 				dbus_tx: tx,
 				conn: None,
 				dbus_connected_once: false,
@@ -156,8 +156,8 @@ impl Launcher {
 			}
 			_ => None,
 		});
-		let dbus = Subscription::run_with(HashableReceiver(self.dbus_rx.clone()), |rx| {
-			let rx = rx.0.clone();
+		let dbus = Subscription::run_with(self.dbus_rx.clone(), |rx| {
+			let rx = rx.clone();
 			async_stream::stream! {
 				while let Ok(msg) = rx.recv().await {
 					yield msg;
@@ -166,36 +166,35 @@ impl Launcher {
 		});
 		let resume = resume_events();
 		let dbus_health = time::every(Duration::from_secs(30)).map(|_| Message::DbusHealthCheck);
-		let providers =
-			Subscription::run_with(HashableProviders(self.providers.clone()), |providers| {
-				let providers = providers.0.clone();
-				async_stream::stream! {
-					let receivers = join_all(providers
-						.iter()
-						.map(|p| async move {
-							let pid = p.id();
-							(pid, p.init(Arc::new(DummyCtx)).await)
-						}))
-						.await;
-					let provider_streams = receivers
-						.into_iter()
-						.filter_map(|(pid, maybe_receiver)| {
-							match maybe_receiver {
-								Ok(receiver) => Some(receiver.map(move |ev| (pid, ev)).boxed()),
-								Err(e) => {
-									eprintln!("Provide {pid:?} failed to start: {e}");
-									None
-								}
+		let providers = Subscription::run_with(self.providers.clone(), |providers| {
+			let providers = providers.clone();
+			async_stream::stream! {
+				let receivers = join_all(providers
+					.iter()
+					.map(|p| async move {
+						let pid = p.id();
+						(pid, p.init(Arc::new(DummyCtx)).await)
+					}))
+					.await;
+				let provider_streams = receivers
+					.into_iter()
+					.filter_map(|(pid, maybe_receiver)| {
+						match maybe_receiver {
+							Ok(receiver) => Some(receiver.map(move |ev| (pid, ev)).boxed()),
+							Err(e) => {
+								eprintln!("Provide {pid:?} failed to start: {e}");
+								None
 							}
-						})
-						.collect::<futures::stream::SelectAll<_>>();
-					let mut provider_streams = Box::pin(provider_streams);
+						}
+					})
+					.collect::<futures::stream::SelectAll<_>>();
+				let mut provider_streams = Box::pin(provider_streams);
 
-					while let Some((provider_id, event)) = provider_streams.next().await {
-						yield Message::ProviderEvent(provider_id, event);
-					}
+				while let Some((provider_id, event)) = provider_streams.next().await {
+					yield Message::ProviderEvent(provider_id, event);
 				}
-			});
+			}
+		});
 		let iced = iced::event::listen().map(Message::Iced);
 		let frames = iced::window::frames().map(Message::Redraw);
 
@@ -606,22 +605,6 @@ impl Launcher {
 			session_id: self.session,
 			revision: self.revision,
 		}
-	}
-}
-
-struct HashableReceiver(Receiver<Message>);
-
-impl Hash for HashableReceiver {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdead_beefu32.hash(state);
-	}
-}
-
-struct HashableProviders(Arc<[Arc<dyn Provider>]>);
-
-impl Hash for HashableProviders {
-	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		0xdead_beefu32.hash(state);
 	}
 }
 
