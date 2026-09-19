@@ -298,12 +298,36 @@ where
 			bounds.x + bounds.width - handle_size,
 			Instant::now(),
 		);
+		let handle_offset =
+			state
+				.pressed
+				.interpolate(0.0, handle_style.shadow_width, Instant::now());
 
 		let handle = Rectangle {
-			x: handle_x + offset,
-			y: bounds.y - (bounds.height * 0.125) + offset,
-			width: handle_size,
-			height: handle_size,
+			x: handle_x + handle_style.shadow_width,
+			y: bounds.y - (bounds.height * 0.125) + handle_style.shadow_width,
+			width: handle_size - handle_style.shadow_width,
+			height: handle_size - handle_style.shadow_width,
+		};
+
+		renderer.fill_quad(
+			renderer::Quad {
+				bounds: handle,
+				border: iced::Border {
+					radius: handle_style.radius.into(),
+					..Default::default()
+				},
+				snap: true,
+				..Default::default()
+			},
+			handle_style.border,
+		);
+
+		let handle = Rectangle {
+			x: handle_x + handle_offset,
+			y: bounds.y - (bounds.height * 0.125) + handle_offset,
+			width: handle_size - handle_style.shadow_width,
+			height: handle_size - handle_style.shadow_width,
 		};
 
 		renderer.fill_quad(

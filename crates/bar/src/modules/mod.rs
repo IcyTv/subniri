@@ -168,6 +168,7 @@ impl Module {
 				Err(error) => log::warn!("Failed to initialize Network module: {error}"),
 			},
 			(Self::Network(Some(network)), ModuleMessage::Network(message)) => {
+				log::trace!("Network module update: {:?}", message);
 				return network.update(message).map(ModuleMessage::Network);
 			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => {
