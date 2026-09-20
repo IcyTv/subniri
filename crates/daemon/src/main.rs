@@ -14,9 +14,8 @@ type CalendarFuture = Pin<Box<dyn Future<Output = Result<(), Error>>>>;
 async fn main() -> Result<(), Error> {
 	log::init!("daemon", "permafrostd")?;
 
-	let config_path = ConfigFile::path()?;
-	let (_doc, mut config) = ConfigFile::load_from_file(&config_path)?;
-	let config_events = ConfigFile::watch_file(&config_path)?;
+	let (_doc, mut config) = ConfigFile::load()?;
+	let config_events = ConfigFile::watch()?;
 	pin_mut!(config_events);
 	let connection = zbus::connection::Builder::session()?
 		.name(DEFAULT_BUS_NAME)?
@@ -52,7 +51,7 @@ async fn main() -> Result<(), Error> {
 				};
 				event?;
 
-				match ConfigFile::load_from_file(&config_path) {
+				match ConfigFile::load() {
 					Ok((_doc, new_config)) => {
 						log::info!("Reloading config");
 						let _ = nightlight_shutdown.send(());

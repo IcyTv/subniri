@@ -13,6 +13,7 @@
   packages = self.packages.${system};
 
   configPath = "${config.xdg.configHome}/${cfg.config.target}";
+  configOverridePath = "${config.xdg.configHome}/${cfg.config.overrideTarget}";
 
   componentDefinitions = {
     polarbar = {
@@ -92,6 +93,7 @@
       Environment =
         lib.optionals cfg.config.enable [
           "SUBNIRI_CONFIG_FILE=${configPath}"
+          "SUBNIRI_CONFIG_OVERRIDE_FILE=${configOverridePath}"
         ]
         ++ ["RUST_LOG=info"];
       Restart = "on-failure";
@@ -166,9 +168,14 @@
           (node "tracked_devices" settings.homeassistant.trackedDevices [])
         ]
       )))
-      ++ (lib.optionals settings.spotify.enable (plain "spotify" [
-        (flag "enabled")
-      ]))
+      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "") (plain "spotify" (
+        lib.optionals settings.spotify.enable [
+          (flag "enabled")
+        ]
+        ++ lib.optionals (settings.spotify.clientId != "") [
+          (leaf "client_id" settings.spotify.clientId)
+        ]
+      )))
       ++ [
         (plain "system_menu" (
           lib.optionals (settings.systemMenu.widgets != []) [
@@ -236,6 +243,12 @@ in {
           type = types.str;
           default = "subniri/config.kdl";
           description = "Path below XDG_CONFIG_HOME for the generated Subniri config file.";
+        };
+
+        overrideTarget = mkOption {
+          type = types.str;
+          default = "subniri/config.override.kdl";
+          description = "Mutable path below XDG_CONFIG_HOME used for live settings that override the generated config.";
         };
       };
 
@@ -313,10 +326,19 @@ in {
           };
         };
 
-        spotify.enable = mkOption {
-          type = types.bool;
-          default = false;
-          description = "Whether to enable the Spotify integration.";
+        spotify = {
+          enable = mkOption {
+            type = types.bool;
+            default = false;
+            description = "Whether to enable the Spotify integration.";
+          };
+
+          clientId = mkOption {
+            type = types.either (types.enum [""]) (types.strMatching "[0-9a-fA-F]{32}");
+            default = "";
+            example = "0123456789abcdef0123456789abcdef";
+            description = "Client ID of the user's Spotify application.";
+          };
         };
 
         systemMenu.widgets = mkOption {
@@ -338,6 +360,7 @@ in {
               "calculator"
               "applications"
               "files"
+              "nix"
             ]);
             default = ["calculator" "applications" "files"];
             description = "Avalaunch providers to enable.";
@@ -377,6 +400,10 @@ in {
   config = mkIf cfg.enable {
     assertions = [
       {
+        assertion = cfg.config.target != cfg.config.overrideTarget;
+        message = "services.subniri.config.target and overrideTarget must be different paths.";
+      }
+      {
         assertion = cfg.settings.nightlight.useLocation -> cfg.settings.nightlight.dawn == null;
         message = "services.subniri.settings.nightlight.dawn must be null when useLocation is true.";
       }
@@ -398,6 +425,7 @@ in {
 
     home.sessionVariables = mkIf cfg.config.enable {
       SUBNIRI_CONFIG_FILE = configPath;
+      SUBNIRI_CONFIG_OVERRIDE_FILE = configOverridePath;
     };
 
     xdg.configFile.${cfg.config.target} = mkIf cfg.config.enable {

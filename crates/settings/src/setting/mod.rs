@@ -8,22 +8,29 @@ use iced::{
 use neo_widgets::{phosphor_icon, style::COLORS};
 
 mod nightlight;
+mod spotify;
 
 #[derive(Clone, Debug)]
 pub enum Message {
 	Nightlight(nightlight::Message),
+	Spotify(spotify::Message),
 }
 
-#[derive(Clone)]
 pub struct Tab {
-	pub kind: SettingKind,
 	pub selected: Animation<bool>,
-	nightlight: nightlight::State,
+	contents: TabContents,
+}
+
+pub enum TabContents {
+	Nightlight(nightlight::Nightlight),
+	Homeassistant,
+	Spotify(spotify::Spotify),
+	MoreSoon,
 }
 
 impl Hash for Tab {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		self.kind.hash(state);
+		std::mem::discriminant(&self.contents).hash(state);
 	}
 }
 
@@ -34,46 +41,42 @@ impl Tab {
 
 	pub fn nightlight() -> Self {
 		Self {
-			kind: SettingKind::Nightlight,
 			selected: Self::default_animation(),
-			nightlight: nightlight::State::default(),
+			contents: TabContents::Nightlight(nightlight::Nightlight::default()),
 		}
 	}
 
 	pub fn homeassistant() -> Self {
 		Self {
-			kind: SettingKind::Homeassistant,
 			selected: Self::default_animation(),
-			nightlight: nightlight::State::default(),
+			contents: TabContents::Homeassistant,
 		}
 	}
 
 	pub fn spotify() -> Self {
 		Self {
-			kind: SettingKind::Spotify,
 			selected: Self::default_animation(),
-			nightlight: nightlight::State::default(),
+			contents: TabContents::Spotify(spotify::Spotify::new()),
 		}
 	}
 
 	pub fn more_soon() -> Self {
 		Self {
-			kind: SettingKind::MoreSoon,
 			selected: Self::default_animation(),
-			nightlight: nightlight::State::default(),
+			contents: TabContents::MoreSoon,
 		}
 	}
 
 	pub fn icon<'a>(&self) -> Svg<'a> {
-		self.kind.icon()
+		self.contents.icon()
 	}
 
 	pub fn name(&self) -> &'static str {
-		self.kind.name()
+		self.contents.name()
 	}
 
 	pub fn accent(&self) -> Color {
-		self.kind.accent()
+		self.contents.accent()
 	}
 
 	pub fn color(&self, at: Instant) -> Color {
@@ -93,76 +96,83 @@ impl Tab {
 	}
 
 	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
-		self.kind.view(config, &self.nightlight)
+		self.contents.view(config)
 	}
 
 	pub fn update(
 		&mut self, config: &mut ConfigFile, doc: &mut KdlDocument, message: Message,
 	) -> Task<Message> {
-		self.kind.update(config, doc, &mut self.nightlight, message)
-	}
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum SettingKind {
-	Nightlight,
-	Homeassistant,
-	Spotify,
-	MoreSoon,
-}
-
-impl SettingKind {
-	pub fn icon<'a>(self) -> Svg<'a> {
-		match self {
-			Self::Nightlight => nightlight::icon(),
-			Self::Spotify => svg(phosphor_icon!("spotify-logo")),
-			Self::Homeassistant | Self::MoreSoon => svg(phosphor_icon!("question-mark")),
-		}
-	}
-
-	pub fn name(self) -> &'static str {
-		match self {
-			Self::Nightlight => "Nightlight",
-			Self::Homeassistant => "Homeassistant",
-			Self::Spotify => "Spotify",
-			Self::MoreSoon => "More Soon",
-		}
-	}
-
-	pub fn accent(self) -> Color {
-		match self {
-			Self::Nightlight => nightlight::accent_color(),
-			Self::Homeassistant => COLORS.decorative.blue,
-			Self::Spotify => COLORS.decorative.green,
-			Self::MoreSoon => COLORS.decorative.yellow,
-		}
-	}
-
-	pub fn update(
-		self, config: &mut ConfigFile, doc: &mut KdlDocument,
-		nightlight_state: &mut nightlight::State, message: Message,
-	) -> Task<Message> {
-		match (self, message) {
-			(_, Message::Nightlight(nightlight::Message::UpdateConfig)) => {
-				if let Err(e) = config.write(doc) {
-					log::error!("Failed to save config: {e}");
+		match message {
+			Message::Nightlight(nightlight::Message::UpdateConfig)
+			| Message::Spotify(spotify::Message::UpdateConfig) => {
+				if let Err(error) = config.write(doc) {
+					log::error!("Failed to save config: {error}");
 				}
 
 				Task::none()
 			}
-			(Self::Nightlight, Message::Nightlight(message)) => {
-				nightlight::update(config, nightlight_state, message).map(Message::Nightlight)
+			message @ (Message::Nightlight(_) | Message::Spotify(_)) => {
+				self.contents.update(config, message)
+			}
+		}
+	}
+
+	pub fn init(&self, config: &ConfigFile) -> Task<Message> {
+		self.contents.init(config)
+	}
+}
+
+impl TabContents {
+	fn icon<'a>(&self) -> Svg<'a> {
+		match self {
+			Self::Nightlight(_) => nightlight::Nightlight::icon(),
+			Self::Spotify(_) => spotify::Spotify::icon(),
+			Self::Homeassistant | Self::MoreSoon => svg(phosphor_icon!("question-mark")),
+		}
+	}
+
+	fn name(&self) -> &'static str {
+		match self {
+			Self::Nightlight(_) => "Nightlight",
+			Self::Homeassistant => "Homeassistant",
+			Self::Spotify(_) => "Spotify",
+			Self::MoreSoon => "More Soon",
+		}
+	}
+
+	fn accent(&self) -> Color {
+		match self {
+			Self::Nightlight(_) => nightlight::Nightlight::accent_color(),
+			Self::Homeassistant => COLORS.decorative.blue,
+			Self::Spotify(_) => spotify::Spotify::accent_color(),
+			Self::MoreSoon => COLORS.decorative.yellow,
+		}
+	}
+
+	fn init(&self, config: &ConfigFile) -> Task<Message> {
+		match self {
+			Self::Spotify(_) => spotify::Spotify::init(config).map(Message::Spotify),
+			_ => Task::none(),
+		}
+	}
+
+	fn update(&mut self, config: &mut ConfigFile, message: Message) -> Task<Message> {
+		match (self, message) {
+			(Self::Nightlight(nightlight), Message::Nightlight(message)) => {
+				nightlight.update(config, message).map(Message::Nightlight)
+			}
+			(Self::Spotify(spotify), Message::Spotify(message)) => {
+				spotify.update(config, message).map(Message::Spotify)
 			}
 			_ => Task::none(),
 		}
 	}
 
-	pub fn view<'a>(
-		&'a self, config: &'a ConfigFile, nightlight_state: &'a nightlight::State,
-	) -> Element<'a, Message> {
+	fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
 		match self {
-			Self::Nightlight => nightlight::view(config, nightlight_state).map(Message::Nightlight),
-			Self::Homeassistant | Self::Spotify | Self::MoreSoon => "".into(),
+			Self::Nightlight(nightlight) => nightlight.view(config).map(Message::Nightlight),
+			Self::Spotify(spotify) => spotify.view(config).map(Message::Spotify),
+			Self::Homeassistant | Self::MoreSoon => "".into(),
 		}
 	}
 }

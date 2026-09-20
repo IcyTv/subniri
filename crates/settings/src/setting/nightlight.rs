@@ -28,116 +28,122 @@ pub enum Message {
 	PreviewNightTemp(u32),
 	PreviewNightBright(f64),
 
+	ToggleNightlight(bool),
+
 	UpdateConfig,
 }
 
 #[derive(Clone, Default)]
-pub struct State {
+pub struct Nightlight {
 	day_temp: Option<u32>,
 	day_bright: Option<f64>,
 	night_temp: Option<u32>,
 	night_bright: Option<f64>,
 }
 
-pub fn accent_color() -> Color {
-	COLORS.decorative.orange
-}
-
-pub fn icon<'a>() -> Svg<'a> {
-	svg(phosphor_icon!("lightbulb-filament"))
-}
-
-pub fn update(config: &mut ConfigFile, state: &mut State, message: Message) -> Task<Message> {
-	match message {
-		Message::IncreaseDawn => {
-			if let Some(dawn) = config.nightlight.dawn.as_mut() {
-				*dawn += 15.minutes();
-				return Task::done(Message::UpdateConfig);
-			}
-			return Task::none();
-		}
-		Message::DecreaseDawn => {
-			if let Some(dawn) = config.nightlight.dawn.as_mut() {
-				*dawn -= 15.minutes();
-				return Task::done(Message::UpdateConfig);
-			}
-			return Task::none();
-		}
-		Message::IncreaseDusk => {
-			if let Some(dusk) = config.nightlight.dusk.as_mut() {
-				*dusk += 15.minutes();
-				return Task::done(Message::UpdateConfig);
-			}
-			return Task::none();
-		}
-		Message::DecreaseDusk => {
-			if let Some(dusk) = config.nightlight.dusk.as_mut() {
-				*dusk -= 15.minutes();
-			}
-			return Task::none();
-		}
-		Message::PreviewDayTemp(temp) => {
-			state.day_temp = Some(temp);
-			return Task::none();
-		}
-		Message::PreviewDayBright(bright) => {
-			state.day_bright = Some(bright);
-			return Task::none();
-		}
-		Message::PreviewNightTemp(temp) => {
-			state.night_temp = Some(temp);
-			return Task::none();
-		}
-		Message::PreviewNightBright(bright) => {
-			state.night_bright = Some(bright);
-			return Task::none();
-		}
-		Message::UpdateDayTemp(temp) => {
-			state.day_temp = None;
-			config.nightlight.day.temperature = temp;
-		}
-		Message::UpdateDayBright(bright) => {
-			state.day_bright = None;
-			config.nightlight.day.brightness = bright;
-		}
-		Message::UpdateNightTemp(temp) => {
-			state.night_temp = None;
-			config.nightlight.night.temperature = temp;
-		}
-		Message::UpdateNightBright(bright) => {
-			state.night_bright = None;
-			config.nightlight.night.brightness = bright;
-		}
-		Message::UpdateConfig => return Task::none(),
+impl Nightlight {
+	pub fn accent_color() -> Color {
+		COLORS.decorative.orange
 	}
 
-	Task::done(Message::UpdateConfig)
-}
+	pub fn icon<'a>() -> Svg<'a> {
+		svg(phosphor_icon!("lightbulb-filament"))
+	}
 
-#[allow(clippy::too_many_lines)]
-pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message> {
-	let dawn = config
-		.nightlight
-		.dawn
-		.unwrap_or_else(|| fallback_time(7, 0));
+	pub fn update(&mut self, config: &mut ConfigFile, message: Message) -> Task<Message> {
+		match message {
+			Message::IncreaseDawn => {
+				if let Some(dawn) = config.nightlight.dawn.as_mut() {
+					*dawn += 15.minutes();
+					return Task::done(Message::UpdateConfig);
+				}
+				return Task::none();
+			}
+			Message::DecreaseDawn => {
+				if let Some(dawn) = config.nightlight.dawn.as_mut() {
+					*dawn -= 15.minutes();
+					return Task::done(Message::UpdateConfig);
+				}
+				return Task::none();
+			}
+			Message::IncreaseDusk => {
+				if let Some(dusk) = config.nightlight.dusk.as_mut() {
+					*dusk += 15.minutes();
+					return Task::done(Message::UpdateConfig);
+				}
+				return Task::none();
+			}
+			Message::DecreaseDusk => {
+				if let Some(dusk) = config.nightlight.dusk.as_mut() {
+					*dusk -= 15.minutes();
+				}
+				return Task::none();
+			}
+			Message::PreviewDayTemp(temp) => {
+				self.day_temp = Some(temp);
+				return Task::none();
+			}
+			Message::PreviewDayBright(bright) => {
+				self.day_bright = Some(bright);
+				return Task::none();
+			}
+			Message::PreviewNightTemp(temp) => {
+				self.night_temp = Some(temp);
+				return Task::none();
+			}
+			Message::PreviewNightBright(bright) => {
+				self.night_bright = Some(bright);
+				return Task::none();
+			}
+			Message::UpdateDayTemp(temp) => {
+				self.day_temp = None;
+				config.nightlight.day.temperature = temp;
+			}
+			Message::UpdateDayBright(bright) => {
+				self.day_bright = None;
+				config.nightlight.day.brightness = bright;
+			}
+			Message::UpdateNightTemp(temp) => {
+				self.night_temp = None;
+				config.nightlight.night.temperature = temp;
+			}
+			Message::UpdateNightBright(bright) => {
+				self.night_bright = None;
+				config.nightlight.night.brightness = bright;
+			}
+			Message::ToggleNightlight(on) => {
+				config.nightlight.enabled = on;
+			}
+			Message::UpdateConfig => return Task::none(),
+		}
 
-	let dusk = config
-		.nightlight
-		.dusk
-		.unwrap_or_else(|| fallback_time(21, 30));
-	let day_temp = state.day_temp.unwrap_or(config.nightlight.day.temperature);
-	let day_bright = state.day_bright.unwrap_or(config.nightlight.day.brightness);
-	let night_temp = state
-		.night_temp
-		.unwrap_or(config.nightlight.night.temperature);
-	let night_bright = state
-		.night_bright
-		.unwrap_or(config.nightlight.night.brightness);
+		Task::done(Message::UpdateConfig)
+	}
 
-	column![
+	#[allow(clippy::too_many_lines)]
+	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
+		let dawn = config
+			.nightlight
+			.dawn
+			.unwrap_or_else(|| fallback_time(7, 0));
+
+		let dusk = config
+			.nightlight
+			.dusk
+			.unwrap_or_else(|| fallback_time(21, 30));
+		let day_temp = self.day_temp.unwrap_or(config.nightlight.day.temperature);
+		let day_bright = self.day_bright.unwrap_or(config.nightlight.day.brightness);
+		let night_temp = self
+			.night_temp
+			.unwrap_or(config.nightlight.night.temperature);
+		let night_bright = self
+			.night_bright
+			.unwrap_or(config.nightlight.night.brightness);
+
+		column![
 		neo_card(
 			row![
-				container(icon())
+				container(Self::icon())
 					.width(58)
 					.height(58)
 					.padding(12)
@@ -162,16 +168,23 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 						.width(Length::Fill)
 						.color(COLORS.text.scale_alpha(0.76))
 						.size(14)
-						.weight(font::Weight::Bold)
+						.weight(font::Weight::Bold),
 				]
-				.spacing(4)
+				.spacing(4),
+
+				space::horizontal(),
+				neo_toggle()
+					.width(40)
+					.height(18)
+					.toggled(config.nightlight.enabled)
+					.on_toggled(Message::ToggleNightlight)
 			]
 			.align_y(Alignment::Center)
 			.spacing(16)
 		)
 		.width(Length::Fill)
 		.height(116)
-		.background(accent_color())
+		.background(Self::accent_color())
 		.padding(18),
 		// Settings
 		grid![
@@ -304,6 +317,7 @@ pub fn view<'a>(config: &'a ConfigFile, state: &'a State) -> Element<'a, Message
 	]
 	.spacing(16)
 	.into()
+	}
 }
 
 struct SliderCardArgs<'a, T, D, F, L> {

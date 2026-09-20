@@ -14,10 +14,17 @@ path = "src/main.rs"
 workspace = true
 
 [dependencies]
+chrono = "0.4.45"
 config.workspace = true
 iced.workspace = true
 iced_runtime.workspace = true
 jiff.workspace = true
+lazy-regex.workspace = true
 log.workspace = true
 neo-widgets.workspace = true
 num-traits.workspace = true
+open = "5.4.4"
+rspotify.workspace = true
+secret-store.workspace = true
+tokio.workspace = true
+zbus.workspace = true

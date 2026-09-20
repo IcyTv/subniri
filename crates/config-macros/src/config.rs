@@ -341,13 +341,11 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
 			   }
 		   });
 		} else {
-			let seen_ident = seen_ident(field_ident, &field.ty);
-			if let Some(seen_ident) = seen_ident.as_ref() {
-				let required = is_required_child(&field.ty, allow_missing);
-				let fallback =
-					default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-				seen_flags.push(quote! { let mut #seen_ident = false; });
-				required_children.push(quote! {
+			let seen_ident = seen_ident(field_ident);
+			let required = is_required_child(&field.ty, allow_missing);
+			let fallback = default_fallback(default_expr, &field.ty, is_option, has_default_attr);
+			seen_flags.push(quote! { let mut #seen_ident = false; });
+			required_children.push(quote! {
                     if !#seen_ident {
                         if #allow_missing {
                             out.#field_ident = #fallback;
@@ -356,12 +354,11 @@ fn generate_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStre
                         }
                     }
                 });
-			}
 			let parse_child = parse_child_field(
 				&field.ty,
 				&field_name,
 				field_ident,
-				seen_ident.as_ref(),
+				Some(&seen_ident),
 				default_expr,
 				is_option,
 				attrs.key.as_deref(),
@@ -427,12 +424,11 @@ fn generate_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStr
 		};
 		let allow_missing = has_default_attr || is_option || default_expr.is_some();
 
-		let seen_ident = seen_ident(field_ident, &field.ty);
-		if let Some(seen_ident) = seen_ident.as_ref() {
-			let required = is_required_child(&field.ty, allow_missing);
-			let fallback = default_fallback(default_expr, &field.ty, is_option, has_default_attr);
-			initializer.push(quote! { let mut #seen_ident = false; });
-			required_nodes.push(quote! {
+		let seen_ident = seen_ident(field_ident);
+		let required = is_required_child(&field.ty, allow_missing);
+		let fallback = default_fallback(default_expr, &field.ty, is_option, has_default_attr);
+		initializer.push(quote! { let mut #seen_ident = false; });
+		required_nodes.push(quote! {
                 if !#seen_ident {
                     if #allow_missing {
                         out.#field_ident = #fallback;
@@ -441,13 +437,12 @@ fn generate_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -> TokenStr
                     }
                 }
             });
-		}
 
 		let parse_node = parse_document_field(
 			&field.ty,
 			&field_name,
 			field_ident,
-			seen_ident.as_ref(),
+			Some(&seen_ident),
 			attrs.key.as_deref(),
 		);
 		node_match.push(parse_node);
@@ -673,9 +668,18 @@ fn parse_child_field(
 	}
 
 	if let Some(inner) = vec_inner_ty(ty) {
+		let reset_default = seen_ident.map(|ident| {
+			quote! {
+				if !#ident {
+					out.#field_ident.clear();
+					#ident = true;
+				}
+			}
+		});
 		if key.is_none() {
 			return quote! {
 				#field_name => {
+					#reset_default
 					let entries = child.entries();
 					for entry in entries {
 						if entry.name().is_some() {
@@ -714,6 +718,7 @@ fn parse_child_field(
 		let parse = parse_child_value_or_config(inner, field_name);
 		return quote! {
 			#field_name => {
+				#reset_default
 				#parse
 				out.#field_ident.push(value);
 			}
@@ -822,9 +827,18 @@ fn parse_document_field(
 	}
 
 	if let Some(inner) = vec_inner_ty(ty) {
+		let reset_default = seen_ident.map(|ident| {
+			quote! {
+				if !#ident {
+					out.#field_ident.clear();
+					#ident = true;
+				}
+			}
+		});
 		if key.is_none() {
 			return quote! {
 				#field_name => {
+					#reset_default
 					let entries = node.entries();
 					for entry in entries {
 						if entry.name().is_some() {
@@ -861,6 +875,7 @@ fn parse_document_field(
 		let parse = parse_node_value_or_config(inner, field_name);
 		return quote! {
 			#field_name => {
+				#reset_default
 				#parse
 				out.#field_ident.push(value);
 			}
@@ -1288,29 +1303,8 @@ fn option_inner_ty(ty: &syn::Type) -> Option<&syn::Type> {
 	}
 }
 
-fn seen_ident(field_ident: &syn::Ident, ty: &syn::Type) -> Option<syn::Ident> {
-	if vec_inner_ty(ty).is_some() {
-		return None;
-	}
-
-	if is_bool(ty) {
-		return Some(syn::Ident::new(
-			&format!("__seen_{field_ident}"),
-			field_ident.span(),
-		));
-	}
-
-	if is_value_type(ty) || !matches!(ty, syn::Type::Path(_)) {
-		return Some(syn::Ident::new(
-			&format!("__seen_{field_ident}"),
-			field_ident.span(),
-		));
-	}
-
-	Some(syn::Ident::new(
-		&format!("__seen_{field_ident}"),
-		field_ident.span(),
-	))
+fn seen_ident(field_ident: &syn::Ident) -> syn::Ident {
+	syn::Ident::new(&format!("__seen_{field_ident}"), field_ident.span())
 }
 
 fn is_required_child(ty: &syn::Type, allow_missing: bool) -> bool {

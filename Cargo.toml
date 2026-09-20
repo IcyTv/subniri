@@ -41,6 +41,7 @@ image = "0.25.10"
 indexer-common = { path = "crates/indexer-common" }
 jiff = "0.2.25"
 kdl = { version = "6.5.0", features = ["v1-fallback"] }
+lazy-regex = "3.6.1"
 launcher-common = { path = "./crates/launcher-common" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
@@ -54,6 +55,11 @@ nix = { version = "0.31.3", features = ["user"] }
 nmrs = "3.1.5"
 num-traits = "0.2.19"
 reqwest = "0.13.3"
+rspotify = { version = "0.16.1", features = [
+  "client-reqwest",
+  "reqwest-default-tls",
+] }
+secret-store = { path = "crates/secret-store" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.52.3", features = ["full"] }

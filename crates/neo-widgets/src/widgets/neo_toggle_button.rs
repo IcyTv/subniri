@@ -1,7 +1,7 @@
 use iced::{
 	Background, Border, Length,
 	alignment::{Horizontal, Vertical},
-	widget::{column, container, row, svg, text},
+	widget::{column, container, row, space, svg, text},
 };
 
 use crate::style::COLORS;
@@ -26,6 +26,7 @@ where
 			..Default::default()
 		})
 		.width(Length::Fixed(36.0))
+		.height(Length::Fixed(18.0))
 		.into();
 
 	let content = row![
@@ -54,9 +55,11 @@ where
 		.spacing(4)
 		.align_x(Horizontal::Left)
 		.width(Length::Fill),
+		space::horizontal(),
 		toggle
 	]
 	.align_y(Vertical::Center)
+	.width(Length::Fill)
 	.spacing(12);
 
 	neo_button(content)

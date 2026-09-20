@@ -1,6 +1,6 @@
 #![allow(clippy::missing_errors_doc)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -20,6 +20,7 @@ use notify::{
 };
 
 const CONFIG_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
+const CONFIG_OVERRIDE_ENV: &str = "SUBNIRI_CONFIG_OVERRIDE_FILE";
 
 static PROCESS_WRITES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
 
@@ -28,7 +29,7 @@ static PROCESS_WRITES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new
 /// all components in the subniri shell.
 /// You can also edit the settings in a graphical interface (`snowconf`), and they will be
 /// synchronized to this file.
-#[derive(Default, Debug, Clone, ConfigFile, ConfigFileSerialize, Validate)]
+#[derive(Default, Debug, Clone, PartialEq, ConfigFile, ConfigFileSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct ConfigFile {
 	/// Configuration for controlling the behavior of the nightlight.
@@ -87,70 +88,44 @@ impl ConfigFile {
 			})
 	}
 
+	pub fn override_path() -> Option<PathBuf> {
+		std::env::var(CONFIG_OVERRIDE_ENV)
+			.ok()
+			.filter(|path| !path.is_empty())
+			.map(PathBuf::from)
+	}
+
+	pub fn active_path() -> Result<PathBuf, ConfigError> {
+		Ok(Self::override_path()
+			.filter(|path| path.exists())
+			.unwrap_or(Self::path()?))
+	}
+
+	#[must_use]
+	pub fn override_active() -> bool {
+		Self::override_path().is_some_and(|path| path.exists())
+	}
+
 	pub fn load() -> Result<(KdlDocument, Self), ConfigError> {
+		Self::load_from_file(Self::active_path()?)
+	}
+
+	pub fn load_declarative() -> Result<(KdlDocument, Self), ConfigError> {
 		Self::load_from_file(Self::path()?)
 	}
 
 	pub fn watch() -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
-		Self::watch_file(Self::path()?)
+		let mut paths = vec![Self::path()?];
+		if let Some(override_path) = Self::override_path() {
+			paths.push(override_path);
+		}
+		watch_files(paths)
 	}
 
 	pub fn watch_file(
 		file: impl AsRef<Path>,
 	) -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
-		let config_path = absolute_path(file)?;
-		let watched_dir = config_path
-			.parent()
-			.ok_or_else(|| std::io::Error::other("config path has no parent directory"))?
-			.to_path_buf();
-		let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-
-		let mut watcher =
-			notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-				let _ = tx.send(event);
-			})
-			.map_err(notify_error)?;
-
-		watcher
-			.watch(&watched_dir, RecursiveMode::NonRecursive)
-			.map_err(notify_error)?;
-
-		Ok(stream! {
-			let _watcher = watcher;
-
-			while let Some(event) = rx.recv().await {
-				match event {
-					Ok(event) if is_config_change(&event, &config_path) => {}
-					Ok(_) => continue,
-					Err(error) => {
-						yield Err(notify_error(error));
-						continue;
-					}
-				}
-
-				tokio::time::sleep(CONFIG_WATCH_DEBOUNCE).await;
-				let mut changed = true;
-
-				while let Ok(event) = rx.try_recv() {
-					match event {
-						Ok(event) => {
-							changed |= is_config_change(&event, &config_path);
-						}
-						Err(error) => yield Err(notify_error(error)),
-					}
-				}
-
-				if !changed {
-					continue;
-				}
-
-				match current_file_contents(&config_path) {
-					Ok(contents) if is_process_write(&config_path, &contents) => (),
-					Ok(_) => yield Ok(()),
-					Err(error) => yield Err(error),
-				}
-			}
-		})
+		watch_files([file.as_ref().to_path_buf()])
 	}
 
 	pub fn load_from_file<P: AsRef<Path>>(file: P) -> Result<(KdlDocument, Self), ConfigError> {
@@ -184,7 +159,203 @@ impl ConfigFile {
 	}
 
 	pub fn write(&self, doc: &mut KdlDocument) -> Result<(), ConfigError> {
+		if let Some(override_path) = Self::override_path() {
+			let (declarative_doc, declarative_config) = Self::load_declarative()?;
+			if *self == declarative_config {
+				if override_path.exists() {
+					std::fs::remove_file(&override_path)?;
+					record_process_write(&override_path, String::new())?;
+				}
+				*doc = declarative_doc;
+				return Ok(());
+			}
+
+			return self.write_to_file(doc, override_path);
+		}
+
 		self.write_to_file(doc, Self::path()?)
+	}
+
+	pub fn clear_override() -> Result<(KdlDocument, Self), ConfigError> {
+		if let Some(path) = Self::override_path()
+			&& path.exists()
+		{
+			std::fs::remove_file(&path)?;
+			record_process_write(&path, String::new())?;
+		}
+
+		Self::load_declarative()
+	}
+
+	#[must_use]
+	#[allow(clippy::too_many_lines)]
+	pub fn nix_diff(&self, declarative: &Self) -> String {
+		let mut out = String::new();
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.enable",
+			self.nightlight.enabled,
+			declarative.nightlight.enabled,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.useLocation",
+			self.nightlight.use_location,
+			declarative.nightlight.use_location,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.dawn",
+			self.nightlight.dawn,
+			declarative.nightlight.dawn,
+			nix_time,
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.dusk",
+			self.nightlight.dusk,
+			declarative.nightlight.dusk,
+			nix_time,
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.day.temperature",
+			self.nightlight.day.temperature,
+			declarative.nightlight.day.temperature,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.day.brightness",
+			self.nightlight.day.brightness,
+			declarative.nightlight.day.brightness,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.night.temperature",
+			self.nightlight.night.temperature,
+			declarative.nightlight.night.temperature,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.night.brightness",
+			self.nightlight.night.brightness,
+			declarative.nightlight.night.brightness,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.nightlight.debounceMs",
+			self.nightlight.debounce_ms,
+			declarative.nightlight.debounce_ms,
+			|value| value.to_string(),
+		);
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.homeassistant.enable",
+			self.homeassistant.enabled,
+			declarative.homeassistant.enabled,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.homeassistant.url",
+			self.homeassistant.url.as_ref(),
+			declarative.homeassistant.url.as_ref(),
+			|value| value.map_or_else(|| "null".to_string(), |url| nix_string(url.as_str())),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.homeassistant.trackedDevices",
+			&self.homeassistant.tracked_devices,
+			&declarative.homeassistant.tracked_devices,
+			|values| nix_list(values.iter().map(String::as_str)),
+		);
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.spotify.enable",
+			self.spotify.enabled,
+			declarative.spotify.enabled,
+			|value| value.to_string(),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.spotify.clientId",
+			self.spotify.client_id.as_str(),
+			declarative.spotify.client_id.as_str(),
+			nix_string,
+		);
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.systemMenu.widgets",
+			&self.system_menu.widgets,
+			&declarative.system_menu.widgets,
+			|widgets| nix_list(widgets.iter().copied().map(system_menu_widget_name)),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.launcher.providers",
+			&self.launcher.providers,
+			&declarative.launcher.providers,
+			|providers| nix_list(providers.iter().copied().map(launcher_provider_name)),
+		);
+
+		let fuzzy = &self.launcher.fuzzy_search;
+		let declarative_fuzzy = &declarative.launcher.fuzzy_search;
+		for (name, value, base) in [
+			("min_chars", fuzzy.min_chars, declarative_fuzzy.min_chars),
+			(
+				"short.chars",
+				fuzzy.short_query_chars,
+				declarative_fuzzy.short_query_chars,
+			),
+			(
+				"short.distance",
+				fuzzy.short_max_distance,
+				declarative_fuzzy.short_max_distance,
+			),
+			(
+				"medium.chars",
+				fuzzy.medium_query_chars,
+				declarative_fuzzy.medium_query_chars,
+			),
+			(
+				"medium.distance",
+				fuzzy.medium_max_distance,
+				declarative_fuzzy.medium_max_distance,
+			),
+			(
+				"long.distance",
+				fuzzy.long_max_distance,
+				declarative_fuzzy.long_max_distance,
+			),
+		] {
+			nix_assignment(
+				&mut out,
+				&format!("services.subniri.settings.launcher.fuzzy_search.{name}"),
+				value,
+				base,
+				|value| value.to_string(),
+			);
+		}
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.icepickd.enable",
+			self.indexing.enabled,
+			declarative.indexing.enabled,
+			|value| value.to_string(),
+		);
+
+		out
 	}
 
 	pub fn write_to_file(
@@ -218,7 +389,138 @@ impl ConfigFile {
 	}
 }
 
-fn is_config_change(event: &notify::Event, config_path: &Path) -> bool {
+#[allow(clippy::needless_pass_by_value)]
+fn nix_assignment<T: PartialEq>(
+	out: &mut String, name: &str, value: T, declarative: T, render: impl FnOnce(T) -> String,
+) {
+	if value != declarative {
+		out.push_str(name);
+		out.push_str(" = ");
+		out.push_str(&render(value));
+		out.push_str(";\n");
+	}
+}
+
+fn nix_time(value: Option<Time>) -> String {
+	value.map_or_else(
+		|| "null".to_string(),
+		|time| nix_string(&time.strftime("%H:%M").to_string()),
+	)
+}
+
+fn nix_string(value: &str) -> String {
+	format!(
+		"\"{}\"",
+		value
+			.replace('\\', "\\\\")
+			.replace('"', "\\\"")
+			.replace("${", "\\${")
+			.replace('\n', "\\n")
+			.replace('\r', "\\r")
+			.replace('\t', "\\t")
+	)
+}
+
+fn nix_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
+	format!(
+		"[{}]",
+		values
+			.into_iter()
+			.map(nix_string)
+			.collect::<Vec<_>>()
+			.join(" ")
+	)
+}
+
+const fn system_menu_widget_name(widget: SystemMenuWidgets) -> &'static str {
+	match widget {
+		SystemMenuWidgets::Wifi => "wifi",
+		SystemMenuWidgets::Bluetooth => "bluetooth",
+		SystemMenuWidgets::Speaker => "speaker",
+		SystemMenuWidgets::Microphone => "microphone",
+		SystemMenuWidgets::Vpn => "vpn",
+		SystemMenuWidgets::Nightlight => "nightlight",
+	}
+}
+
+const fn launcher_provider_name(provider: LauncherProvider) -> &'static str {
+	match provider {
+		LauncherProvider::Calculator => "calculator",
+		LauncherProvider::Applications => "applications",
+		LauncherProvider::Files => "files",
+		LauncherProvider::Nix => "nix",
+	}
+}
+
+fn watch_files(
+	files: impl IntoIterator<Item = impl AsRef<Path>>,
+) -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
+	let config_paths = files
+		.into_iter()
+		.map(absolute_path)
+		.collect::<Result<HashSet<_>, _>>()?;
+	let watched_dirs = config_paths
+		.iter()
+		.map(|path| {
+			path.parent()
+				.map(Path::to_path_buf)
+				.ok_or_else(|| std::io::Error::other("config path has no parent directory"))
+		})
+		.collect::<Result<HashSet<_>, _>>()?;
+	let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+	let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+		let _ = tx.send(event);
+	})
+	.map_err(notify_error)?;
+
+	for watched_dir in watched_dirs {
+		watcher
+			.watch(&watched_dir, RecursiveMode::NonRecursive)
+			.map_err(notify_error)?;
+	}
+
+	Ok(stream! {
+		let _watcher = watcher;
+
+		while let Some(event) = rx.recv().await {
+			let mut changed_paths = match event {
+				Ok(event) => config_change_paths(&event, &config_paths),
+				Err(error) => {
+					yield Err(notify_error(error));
+					continue;
+				}
+			};
+			if changed_paths.is_empty() {
+				continue;
+			}
+
+			tokio::time::sleep(CONFIG_WATCH_DEBOUNCE).await;
+
+			while let Ok(event) = rx.try_recv() {
+				match event {
+					Ok(event) => changed_paths.extend(config_change_paths(&event, &config_paths)),
+					Err(error) => yield Err(notify_error(error)),
+				}
+			}
+
+			let mut external_change = false;
+			for path in changed_paths {
+				match current_file_contents(&path) {
+					Ok(contents) if is_process_write(&path, &contents) => {}
+					Ok(_) => external_change = true,
+					Err(error) => yield Err(error),
+				}
+			}
+
+			if external_change {
+				yield Ok(());
+			}
+		}
+	})
+}
+
+fn config_change_paths(event: &notify::Event, config_paths: &HashSet<PathBuf>) -> HashSet<PathBuf> {
 	let relevant_kind = matches!(
 		event.kind,
 		EventKind::Any
@@ -227,12 +529,16 @@ fn is_config_change(event: &notify::Event, config_path: &Path) -> bool {
 			| EventKind::Remove(RemoveKind::Any | RemoveKind::File)
 	);
 
-	relevant_kind
-		&& event
-			.paths
-			.iter()
-			.filter_map(|path| absolute_path(path).ok())
-			.any(|path| path == config_path)
+	if !relevant_kind {
+		return HashSet::new();
+	}
+
+	event
+		.paths
+		.iter()
+		.filter_map(|path| absolute_path(path).ok())
+		.filter(|path| config_paths.contains(path))
+		.collect()
 }
 
 fn current_file_contents(path: &Path) -> Result<String, ConfigError> {
@@ -286,7 +592,7 @@ fn notify_error(error: notify::Error) -> ConfigError {
 	std::io::Error::other(error).into()
 }
 
-#[derive(Debug, Config, Clone, ConfigSerialize, Validate)]
+#[derive(Debug, Config, Clone, PartialEq, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Nightlight {
 	/// If the nightlight integration should be enabled.
@@ -374,7 +680,7 @@ impl Default for Nightlight {
 	}
 }
 
-#[derive(Debug, Config, Clone, ConfigSerialize, Validate)]
+#[derive(Debug, Config, Clone, PartialEq, ConfigSerialize, Validate)]
 pub struct NightlightSetting {
 	/// Temperature of the light in [K]elvin. Basically the lower the number, the redder the light.
 	/// Normal daytime temperature is 6500.
@@ -411,7 +717,7 @@ impl NightlightSetting {
 	}
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Homeassistant {
 	/// Should the homeassistant integration be enabled? If it's disabled, you won't be able to
@@ -427,11 +733,14 @@ pub struct Homeassistant {
 	pub tracked_devices: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Spotify {
 	/// Whether to enable the spotify integration or not.
-	enabled: bool,
+	pub enabled: bool,
+	/// The client ID of the user's Spotify application.
+	#[config(default)]
+	pub client_id: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Config, strum::VariantArray)]
@@ -444,7 +753,7 @@ pub enum SystemMenuWidgets {
 	Nightlight,
 }
 
-#[derive(Debug, Default, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct SystemMenu {
 	/// Widgets to be displayed in the system menu. These put into 2 columns by the order they
@@ -456,7 +765,7 @@ pub struct SystemMenu {
 	pub widgets: Vec<SystemMenuWidgets>,
 }
 
-#[derive(Debug, Clone, Config)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Config)]
 pub enum LauncherProvider {
 	Calculator,
 	Applications,
@@ -465,17 +774,18 @@ pub enum LauncherProvider {
 }
 
 impl LauncherProvider {
+	#[must_use]
 	pub fn all() -> Vec<Self> {
 		vec![Self::Calculator, Self::Applications, Self::Files]
 	}
 }
 
-#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Launcher {
 	/// Providers to activate for the launcher. Their results will show up as entries in the
 	/// launcher.
-	#[config(default = LauncherProvider::All)]
+	#[config(default = LauncherProvider::all())]
 	pub providers: Vec<LauncherProvider>,
 	/// Settings for typo-tolerant launcher search.
 	#[config(default)]
@@ -492,7 +802,7 @@ impl Default for Launcher {
 	}
 }
 
-#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct LauncherTypoSearch {
 	/// Minimum query length before typo matching is enabled.
@@ -534,7 +844,7 @@ impl Default for LauncherTypoSearch {
 	}
 }
 
-#[derive(Debug, Clone, Config, ConfigSerialize, Validate)]
+#[derive(Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct Indexing {
 	#[config(default = true)]
@@ -544,5 +854,126 @@ pub struct Indexing {
 impl Default for Indexing {
 	fn default() -> Self {
 		Self { enabled: true }
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	#![allow(clippy::unwrap_used)]
+
+	use std::{
+		ffi::OsString,
+		sync::{Mutex, OnceLock},
+	};
+
+	use super::*;
+
+	static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+	struct TestEnvironment {
+		root: PathBuf,
+		old_config: Option<OsString>,
+		old_override: Option<OsString>,
+	}
+
+	impl TestEnvironment {
+		fn new(name: &str) -> Self {
+			let root = std::env::temp_dir().join(format!(
+				"subniri-config-{name}-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap_or_default()
+					.as_nanos()
+			));
+			std::fs::create_dir_all(&root).unwrap();
+			let config = root.join("config.kdl");
+			let config_override = root.join("config.override.kdl");
+			let old_config = std::env::var_os("SUBNIRI_CONFIG_FILE");
+			let old_override = std::env::var_os(CONFIG_OVERRIDE_ENV);
+
+			// Tests are serialized by ENV_LOCK, so no other thread observes these process globals.
+			unsafe {
+				std::env::set_var("SUBNIRI_CONFIG_FILE", config);
+				std::env::set_var(CONFIG_OVERRIDE_ENV, config_override);
+			}
+
+			Self {
+				root,
+				old_config,
+				old_override,
+			}
+		}
+	}
+
+	impl Drop for TestEnvironment {
+		fn drop(&mut self) {
+			// Tests are serialized by ENV_LOCK, so restoring these process globals is safe.
+			unsafe {
+				match &self.old_config {
+					Some(value) => std::env::set_var("SUBNIRI_CONFIG_FILE", value),
+					None => std::env::remove_var("SUBNIRI_CONFIG_FILE"),
+				}
+				match &self.old_override {
+					Some(value) => std::env::set_var(CONFIG_OVERRIDE_ENV, value),
+					None => std::env::remove_var(CONFIG_OVERRIDE_ENV),
+				}
+			}
+			let _ = std::fs::remove_dir_all(&self.root);
+		}
+	}
+
+	#[test]
+	fn override_is_created_loaded_and_cleared() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("lifecycle");
+		let (mut doc, mut config) = ConfigFile::load_declarative().unwrap();
+
+		config.spotify.client_id = "0123456789abcdef0123456789abcdef".to_string();
+		config.write(&mut doc).unwrap();
+
+		assert!(ConfigFile::override_active());
+		assert_eq!(ConfigFile::load().unwrap().1, config);
+		assert_eq!(
+			ConfigFile::load_declarative().unwrap().1.spotify.client_id,
+			""
+		);
+
+		let (_, declarative) = ConfigFile::clear_override().unwrap();
+		assert!(!ConfigFile::override_active());
+		assert_eq!(ConfigFile::load().unwrap().1, declarative);
+	}
+
+	#[test]
+	fn matching_config_removes_override() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("matching");
+		let (mut doc, mut config) = ConfigFile::load_declarative().unwrap();
+
+		config.spotify.enabled = true;
+		config.write(&mut doc).unwrap();
+		assert!(ConfigFile::override_active());
+
+		let (base_doc, base) = ConfigFile::load_declarative().unwrap();
+		doc = base_doc;
+		config = base;
+		config.write(&mut doc).unwrap();
+		assert!(!ConfigFile::override_active());
+	}
+
+	#[test]
+	fn nix_diff_contains_only_changed_assignments() {
+		let base = ConfigFile::default();
+		let mut effective = base.clone();
+		effective.spotify.enabled = true;
+		effective.spotify.client_id = "client\"${id}".to_string();
+
+		assert_eq!(
+			effective.nix_diff(&base),
+			concat!(
+				"services.subniri.settings.spotify.enable = true;\n",
+				"services.subniri.settings.spotify.clientId = \"client\\\"\\${id}\";\n",
+			)
+		);
 	}
 }

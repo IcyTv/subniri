@@ -373,7 +373,7 @@ impl MediaControls {
 			content = content.push(space::vertical().height(12));
 		}
 
-		// TODO: On disbled buttons, add a tooltii
+		// TODO: On disbled buttons, add a tooltip
 		if let Some((_id, snap)) = &self.active_player
 			&& snap.can_control
 		{

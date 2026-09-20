@@ -30,6 +30,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 enum Message {
 	SelectSetting(usize),
 	Setting(usize, setting::Message),
+	ClearConfigOverride,
+	CopyNixChanges,
 	Redraw,
 	ConfigUpdated,
 	Noop,
@@ -39,11 +41,12 @@ struct Settings {
 	selected_setting: usize,
 	tabs: Vec<Tab>,
 	config: ConfigFile,
+	declarative_config: ConfigFile,
 	doc: KdlDocument,
 }
 
 impl Settings {
-	fn new() -> Self {
+	fn new() -> (Self, Task<Message>) {
 		let mut first = Tab::nightlight();
 		first.selected.go_mut(true, Instant::now());
 
@@ -54,8 +57,15 @@ impl Settings {
 				(KdlDocument::new(), ConfigFile::default())
 			}
 		};
+		let declarative_config = ConfigFile::load_declarative().map_or_else(
+			|error| {
+				log::warn!("Error loading declarative config: {error}");
+				config.clone()
+			},
+			|(_, config)| config,
+		);
 
-		Self {
+		let settings = Self {
 			selected_setting: 0,
 			tabs: vec![
 				first,
@@ -64,8 +74,13 @@ impl Settings {
 				Tab::more_soon(),
 			],
 			config,
+			declarative_config,
 			doc,
-		}
+		};
+
+		let tasks = settings.init_tabs();
+
+		(settings, tasks)
 	}
 
 	fn subscription(&self) -> Subscription<Message> {
@@ -112,9 +127,33 @@ impl Settings {
 
 				self.doc = doc;
 				self.config = config;
+				match ConfigFile::load_declarative() {
+					Ok((_, config)) => self.declarative_config = config,
+					Err(error) => log::warn!("Error loading declarative config: {error}"),
+				}
 
-				Task::none()
+				self.init_tabs()
 			}
+			Message::ClearConfigOverride => {
+				match ConfigFile::clear_override() {
+					Ok((doc, config)) => {
+						self.doc = doc;
+						self.declarative_config = config.clone();
+						self.config = config;
+					}
+					Err(error) => log::error!("Failed to clear config override: {error}"),
+				}
+				self.init_tabs()
+			}
+			Message::CopyNixChanges => iced::clipboard::write(
+				self.config.nix_diff(&self.declarative_config),
+			)
+			.map(|result| {
+				if let Err(error) = result {
+					log::warn!("Failed to copy Nix changes: {error:?}");
+				}
+				Message::Noop
+			}),
 			Message::SelectSetting(index) => {
 				self.select(index);
 				Task::none()
@@ -132,6 +171,7 @@ impl Settings {
 		}
 	}
 
+	#[allow(clippy::too_many_lines)]
 	fn view(&self) -> Element<'_, Message> {
 		let mut sidebar = column![
 			column![
@@ -202,7 +242,7 @@ impl Settings {
 
 		sidebar = sidebar.push(space::vertical());
 
-		let mut content = row![
+		let mut settings_row = row![
 			neo_card(sidebar)
 				.width(260)
 				.height(Length::Fill)
@@ -213,14 +253,59 @@ impl Settings {
 		.padding(18);
 
 		if let Some(setting) = self.tabs.get(self.selected_setting) {
-			content = content.push(
+			settings_row = settings_row.push(
 				setting
 					.view(&self.config)
 					.map(|msg| Message::Setting(self.selected_setting, msg)),
 			);
 		}
 
-		content.into()
+		let mut content = column![].spacing(12);
+		if ConfigFile::override_active() {
+			let nix_diff = self.config.nix_diff(&self.declarative_config);
+			let diff_text = if nix_diff.is_empty() {
+				"The local override matches the declarative config.".to_string()
+			} else {
+				nix_diff
+			};
+			content = content.push(
+				neo_card(
+					column![
+						text("LOCAL CONFIG OVERRIDE ACTIVE")
+							.size(18)
+							.weight(font::Weight::Bold),
+						text("These live changes are not part of your Home Manager configuration. Apply the suggested Nix assignments to make them permanent.")
+							.size(13)
+							.wrapping(text::Wrapping::Word),
+						container(text(diff_text).size(13).wrapping(text::Wrapping::Word))
+							.width(Length::Fill)
+							.padding(10)
+							.style(|_| container::Style {
+								background: Some(Background::Color(COLORS.white)),
+								border: Border {
+									color: COLORS.border,
+									width: 2.0,
+									radius: 3.into(),
+								},
+								..Default::default()
+							}),
+						row![
+							neo_button(text("COPY NIX CHANGES").weight(font::Weight::Bold))
+								.on_press(Message::CopyNixChanges),
+							neo_button(text("DISCARD LOCAL CHANGES").weight(font::Weight::Bold))
+								.on_press(Message::ClearConfigOverride),
+						]
+						.spacing(10),
+					]
+					.spacing(8),
+				)
+				.width(Length::Fill)
+				.padding(14)
+				.background(COLORS.decorative.yellow90),
+			);
+		}
+
+		content.push(settings_row).into()
 	}
 
 	#[allow(clippy::unused_self)]
@@ -239,5 +324,12 @@ impl Settings {
 		for (i, item) in self.tabs.iter_mut().enumerate() {
 			item.selected.go_mut(i == index, now);
 		}
+	}
+
+	fn init_tabs(&self) -> Task<Message> {
+		Task::batch(self.tabs.iter().enumerate().map(|(index, tab)| {
+			tab.init(&self.config)
+				.map(move |message| Message::Setting(index, message))
+		}))
 	}
 }
