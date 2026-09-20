@@ -159,23 +159,27 @@
           ]
         ))
       ]
-      ++ (lib.optionals settings.homeassistant.enable (plain "homeassistant" (
-        [(flag "enabled")]
-        ++ lib.optionals (settings.homeassistant.url != null) [
-          (leaf "url" settings.homeassistant.url)
-        ]
-        ++ lib.optionals (settings.homeassistant.trackedDevices != []) [
-          (node "tracked_devices" settings.homeassistant.trackedDevices [])
-        ]
-      )))
-      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "") (plain "spotify" (
-        lib.optionals settings.spotify.enable [
-          (flag "enabled")
-        ]
-        ++ lib.optionals (settings.spotify.clientId != "") [
-          (leaf "client_id" settings.spotify.clientId)
-        ]
-      )))
+      ++ (lib.optionals settings.homeassistant.enable [
+        (plain "homeassistant" (
+          [(flag "enabled")]
+          ++ lib.optionals (settings.homeassistant.url != null) [
+            (leaf "url" settings.homeassistant.url)
+          ]
+          ++ lib.optionals (settings.homeassistant.trackedDevices != []) [
+            (node "tracked_devices" settings.homeassistant.trackedDevices [])
+          ]
+        ))
+      ])
+      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "") [
+        (plain "spotify" (
+          lib.optionals settings.spotify.enable [
+            (flag "enabled")
+          ]
+          ++ lib.optionals (settings.spotify.clientId != "") [
+            (leaf "client_id" settings.spotify.clientId)
+          ]
+        ))
+      ])
       ++ [
         (plain "system_menu" (
           lib.optionals (settings.systemMenu.widgets != []) [
