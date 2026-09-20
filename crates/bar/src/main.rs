@@ -379,6 +379,7 @@ impl Bar {
 					_ => unreachable!(),
 				}
 			}
+			BarMessage::Module(_, _, _, ModuleMessage::ClosePopup) => self.close_open_popup(),
 			BarMessage::ShellEvent(ShellEvent::WindowOutputChanged { window, output }) => {
 				if let Some(info) = output {
 					if let Some(name) = info.name {

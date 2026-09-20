@@ -44,6 +44,8 @@ pub enum Message {
 	SkipPrevious,
 	SkipNext,
 	Redraw,
+	FocusPlayer,
+	ClosePopup,
 	Noop,
 }
 
@@ -189,6 +191,32 @@ impl MediaControls {
 			Message::SkipNext => {
 				let _ = self.cmd_tx.send_blocking(PlayerCommand::SkipNext);
 			}
+			Message::FocusPlayer => {
+				let Some((player_id, player)) = self.active_player.as_ref() else {
+					log::warn!("No active player to focus");
+					return Task::none();
+				};
+
+				let desktop_entry = if player.desktop_entry.is_empty() {
+					player_id.bus().to_string()
+				} else {
+					player.desktop_entry.clone()
+				};
+
+				let title = player.title.clone();
+
+				return Task::future(async move {
+					if let Err(e) = tokio::task::spawn_blocking(move || {
+						try_focus_mpris_window(desktop_entry, title)
+					})
+					.await
+					{
+						log::warn!("Failed to focus mpris window: {e}");
+					};
+
+					Message::ClosePopup
+				});
+			}
 			Message::UpdateThumbnail(identity, thumbnail) => {
 				self.thumbnail_cache.borrow_mut().put(identity, thumbnail);
 			}
@@ -276,6 +304,7 @@ impl MediaControls {
 				neo_button(svg(phosphor_icon!("arrow-square-in")))
 					.width(40)
 					.height(40)
+					.on_press(Message::FocusPlayer)
 			]
 			.align_x(Horizontal::Right)
 			.width(Length::Fill)
@@ -935,5 +964,80 @@ async fn read_player_snapshot_inner(player: &MprisPlayer) -> PlayerSnapshot {
 		can_seek,
 		can_play,
 		can_pause,
+	}
+}
+
+fn try_focus_mpris_window(app_id: String, title: String) {
+	let app_id = app_id.to_lowercase();
+	let title = title.to_lowercase();
+
+	let Ok(mut socket) = niri_ipc::socket::Socket::connect()
+		.inspect_err(|e| log::warn!("Can't connect to niri: {e}"))
+	else {
+		return;
+	};
+
+	let windows = match socket.send(niri_ipc::Request::Windows) {
+		Ok(Ok(niri_ipc::Response::Windows(windows))) => windows,
+		Ok(Ok(_)) => {
+			log::warn!("Unexpected response from niri when requesting windows");
+			return;
+		}
+		Ok(Err(e)) => {
+			log::warn!("Failed to get windows from niri: {e}");
+			return;
+		}
+		Err(e) => {
+			log::warn!("Failed to communicate with niri socket: {e}");
+			return;
+		}
+	};
+
+	let matching_windows: Vec<_> = windows
+		.iter()
+		.filter(|w| {
+			if let Some(w_app_id) = &w.app_id {
+				let w_app_id = w_app_id.to_lowercase();
+
+				w_app_id == app_id || w_app_id.contains(&app_id) || app_id.contains(&w_app_id)
+			} else {
+				false
+			}
+		})
+		.collect();
+
+	if matching_windows.is_empty() {
+		log::debug!("No matching windows found for app_id '{app_id}'");
+		return;
+	}
+
+	if matching_windows.len() == 1 {
+		focus_window(&mut socket, matching_windows[0].id);
+		return;
+	}
+
+	if !title.is_empty() {
+		if let Some(w) = matching_windows.iter().find(|w| {
+			if let Some(w_title) = &w.title {
+				let w_title = w_title.to_lowercase();
+				w_title == title || w_title.contains(&title) || title.contains(&w_title)
+			} else {
+				false
+			}
+		}) {
+			focus_window(&mut socket, w.id);
+			return;
+		}
+	}
+
+	// Fallback: Focus the first match
+	focus_window(&mut socket, matching_windows[0].id);
+}
+
+fn focus_window(socket: &mut niri_ipc::socket::Socket, window_id: u64) {
+	if let Err(e) = socket.send(niri_ipc::Request::Action(niri_ipc::Action::FocusWindow {
+		id: window_id,
+	})) {
+		log::warn!("Failed to focus window {window_id}: {e}");
 	}
 }

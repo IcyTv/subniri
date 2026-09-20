@@ -34,6 +34,7 @@ pub enum ModuleMessage {
 	OpenTrayContextMenu { service: String, bounds: Rectangle },
 	InvokeTrayContextMenu { service: String, x: i32, y: i32 },
 	CloseContextMenus,
+	ClosePopup,
 
 	OpenPowerMenu,
 	OpenSettings,
@@ -186,6 +187,12 @@ impl Module {
 				clock.open_tray_context_menu(service, x, y);
 			}
 			(Self::Clock(clock), ModuleMessage::PopupClosed) => clock.on_popup_closed(),
+			(
+				Self::MediaControls(_),
+				ModuleMessage::MediaControls(media_controls::Message::ClosePopup),
+			) => {
+				return Task::done(ModuleMessage::ClosePopup);
+			}
 			(Self::MediaControls(controls), ModuleMessage::MediaControls(message)) => {
 				return controls.update(message).map(ModuleMessage::MediaControls);
 			}
