@@ -1,8 +1,16 @@
-use std::{future::Future, os::fd::OwnedFd, pin::Pin, sync::Arc, time::Duration};
+use std::{
+	fs::{File, OpenOptions},
+	future::Future,
+	os::fd::OwnedFd,
+	path::Path,
+	pin::Pin,
+	sync::Arc,
+	time::Duration,
+};
 
 use chrono::Timelike;
 use config::NightlightSetting;
-use rustix::fs::{MemfdFlags, memfd_create};
+use rustix::fs::{FlockOperation, MemfdFlags, flock, memfd_create};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio::time::{MissedTickBehavior, Sleep};
@@ -22,6 +30,9 @@ use zbus::object_server::SignalEmitter;
 
 use crate::{NIGHTLIGHT_OBJECT_PATH, NightlightPreset};
 
+const GAMMA_CONTROL_LOCK_FILE: &str = "subniri-nightlight-gamma.lock";
+const GAMMA_CONTROL_LOCK_RETRY: Duration = Duration::from_secs(1);
+
 pub async fn run<F>(
 	connection: zbus::Connection, config: config::Nightlight, shutdown_signal: F,
 ) -> Result<(), Box<dyn std::error::Error>>
@@ -29,53 +40,64 @@ where
 	F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
 	let service = NightlightDbus::new(config.clone()).await?;
-	connection
+	let added = connection
 		.object_server()
 		.at(NIGHTLIGHT_OBJECT_PATH, service.clone())
 		.await?;
-
-	let mut sched = if config.enabled {
-		activate_current_preset(service.clone(), &config).await;
-		let sched = schedule_presets(service.clone(), &config).await?;
-		sched.start().await?;
-		Some(sched)
-	} else {
-		log::info!("Nightlight is disabled in config");
-		None
-	};
-	let mut preset_reconciler = config
-		.enabled
-		.then(|| start_preset_reconciler(service.clone(), config.clone()));
-
-	tokio::select! {
-		result = shutdown_signal => {
-			result?;
-			log::info!("Shutting down nightlight");
-			if let Some(reconciler) = preset_reconciler.take() {
-				reconciler.abort();
-			}
-			service.shutdown().await;
-			if let Some(sched) = &mut sched {
-				sched.shutdown().await?;
-			}
-		}
-		result = async {
-			if let Some(reconciler) = &mut preset_reconciler {
-				reconciler.await
-			} else {
-				std::future::pending().await
-			}
-		} => {
-			result?;
-			return Err("nightlight preset reconciler stopped unexpectedly".into());
-		}
+	if !added {
+		return Err("nightlight D-Bus interface is already registered".into());
 	}
-	connection
+
+	let runtime_result = async {
+		let mut sched = if config.enabled {
+			activate_current_preset(service.clone(), &config).await;
+			let sched = schedule_presets(service.clone(), &config).await?;
+			sched.start().await?;
+			Some(sched)
+		} else {
+			log::info!("Nightlight is disabled in config");
+			None
+		};
+		let mut preset_reconciler = config
+			.enabled
+			.then(|| start_preset_reconciler(service.clone(), config.clone()));
+
+		let result = tokio::select! {
+			result = shutdown_signal => result,
+			result = async {
+				if let Some(reconciler) = &mut preset_reconciler {
+					reconciler.await?;
+					Err("nightlight preset reconciler stopped unexpectedly".into())
+				} else {
+					std::future::pending().await
+				}
+			} => result,
+		};
+
+		if let Some(reconciler) = preset_reconciler.take() {
+			reconciler.abort();
+			let _ = reconciler.await;
+		}
+		service.shutdown().await;
+		if let Some(sched) = &mut sched {
+			sched.shutdown().await?;
+		}
+		result
+	}
+	.await;
+
+	let remove_result = connection
 		.object_server()
 		.remove::<NightlightDbus, _>(NIGHTLIGHT_OBJECT_PATH)
-		.await?;
+		.await;
+	if let Err(error) = remove_result {
+		if runtime_result.is_ok() {
+			return Err(error.into());
+		}
+		log::error!("Failed to unregister nightlight D-Bus interface: {error}");
+	}
 
-	Ok(())
+	runtime_result
 }
 
 async fn activate_current_preset(service: NightlightDbus, config: &config::Nightlight) {
@@ -553,7 +575,8 @@ struct NightlightController {
 
 impl NightlightController {
 	async fn spawn(debounce: Duration) -> Result<Self, Box<dyn std::error::Error>> {
-		let controller = NightlightControllerTask::new(debounce).await?;
+		let lock = GammaControlLock::acquire().await?;
+		let controller = NightlightControllerTask::new(debounce, lock).await?;
 		let (command_tx, command_rx) = mpsc::channel(8);
 
 		tokio::spawn(async move {
@@ -582,6 +605,53 @@ impl NightlightController {
 		Ok(response_rx
 			.await
 			.map_err(|_| std::io::Error::other("nightlight controller has stopped"))??)
+	}
+}
+
+struct GammaControlLock {
+	_file: File,
+}
+
+impl GammaControlLock {
+	async fn acquire() -> std::io::Result<Self> {
+		let runtime_dir = dirs::runtime_dir().ok_or_else(|| {
+			std::io::Error::new(
+				std::io::ErrorKind::NotFound,
+				"XDG runtime directory is unavailable",
+			)
+		})?;
+		let path = runtime_dir.join(GAMMA_CONTROL_LOCK_FILE);
+		let mut waiting = false;
+
+		loop {
+			if let Some(lock) = Self::try_acquire(&path)? {
+				if waiting {
+					log::info!("Acquired nightlight gamma control lock");
+				}
+				return Ok(lock);
+			}
+
+			if !waiting {
+				log::info!("Gamma control is owned by another daemon; waiting to take over");
+				waiting = true;
+			}
+			tokio::time::sleep(GAMMA_CONTROL_LOCK_RETRY).await;
+		}
+	}
+
+	fn try_acquire(path: &Path) -> std::io::Result<Option<Self>> {
+		let file = OpenOptions::new()
+			.read(true)
+			.write(true)
+			.create(true)
+			.truncate(false)
+			.open(path)?;
+
+		match flock(&file, FlockOperation::NonBlockingLockExclusive) {
+			Ok(()) => Ok(Some(Self { _file: file })),
+			Err(error) if error == rustix::io::Errno::WOULDBLOCK => Ok(None),
+			Err(error) => Err(error.into()),
+		}
 	}
 }
 
@@ -660,6 +730,7 @@ struct OutputGamma {
 }
 
 struct NightlightControllerTask {
+	_lock: GammaControlLock,
 	connection: Connection<CallbackState>,
 	gamma_mgr: ZwlrGammaControlManagerV1,
 	outputs: Vec<OutputGamma>,
@@ -669,7 +740,9 @@ struct NightlightControllerTask {
 }
 
 impl NightlightControllerTask {
-	async fn new(debounce: Duration) -> Result<Self, Box<dyn std::error::Error>> {
+	async fn new(
+		debounce: Duration, lock: GammaControlLock,
+	) -> Result<Self, Box<dyn std::error::Error>> {
 		let mut connection = Connection::<CallbackState>::connect()?;
 		connection.async_roundtrip().await?;
 
@@ -685,6 +758,7 @@ impl NightlightControllerTask {
 		});
 
 		let mut controller = Self {
+			_lock: lock,
 			connection,
 			gamma_mgr,
 			outputs: Vec::new(),
@@ -717,8 +791,9 @@ impl NightlightControllerTask {
 					command = command_rx.recv() => {
 						match command {
 							Some(command) => {
-								self.handle_command(command);
-
+								if self.handle_command(command) {
+									return Ok(());
+								}
 							}
 							None => return Ok(()),
 						}
@@ -738,7 +813,9 @@ impl NightlightControllerTask {
 					command = command_rx.recv() => {
 						match command {
 							Some(command) => {
-								self.handle_command(command);
+								if self.handle_command(command) {
+									return Ok(());
+								}
 							}
 							None => return Ok(()),
 						}
@@ -997,4 +1074,30 @@ fn raw_temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
 	let b = b.clamp(0.0, 255.0) / 255.0;
 
 	(r, g, b)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::GammaControlLock;
+
+	#[test]
+	fn gamma_control_lock_allows_takeover_after_release() -> Result<(), Box<dyn std::error::Error>>
+	{
+		let path = std::env::temp_dir().join(format!(
+			"subniri-nightlight-test-{}.lock",
+			uuid::Uuid::new_v4()
+		));
+		let first = GammaControlLock::try_acquire(&path)?
+			.ok_or_else(|| std::io::Error::other("first gamma control lock acquisition failed"))?;
+
+		assert!(GammaControlLock::try_acquire(&path)?.is_none());
+
+		drop(first);
+		let second = GammaControlLock::try_acquire(&path)?
+			.ok_or_else(|| std::io::Error::other("gamma control lock was not released on drop"))?;
+		drop(second);
+		std::fs::remove_file(path)?;
+
+		Ok(())
+	}
 }

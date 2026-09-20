@@ -1,7 +1,10 @@
 use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use zbus::object_server::SignalEmitter;
 
-use crate::{CALENDAR_INTERFACE, CALENDAR_OBJECT_PATH};
+use daemon_common::{
+	CALENDAR_INTERFACE, CALENDAR_OBJECT_PATH,
+	calendar::{AddCalendarEventDto, CalendarEventDto},
+};
 
 mod entity;
 
@@ -18,10 +21,13 @@ where
 		CALENDAR_OBJECT_PATH
 	);
 
-	connection
+	let added = connection
 		.object_server()
 		.at(CALENDAR_OBJECT_PATH, service.clone())
 		.await?;
+	if !added {
+		return Err("calendar D-Bus interface is already registered".into());
+	}
 
 	tokio::select! {
 		result = shutdown_signal => {
@@ -32,7 +38,6 @@ where
 				.object_server()
 				.remove::<CalendarInterface, _>(CALENDAR_OBJECT_PATH)
 				.await?;
-			service.shutdown().await?;
 		}
 		// TODO: Use tokio scheduler to do notifications, alerts, reminders, etc.
 	}
@@ -81,47 +86,6 @@ impl CalendarInterface {
 	async fn event_added(
 		signal_emitter: &SignalEmitter<'_>, event: CalendarEventDto,
 	) -> zbus::Result<()>;
-}
-
-impl CalendarInterface {
-	async fn shutdown(self) -> Result<(), Box<dyn std::error::Error>> {
-		self.db.close_by_ref().await?;
-		Ok(())
-	}
-}
-
-#[zbus::proxy(
-	interface = CALENDAR_INTERFACE,
-	default_service = crate::DEFAULT_BUS_NAME,
-	default_path = CALENDAR_OBJECT_PATH
-)]
-pub trait Calendar {
-	fn get_events(
-		&self, start: chrono::NaiveDateTime, end: chrono::NaiveDateTime,
-	) -> zbus::Result<Vec<CalendarEventDto>>;
-	fn add_event(&self, event: AddCalendarEventDto) -> zbus::Result<()>;
-
-	#[zbus(signal)]
-	fn event_added(&self, event: CalendarEventDto) -> zbus::Result<()>;
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, zbus::zvariant::Type)]
-pub struct AddCalendarEventDto {
-	pub title: String,
-	pub start: chrono::NaiveDateTime,
-	pub end: chrono::NaiveDateTime,
-	pub is_all_day: bool,
-	pub description: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, zbus::zvariant::Type)]
-pub struct CalendarEventDto {
-	pub id: uuid::Uuid,
-	pub title: String,
-	pub start: chrono::NaiveDateTime,
-	pub end: chrono::NaiveDateTime,
-	pub is_all_day: bool,
-	pub description: String,
 }
 
 impl From<AddCalendarEventDto> for entity::ActiveModel {

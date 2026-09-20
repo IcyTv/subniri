@@ -1,6 +1,7 @@
-use std::{fmt, path::PathBuf, sync::Arc};
+use std::time::Duration;
 
 use config::ConfigFile;
+use daemon_common::SpotifyProxy;
 use iced::{
 	Alignment, Border, Color, Element, Length, Task, font,
 	widget::{Svg, column, container, grid, row, space, svg, text, text_input},
@@ -10,207 +11,81 @@ use neo_widgets::{
 	style::COLORS,
 	widgets::{neo_card, neo_toggle, neo_toggle_button},
 };
-use rspotify::{
-	AuthCodePkceSpotify, Credentials, OAuth, Token, TokenCallback,
-	prelude::{BaseClient, OAuthClient},
-	scopes,
-};
-use secret_store::{SecretAttributes, SecretStore};
-
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Message {
-	UpdateSecretsStore(Arc<SecretStore>),
-	UpdateSpotifyClient(Arc<AuthCodePkceSpotify>, String),
-	UpdateAuthenticationStatus(bool),
+	UpdateAuthenticationStatus(bool, String),
+	AuthenticationFailed(String),
 
 	StartAuthFlow,
 
 	OnClientIdChanged(String),
 	ToggleEnabled(bool),
-	ToggleAuthEnabled(bool),
 
-	Noop,
 	UpdateConfig,
 }
 
-impl fmt::Debug for Message {
-	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-		match self {
-			Self::UpdateSecretsStore(_) => write!(f, "Message::UpdateSecretsStore"),
-			Self::UpdateSpotifyClient(..) => write!(f, "Message::UpdateSpotifyClient"),
-			Self::UpdateAuthenticationStatus(authenticated) => {
-				write!(f, "Message::UpdateAuthenticationStatus({authenticated})")
-			}
-			Self::StartAuthFlow => write!(f, "Message::StartAuthFlow"),
-			Self::OnClientIdChanged(_) => write!(f, "Message::OnClientIdChanged(******)"),
-			Self::ToggleEnabled(on) => write!(f, "Message::ToggleEnabled({on})"),
-			Self::ToggleAuthEnabled(on) => write!(f, "Message::ToggleAuthEnabled({on})"),
-			Self::Noop => write!(f, "Message::Noop"),
-			Self::UpdateConfig => write!(f, "Message::UpdateConfig"),
-		}
-	}
-}
-
 pub struct Spotify {
-	secrets: Option<Arc<SecretStore>>,
-	spotify_client: Option<Arc<AuthCodePkceSpotify>>,
-	authorize_url: Option<String>,
 	authenticated: bool,
-
+	status: String,
 	auth_enabled: bool,
 }
 
 impl Spotify {
 	pub fn new() -> Self {
 		Self {
-			secrets: None,
-			spotify_client: None,
-			authorize_url: None,
 			authenticated: false,
+			status: "Checking daemon".to_string(),
 			auth_enabled: true,
 		}
 	}
 
-	pub fn init(config: &ConfigFile) -> Task<Message> {
-		let secret_store = Task::future(async {
-			let store = match SecretStore::connect().await {
-				Ok(store) => store,
-				Err(e) => {
-					log::error!("Failed to connect to SecretStore: {e}");
-					return Message::Noop;
+	pub fn init(_config: &ConfigFile) -> Task<Message> {
+		Task::future(async {
+			match spotify_status().await {
+				Ok((authenticated, status)) => {
+					Message::UpdateAuthenticationStatus(authenticated, status)
 				}
-			};
-
-			Message::UpdateSecretsStore(Arc::new(store))
-		});
-
-		let client_id = config.spotify.client_id.clone();
-		secret_store.then(move |message| {
-			let Message::UpdateSecretsStore(store) = message else {
-				return Task::none();
-			};
-
-			let store2 = store.clone();
-			let client_id = client_id.clone();
-			let client_id_task = if client_id.is_empty() {
-				Task::none()
-			} else {
-				init_client_task(client_id, store2)
-			};
-
-			Task::batch([
-				Task::done(Message::UpdateSecretsStore(store)),
-				client_id_task,
-			])
+				Err(error) => Message::AuthenticationFailed(error),
+			}
 		})
 	}
 
 	pub fn update(&mut self, config: &mut ConfigFile, message: Message) -> Task<Message> {
 		match message {
-			Message::UpdateSecretsStore(store) => {
-				self.secrets = Some(store);
+			Message::UpdateAuthenticationStatus(authenticated, status) => {
+				self.authenticated = authenticated;
+				self.status = status;
+				self.auth_enabled = true;
 				Task::none()
 			}
-			Message::UpdateSpotifyClient(client, url) => {
-				log::info!("Spotify client updated");
-				self.spotify_client = Some(client.clone());
-				self.authorize_url = Some(url);
+			Message::AuthenticationFailed(error) => {
+				log::warn!("Spotify authentication flow failed: {error}");
 				self.authenticated = false;
-
-				Task::future(async move {
-					let authenticated = match client.current_user().await {
-						Ok(_) => true,
-						Err(error) => {
-							log::warn!("Spotify authentication check failed: {error}");
-							false
-						}
-					};
-
-					Message::UpdateAuthenticationStatus(authenticated)
-				})
-			}
-			Message::UpdateAuthenticationStatus(authenticated) => {
-				self.authenticated = authenticated;
+				self.status = format!("Error: {error}");
+				self.auth_enabled = true;
 				Task::none()
 			}
 			Message::StartAuthFlow => {
-				if let Some((client, url)) =
-					self.spotify_client.clone().zip(self.authorize_url.clone())
-				{
-					let authflow = Task::future(async move {
-						let c2 = client.clone();
-						let authcode = tokio::task::spawn_blocking(move || {
-							c2.get_authcode_listener("127.0.0.1:8888".parse().unwrap())
-						});
-
-						if let Err(e) = tokio::task::spawn_blocking(move || {
-							if let Err(e) = open::that(url) {
-								log::error!("Failed to open browser for Spotify auth flow: {e}");
-							}
-						})
-						.await
-						{
-							log::warn!("Failed to spawn blocking task for opening browser: {e}");
-						};
-
-						let authcode = match authcode.await {
-							Ok(Ok(authcode)) => authcode,
-							Ok(Err(e)) => {
-								log::error!("Failed to get Spotify auth code: {e}");
-								return Message::Noop;
-							}
-							Err(e) => {
-								log::error!("Failed to await Spotify auth code task: {e}");
-								return Message::Noop;
-							}
-						};
-
-						if let Err(e) = client.request_token(&authcode).await {
-							log::error!("Failed to request Spotify token: {e}");
+				self.auth_enabled = false;
+				self.status = "Starting authorization".to_string();
+				Task::future(async {
+					match run_authorization().await {
+						Ok((authenticated, status)) => {
+							Message::UpdateAuthenticationStatus(authenticated, status)
 						}
-
-						// Verify authentication status
-						let authenticated = match client.current_user().await {
-							Ok(_) => true,
-							Err(error) => {
-								log::warn!("Spotify authentication check failed: {error}");
-								false
-							}
-						};
-
-						log::info!("Spotify authentication status: {authenticated}");
-
-						Message::UpdateAuthenticationStatus(authenticated)
-					});
-
-					Task::done(Message::ToggleAuthEnabled(false))
-						.chain(authflow)
-						.chain(Task::done(Message::ToggleAuthEnabled(true)))
-				} else {
-					log::warn!("Spotify is not setup for auth flow");
-					Task::none()
-				}
+						Err(error) => Message::AuthenticationFailed(error),
+					}
+				})
 			}
 			Message::OnClientIdChanged(client_id) => {
 				config.spotify.client_id.clone_from(&client_id);
-				let save = Task::done(Message::UpdateConfig);
-				if Self::credentials_are_valid(&client_id)
-					&& let Some(store) = self.secrets.clone()
-				{
-					Task::batch([save, init_client_task(client_id, store)])
-				} else {
-					save
-				}
+				Task::done(Message::UpdateConfig)
 			}
 			Message::ToggleEnabled(on) => {
 				config.spotify.enabled = on;
 				Task::done(Message::UpdateConfig)
 			}
-			Message::ToggleAuthEnabled(on) => {
-				self.auth_enabled = on;
-				Task::none()
-			}
-			Message::UpdateConfig | Message::Noop => Task::none(),
+			Message::UpdateConfig => Task::none(),
 		}
 	}
 
@@ -279,7 +154,7 @@ impl Spotify {
 				neo_toggle_button(
 					phosphor_icon!("user"),
 					"Is Authenticated?",
-					"Not connected",
+					&self.status,
 					self.is_authenticated(),
 					Some(COLORS.decorative.green)
 				)
@@ -308,7 +183,7 @@ impl Spotify {
 	}
 
 	fn is_authenticated(&self) -> bool {
-		self.spotify_client.is_some() && self.authenticated
+		self.authenticated
 	}
 
 	fn credentials_are_valid(client_id: &str) -> bool {
@@ -317,19 +192,53 @@ impl Spotify {
 	}
 }
 
-fn init_client_task(client_id: String, store: Arc<SecretStore>) -> Task<Message> {
-	Task::future(async move {
-		match try_init_client(client_id, store).await {
-			Ok((client, url)) => {
-				log::info!("Spotify client initialized successfully");
-				Message::UpdateSpotifyClient(Arc::new(client), url)
-			}
-			Err(error) => {
-				log::error!("Failed to initialize Spotify client: {error}");
-				Message::Noop
-			}
+async fn spotify_status() -> Result<(bool, String), String> {
+	let connection = zbus::Connection::session()
+		.await
+		.map_err(|error| error.to_string())?;
+	let proxy = SpotifyProxy::new(&connection)
+		.await
+		.map_err(|error| error.to_string())?;
+	let authenticated = proxy
+		.authenticated()
+		.await
+		.map_err(|error| error.to_string())?;
+	let status = proxy.status().await.map_err(|error| error.to_string())?;
+	Ok((authenticated, status))
+}
+
+async fn run_authorization() -> Result<(bool, String), String> {
+	let connection = zbus::Connection::session()
+		.await
+		.map_err(|error| error.to_string())?;
+	let proxy = SpotifyProxy::new(&connection)
+		.await
+		.map_err(|error| error.to_string())?;
+	let url = proxy
+		.begin_authorization()
+		.await
+		.map_err(|error| error.to_string())?;
+
+	// Give the daemon's callback listener a chance to bind before opening the browser.
+	tokio::time::sleep(Duration::from_millis(100)).await;
+	tokio::task::spawn_blocking(move || open::that(url))
+		.await
+		.map_err(|error| error.to_string())?
+		.map_err(|error| error.to_string())?;
+
+	for _ in 0..300 {
+		tokio::time::sleep(Duration::from_secs(1)).await;
+		let authenticated = proxy
+			.authenticated()
+			.await
+			.map_err(|error| error.to_string())?;
+		let status = proxy.status().await.map_err(|error| error.to_string())?;
+		if authenticated || status != "Authorizing" {
+			return Ok((authenticated, status));
 		}
-	})
+	}
+
+	Err("Spotify authorization timed out".to_string())
 }
 
 #[derive(Debug)]
@@ -413,142 +322,4 @@ fn input_card<'a>(
 	.padding(16)
 	.background(options.background)
 	.into()
-}
-
-async fn try_init_client(
-	client_id: String, secret_store: Arc<SecretStore>,
-) -> Result<(AuthCodePkceSpotify, String), Box<dyn std::error::Error>> {
-	if client_id.is_empty() {
-		log::warn!("Spotify client ID is empty, skipping initialization");
-		return Err("Spotify client ID is empty".into());
-	}
-
-	let creds = Credentials::new_pkce(&client_id);
-
-	let oauth = OAuth {
-		redirect_uri: "http://127.0.0.1:8888/callback".to_string(),
-		scopes: scopes!("user-read-currently-playing user-library-read user-library-modify"),
-		..Default::default()
-	};
-
-	let store = secret_store.clone();
-	let callback = TokenCallback(Box::new(move |token| {
-		if token.is_expired() {
-			log::warn!("Spotify token is expired, skipping storage");
-			return Ok(());
-		}
-
-		let secret_store = store.clone();
-
-		std::thread::spawn(move || {
-			tokio::runtime::Builder::new_current_thread()
-				.enable_all()
-				.build()
-				.unwrap()
-				.block_on(async move {
-					let expires_in = token.expires_in;
-					let expiry = token
-						.expires_at
-						.map(|dt| dt.to_rfc3339())
-						.unwrap_or_else(|| {
-							let now = chrono::Utc::now();
-							let expiry = now + expires_in;
-							expiry.to_rfc3339()
-						});
-
-					let attrs = SecretAttributes::new()
-						.insert("application", "subniri")
-						.insert("service", "spotify");
-
-					if let Err(e) = secret_store
-						.store(
-							"Spotify Access Token",
-							&attrs.clone().insert("type", "access_token"),
-							token.access_token,
-						)
-						.await
-					{
-						log::error!("Failed to store Spotify token: {e}");
-					}
-
-					if let Err(e) = secret_store
-						.store(
-							"Spotify Access Token Expiry",
-							&attrs.clone().insert("type", "access_token_expiry"),
-							expiry,
-						)
-						.await
-					{
-						log::error!("Failed to store Spotify token expiry: {e}");
-					}
-
-					if let Some(refresh_token) = token.refresh_token {
-						if let Err(e) = secret_store
-							.store(
-								"Spotify Refresh Token",
-								&attrs.insert("type", "refresh_token"),
-								refresh_token,
-							)
-							.await
-						{
-							log::error!("Failed to store Spotify refresh token: {e}");
-						}
-					}
-				});
-		});
-
-		Ok(())
-	}));
-
-	let config = rspotify::Config {
-		token_cached: false,
-		token_refreshing: true,
-		// TODO
-		token_callback_fn: Arc::new(Some(callback)),
-		cache_path: PathBuf::from("/dev/null/invalid"),
-		..Default::default()
-	};
-
-	// Try to read the token from the store
-	let attrs = SecretAttributes::new()
-		.insert("application", "subniri")
-		.insert("service", "spotify");
-	let access_token_attrs = attrs.clone().insert("type", "access_token");
-	let access_token_expiry_attrs = attrs.clone().insert("type", "access_token_expiry");
-	let refresh_token_attrs = attrs.clone().insert("type", "refresh_token");
-
-	let access_token = secret_store.get(&access_token_attrs).await.ok().flatten();
-	let access_token_expiry = secret_store
-		.get(&access_token_expiry_attrs)
-		.await
-		.ok()
-		.flatten();
-	let refresh_token = secret_store.get(&refresh_token_attrs).await.ok().flatten();
-
-	let mut spotify = if let Some((access_token, expiry)) = access_token.zip(access_token_expiry) {
-		let expiry = chrono::DateTime::parse_from_rfc3339(&expiry)
-			.map(|dt| dt.with_timezone(&chrono::Utc))
-			.unwrap_or_else(|_| chrono::Utc::now() + chrono::Duration::seconds(3600));
-		let expires_in = expiry - chrono::Utc::now();
-
-		let token = Token {
-			access_token,
-			expires_in,
-			expires_at: Some(expiry),
-			refresh_token,
-			scopes: oauth.scopes.clone(),
-		};
-
-		AuthCodePkceSpotify::from_token_with_config(token, creds, oauth, config)
-	} else {
-		AuthCodePkceSpotify::with_config(creds, oauth, config)
-	};
-
-	if let Err(e) = spotify.refresh_token().await {
-		log::warn!("Failed to refresh Spotify token: {e}");
-	}
-
-	let url = spotify.get_authorize_url(None)?;
-
-	Ok((spotify, url))
 }

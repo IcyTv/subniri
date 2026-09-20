@@ -1,0 +1,16 @@
+[package]
+name = "daemon-common"
+version.workspace = true
+authors.workspace = true
+description.workspace = true
+edition.workspace = true
+documentation.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+uuid = { version = "1.26.1", features = ["serde"] }
+zbus.workspace = true

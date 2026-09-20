@@ -709,7 +709,7 @@ dependencies = [
  "bluer",
  "chrono",
  "config",
- "daemon",
+ "daemon-common",
  "float-ord",
  "futures",
  "iced",
@@ -1220,7 +1220,7 @@ dependencies = [
  "clap",
  "cliclack",
  "comfy-table",
- "daemon",
+ "daemon-common",
  "jiff",
  "launcher-common",
  "systemd",
@@ -1747,21 +1747,32 @@ version = "0.0.1"
 dependencies = [
  "chrono",
  "config",
+ "daemon-common",
  "dirs 7.0.0",
  "futures",
  "jiff",
  "log 0.0.1",
  "memmap2",
+ "rspotify",
  "rustix 1.1.5",
  "sea-orm",
- "serde",
+ "secret-store",
  "tokio",
  "tokio-cron-scheduler",
  "uuid",
  "wayrs-client",
  "wayrs-protocols",
  "zbus",
- "zvariant",
+]
+
+[[package]]
+name = "daemon-common"
+version = "0.0.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "uuid",
+ "zbus",
 ]
 
 [[package]]
@@ -7388,8 +7399,8 @@ dependencies = [
 name = "settings"
 version = "0.0.1"
 dependencies = [
- "chrono",
  "config",
+ "daemon-common",
  "iced",
  "iced_runtime",
  "jiff",
@@ -7398,8 +7409,6 @@ dependencies = [
  "neo-widgets",
  "num-traits",
  "open",
- "rspotify",
- "secret-store",
  "tokio",
  "zbus",
 ]

@@ -1,67 +1,10 @@
 #![allow(clippy::missing_errors_doc)]
 
-use zbus::{
-	names::{BusName, InterfaceName},
-	zvariant::ObjectPath,
-};
-
 pub mod calendar;
 pub mod nightlight;
+pub mod spotify;
 
-pub const DEFAULT_BUS_NAME: BusName<'_> =
-	BusName::from_static_str_checked("de.icytv.subniri.Daemon");
-
-pub const NIGHTLIGHT_OBJECT_PATH: ObjectPath<'_> =
-	ObjectPath::from_static_str_checked("/de/icytv/subniri/Nightlight");
-pub const NIGHTLIGHT_INTERFACE: InterfaceName<'_> =
-	InterfaceName::from_static_str_checked("de.icytv.subniri.Nightlight");
-
-pub const CALENDAR_OBJECT_PATH: ObjectPath<'_> =
-	ObjectPath::from_static_str_checked("/de/icytv/subniri/Calendar");
-pub const CALENDAR_INTERFACE: InterfaceName<'_> =
-	InterfaceName::from_static_str_checked("de.icytv.subniri.Calendar");
-
-#[zbus::proxy(
-	interface = NIGHTLIGHT_INTERFACE,
-	default_service = DEFAULT_BUS_NAME,
-	default_path = NIGHTLIGHT_OBJECT_PATH
-)]
-pub trait Nightlight {
-	#[zbus(property)]
-	fn brightness(&self) -> zbus::Result<f64>;
-
-	#[zbus(property)]
-	fn set_brightness(&self, brightness: f64) -> zbus::Result<()>;
-
-	#[zbus(property)]
-	fn temperature(&self) -> zbus::Result<u32>;
-
-	#[zbus(property)]
-	fn set_temperature(&self, temperature: u32) -> zbus::Result<()>;
-
-	#[zbus(property)]
-	fn preset(&self) -> zbus::Result<String>;
-
-	#[zbus(property)]
-	fn set_preset(&self, preset: &str) -> zbus::Result<()>;
-
-	#[zbus(property)]
-	fn enabled(&self) -> zbus::Result<bool>;
-
-	#[zbus(property)]
-	fn set_enabled(&self, enabled: bool) -> zbus::Result<()>;
-
-	#[zbus(property)]
-	fn state(&self) -> zbus::Result<NightlightStateTuple>;
-
-	fn toggle(&self) -> zbus::Result<()>;
-
-	fn suspend(&self, duration_secs: u64) -> zbus::Result<()>;
-
-	fn unsuspend(&self) -> zbus::Result<()>;
-}
-
-type NightlightStateTuple = (bool, bool, f64, u32, String);
+pub use daemon_common::*;
 
 pub struct NightlightClient {
 	connection: zbus::Connection,
@@ -139,40 +82,6 @@ pub enum NightlightCommand {
 	ToggleNightlight,
 	Suspend(u64),
 	Unsuspend,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NightlightPreset {
-	Day,
-	Night,
-	Custom,
-}
-
-impl NightlightPreset {
-	#[must_use]
-	pub const fn as_str(self) -> &'static str {
-		match self {
-			Self::Day => "day",
-			Self::Night => "night",
-			Self::Custom => "custom",
-		}
-	}
-
-	/// Parse Nightlight Preset value (day, night or custom)
-	///
-	/// # Errors
-	///
-	/// `InvalidArgs` if the value could not be parsed into one of the presets
-	pub fn parse(value: &str) -> zbus::fdo::Result<Self> {
-		match value {
-			"day" | "Day" => Ok(Self::Day),
-			"night" | "Night" => Ok(Self::Night),
-			"custom" | "Custom" => Ok(Self::Custom),
-			_ => Err(zbus::fdo::Error::InvalidArgs(format!(
-				"invalid nightlight preset: {value}"
-			))),
-		}
-	}
 }
 
 #[derive(Debug, Clone)]

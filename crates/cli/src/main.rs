@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 use cliclack::{confirm, intro, log, note, outro, outro_cancel, spinner};
 use comfy_table::{Cell, Color, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
-use daemon::NightlightProxy;
+use daemon_common::NightlightProxy;
 use jiff::SignedDuration;
 use systemd::{JournalRecord, journal};
 use zbus::{Connection, names::BusName, proxy::Defaults, zvariant::ObjectPath};

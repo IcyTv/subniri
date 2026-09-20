@@ -9,6 +9,7 @@ use std::{
 };
 
 use async_channel::{Receiver, Sender};
+use daemon_common::SpotifyProxy;
 use futures::Stream;
 use iced::{
 	Animation, Element, Font, Length, Padding, Subscription, Task,
@@ -45,6 +46,12 @@ pub enum Message {
 	SkipNext,
 	Redraw,
 	FocusPlayer,
+	ToggleSpotifySaved,
+	SpotifySavedChanged {
+		track_id: String,
+		generation: u64,
+		result: Result<bool, String>,
+	},
 	ClosePopup,
 	Noop,
 }
@@ -75,6 +82,10 @@ pub struct MediaControls {
 	active_player_position: f32,
 	thumbnail_cache: Rc<RefCell<lru::LruCache<ThumbnailCacheKey, Option<image::Handle>>>>,
 	is_playing: Animation<bool>,
+	spotify_track_id: Option<String>,
+	spotify_saved: Option<bool>,
+	spotify_pending: bool,
+	spotify_generation: u64,
 	cmd_rx: Hashable<Receiver<PlayerCommand>>,
 	cmd_tx: Sender<PlayerCommand>,
 }
@@ -95,6 +106,10 @@ impl MediaControls {
 				NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
 			))),
 			is_playing: Animation::new(false).quick(),
+			spotify_track_id: None,
+			spotify_saved: None,
+			spotify_pending: false,
+			spotify_generation: 0,
 			cmd_rx: Hashable::new(cmd_rx),
 			cmd_tx,
 		}
@@ -116,11 +131,12 @@ impl MediaControls {
 			Message::PlayerChanged(identity, snapshot) => {
 				let art_url = snapshot.art_url.clone();
 				let url = snapshot.url.clone();
+				let spotify_track_id = spotify_track_id(url.as_deref());
 				self.is_playing.go_mut(snapshot.is_playing, Instant::now());
 				self.active_player_position = 0.0;
 				self.active_player = Some((identity.clone(), snapshot));
 
-				let mut tasks = Vec::with_capacity(2);
+				let mut tasks = Vec::with_capacity(3);
 				tasks.push(iced_runtime::task::effect(iced_runtime::Action::Window(
 					iced_runtime::window::Action::RedrawAll,
 				)));
@@ -132,6 +148,7 @@ impl MediaControls {
 						Task::future(async move { thumbnail_update_task(ck).await });
 					tasks.push(fetch_thumbnail_task);
 				}
+				tasks.push(self.set_spotify_track(spotify_track_id));
 
 				return Task::batch(tasks);
 			}
@@ -139,18 +156,23 @@ impl MediaControls {
 				if self.active_player.as_ref().is_some_and(|p| p.0 == identity) =>
 			{
 				self.active_player = None;
+				let spotify_task = self.set_spotify_track(None);
 				self.active_player_position = 0.0;
 				self.is_playing.go_mut(false, Instant::now());
+				return spotify_task;
 			}
 			Message::MprisDisconnected => {
 				self.active_player = None;
+				let spotify_task = self.set_spotify_track(None);
 				self.active_player_position = 0.0;
 				self.is_playing.go_mut(false, Instant::now());
+				return spotify_task;
 			}
 			Message::PlayerUpdated(identity, snapshot)
 				if let Some(active_player) = &mut self.active_player
 					&& active_player.0 == identity =>
 			{
+				let spotify_track_id = spotify_track_id(snapshot.url.as_deref());
 				let tn_update = if snapshot.art_url != active_player.1.art_url
 					|| snapshot.url != active_player.1.url
 				{
@@ -167,9 +189,15 @@ impl MediaControls {
 				self.is_playing.go_mut(snapshot.is_playing, Instant::now());
 				active_player.1 = snapshot;
 
-				if let Some(ck) = tn_update {
-					return Task::future(async move { thumbnail_update_task(ck).await });
-				}
+				let spotify_task = self.set_spotify_track(spotify_track_id);
+				return if let Some(ck) = tn_update {
+					Task::batch([
+						Task::future(async move { thumbnail_update_task(ck).await }),
+						spotify_task,
+					])
+				} else {
+					spotify_task
+				};
 			}
 			Message::PlayerPosition(id, pos)
 				if self
@@ -217,6 +245,38 @@ impl MediaControls {
 					Message::ClosePopup
 				});
 			}
+			Message::ToggleSpotifySaved => {
+				let Some(track_id) = self.spotify_track_id.clone() else {
+					return Task::none();
+				};
+				let Some(saved) = self.spotify_saved else {
+					return Task::none();
+				};
+				if self.spotify_pending {
+					return Task::none();
+				}
+				self.spotify_pending = true;
+				return spotify_saved_task(track_id, self.spotify_generation, Some(!saved));
+			}
+			Message::SpotifySavedChanged {
+				track_id,
+				generation,
+				result,
+			} => {
+				if generation != self.spotify_generation
+					|| self.spotify_track_id.as_deref() != Some(&track_id)
+				{
+					return Task::none();
+				}
+				self.spotify_pending = false;
+				match result {
+					Ok(saved) => self.spotify_saved = Some(saved),
+					Err(error) => {
+						self.spotify_saved = None;
+						log::warn!("Failed to update Spotify saved state: {error}");
+					}
+				}
+			}
 			Message::UpdateThumbnail(identity, thumbnail) => {
 				self.thumbnail_cache.borrow_mut().put(identity, thumbnail);
 			}
@@ -229,6 +289,20 @@ impl MediaControls {
 		}
 
 		Task::none()
+	}
+
+	fn set_spotify_track(&mut self, track_id: Option<String>) -> Task<Message> {
+		if self.spotify_track_id == track_id {
+			return Task::none();
+		}
+		self.spotify_generation = self.spotify_generation.wrapping_add(1);
+		self.spotify_track_id = track_id.clone();
+		self.spotify_saved = None;
+		self.spotify_pending = track_id.is_some();
+
+		track_id.map_or_else(Task::none, |track_id| {
+			spotify_saved_task(track_id, self.spotify_generation, None)
+		})
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -291,26 +365,35 @@ impl MediaControls {
 
 	#[allow(clippy::too_many_lines)]
 	pub fn view_popup(&self) -> Element<'_, Message> {
-		let art_row = row![
-			space::horizontal(),
-			self.get_thumbnail(),
-			// neo_card("").width(150).height(150),
-			// space::horizontal(),
-			column![
-				neo_button(svg(phosphor_icon!("arrows-down-up")))
-					.width(40)
-					.height(40)
-					.on_press(Message::CyclePlayer),
-				neo_button(svg(phosphor_icon!("arrow-square-in")))
-					.width(40)
-					.height(40)
-					.on_press(Message::FocusPlayer)
-			]
-			.align_x(Horizontal::Right)
-			.width(Length::Fill)
-			.spacing(8)
+		let mut actions = column![
+			neo_button(svg(phosphor_icon!("arrows-down-up")))
+				.width(40)
+				.height(40)
+				.on_press(Message::CyclePlayer),
+			neo_button(svg(phosphor_icon!("arrow-square-in")))
+				.width(40)
+				.height(40)
+				.on_press(Message::FocusPlayer)
 		]
-		.align_y(Vertical::Center);
+		.align_x(Horizontal::Right)
+		.width(Length::Fill)
+		.spacing(8);
+		if self.spotify_track_id.is_some() {
+			let icon = if self.spotify_saved == Some(true) {
+				phosphor_icon!("heart", "fill")
+			} else {
+				phosphor_icon!("heart")
+			};
+			actions = actions.push(
+				neo_button(svg(icon))
+					.width(40)
+					.height(40)
+					.enabled(self.spotify_saved.is_some() && !self.spotify_pending)
+					.on_press(Message::ToggleSpotifySaved),
+			);
+		}
+		let art_row =
+			row![space::horizontal(), self.get_thumbnail(), actions].align_y(Vertical::Center);
 		let title = (if let Some(title) = self.active_player.as_ref().map(|p| p.1.title.clone()) {
 			text(title)
 		} else {
@@ -776,6 +859,80 @@ async fn load_image_url(
 	.map_err(|e| e as Box<dyn Error>)?;
 
 	Ok(handle)
+}
+
+fn spotify_track_id(url: Option<&str>) -> Option<String> {
+	let id = if let Some(id) = url.and_then(|url| url.strip_prefix("spotify:track:")) {
+		id.to_string()
+	} else {
+		let url = url::Url::parse(url?).ok()?;
+		if url.host_str() != Some("open.spotify.com") {
+			return None;
+		}
+		let mut segments = url.path_segments()?;
+		if segments.next() != Some("track") {
+			return None;
+		}
+		segments.next()?.to_string()
+	};
+
+	(id.len() == 22 && id.bytes().all(|byte| byte.is_ascii_alphanumeric())).then_some(id)
+}
+
+fn spotify_saved_task(track_id: String, generation: u64, saved: Option<bool>) -> Task<Message> {
+	Task::future(async move {
+		let result = async {
+			let connection = zbus::Connection::session().await?;
+			let proxy = SpotifyProxy::new(&connection).await?;
+			if let Some(saved) = saved {
+				proxy.set_track_saved(&track_id, saved).await
+			} else {
+				proxy.track_saved(&track_id).await
+			}
+		}
+		.await
+		.map_err(|error| error.to_string());
+		Message::SpotifySavedChanged {
+			track_id,
+			generation,
+			result,
+		}
+	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::spotify_track_id;
+
+	#[test]
+	fn extracts_spotify_track_ids() {
+		let id = "4iV5W9uYEdYUVa79Axb7Rh";
+		assert_eq!(
+			spotify_track_id(Some(&format!("spotify:track:{id}"))).as_deref(),
+			Some(id)
+		);
+		assert_eq!(
+			spotify_track_id(Some(&format!(
+				"https://open.spotify.com/track/{id}?si=test"
+			)))
+			.as_deref(),
+			Some(id)
+		);
+	}
+
+	#[test]
+	fn rejects_non_track_spotify_urls() {
+		assert_eq!(
+			spotify_track_id(Some(
+				"https://open.spotify.com/episode/4iV5W9uYEdYUVa79Axb7Rh"
+			)),
+			None
+		);
+		assert_eq!(
+			spotify_track_id(Some("spotify:local:artist:album:track")),
+			None
+		);
+	}
 }
 
 #[allow(clippy::struct_excessive_bools)]

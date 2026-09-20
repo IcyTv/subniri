@@ -8,18 +8,19 @@ args@{
     "config/default"
     "config-macros/default"
     "config-traits/default"
-    "daemon/default"
+    "daemon-common/default"
     "log/default"
     "neo-widgets/default"
     "utilities/default"
     "cli/default"
     "launcher-common/default"
+    "daemon/default"
+    "secret-store/default"
     "file-manager/default"
     "indexer/default"
     "indexer-common/default"
     "launcher/default"
     "logout/default"
-    "secret-store/default"
     "settings/default"
   ],
   rustPackages,
@@ -41,7 +42,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "af556c25b5cc79ca35438d448889ae53fbb0cbee376cdafb52965f89bd5e0b0d";
+  nixifiedLockHash = "a410e2e9df286b710bc3721310cec953ca42e3b0385ab62630303e5b49d0d624";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -75,18 +76,19 @@ in
     config = rustPackages.unknown.config."0.0.1";
     config-macros = rustPackages.unknown.config-macros."0.0.1";
     config-traits = rustPackages.unknown.config-traits."0.0.1";
-    daemon = rustPackages.unknown.daemon."0.0.1";
+    daemon-common = rustPackages.unknown.daemon-common."0.0.1";
     log = rustPackages.unknown.log."0.0.1";
     neo-widgets = rustPackages.unknown.neo-widgets."0.0.1";
     utilities = rustPackages.unknown.utilities."0.0.1";
     cli = rustPackages.unknown.cli."0.0.1";
     launcher-common = rustPackages.unknown.launcher-common."0.0.1";
+    daemon = rustPackages.unknown.daemon."0.0.1";
+    secret-store = rustPackages.unknown.secret-store."0.0.1";
     file-manager = rustPackages.unknown.file-manager."0.0.1";
     indexer = rustPackages.unknown.indexer."0.0.1";
     indexer-common = rustPackages.unknown.indexer-common."0.0.1";
     launcher = rustPackages.unknown.launcher."0.0.1";
     logout = rustPackages.unknown.logout."0.0.1";
-    secret-store = rustPackages.unknown.secret-store."0.0.1";
     settings = rustPackages.unknown.settings."0.0.1";
   };
   "registry+https://github.com/rust-lang/crates.io-index".ab_glyph."0.2.32" = overridableMkRustCrate (profileName: rec {
@@ -983,7 +985,7 @@ in
       bluer = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".bluer."0.17.4" { inherit profileName; }).out;
       chrono = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".chrono."0.4.45" { inherit profileName; }).out;
       config = (rustPackages."unknown".config."0.0.1" { inherit profileName; }).out;
-      daemon = (rustPackages."unknown".daemon."0.0.1" { inherit profileName; }).out;
+      daemon_common = (rustPackages."unknown".daemon-common."0.0.1" { inherit profileName; }).out;
       float_ord = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".float-ord."0.3.2" { inherit profileName; }).out;
       futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
       iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
@@ -1714,7 +1716,7 @@ in
       clap = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".clap."4.6.7" { inherit profileName; }).out;
       cliclack = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".cliclack."0.5.6" { inherit profileName; }).out;
       comfy_table = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".comfy-table."7.2.2" { inherit profileName; }).out;
-      daemon = (rustPackages."unknown".daemon."0.0.1" { inherit profileName; }).out;
+      daemon_common = (rustPackages."unknown".daemon-common."0.0.1" { inherit profileName; }).out;
       jiff = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".jiff."0.2.37" { inherit profileName; }).out;
       launcher_common = (rustPackages."unknown".launcher-common."0.0.1" { inherit profileName; }).out;
       systemd = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".systemd."0.10.1" { inherit profileName; }).out;
@@ -2403,21 +2405,35 @@ in
     dependencies = {
       chrono = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".chrono."0.4.45" { inherit profileName; }).out;
       config = (rustPackages."unknown".config."0.0.1" { inherit profileName; }).out;
+      daemon_common = (rustPackages."unknown".daemon-common."0.0.1" { inherit profileName; }).out;
       dirs = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".dirs."7.0.0" { inherit profileName; }).out;
       futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
       jiff = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".jiff."0.2.37" { inherit profileName; }).out;
       log = (rustPackages."unknown".log."0.0.1" { inherit profileName; }).out;
       memmap2 = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".memmap2."0.9.11" { inherit profileName; }).out;
+      rspotify = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rspotify."0.16.1" { inherit profileName; }).out;
       rustix = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rustix."1.1.5" { inherit profileName; }).out;
       sea_orm = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".sea-orm."2.0.3" { inherit profileName; }).out;
-      serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
+      secret_store = (rustPackages."unknown".secret-store."0.0.1" { inherit profileName; }).out;
       tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.53.1" { inherit profileName; }).out;
       tokio_cron_scheduler = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio-cron-scheduler."0.15.1" { inherit profileName; }).out;
       uuid = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".uuid."1.26.1" { inherit profileName; }).out;
       wayrs_client = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wayrs-client."1.3.1" { inherit profileName; }).out;
       wayrs_protocols = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wayrs-protocols."0.14.11+1.45" { inherit profileName; }).out;
       zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
-      zvariant = (rustPackages."git+https://github.com/IcyTv/zbus".zvariant."5.15.0" { inherit profileName; }).out;
+    };
+  });
+  
+  "unknown".daemon-common."0.0.1" = overridableMkRustCrate (profileName: rec {
+    name = "daemon-common";
+    version = "0.0.1";
+    registry = "unknown";
+    src = fetchCrateLocal workspaceSrc;
+    dependencies = {
+      chrono = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".chrono."0.4.45" { inherit profileName; }).out;
+      serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
+      uuid = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".uuid."1.26.1" { inherit profileName; }).out;
+      zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
     };
   });
   
@@ -11116,8 +11132,8 @@ in
     registry = "unknown";
     src = fetchCrateLocal workspaceSrc;
     dependencies = {
-      chrono = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".chrono."0.4.45" { inherit profileName; }).out;
       config = (rustPackages."unknown".config."0.0.1" { inherit profileName; }).out;
+      daemon_common = (rustPackages."unknown".daemon-common."0.0.1" { inherit profileName; }).out;
       iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
       iced_runtime = (rustPackages."git+https://github.com/IcyTv/iced".iced_runtime."0.15.0-dev" { inherit profileName; }).out;
       jiff = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".jiff."0.2.37" { inherit profileName; }).out;
@@ -11126,8 +11142,6 @@ in
       neo_widgets = (rustPackages."unknown".neo-widgets."0.0.1" { inherit profileName; }).out;
       num_traits = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".num-traits."0.2.19" { inherit profileName; }).out;
       open = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".open."5.4.4" { inherit profileName; }).out;
-      rspotify = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rspotify."0.16.1" { inherit profileName; }).out;
-      secret_store = (rustPackages."unknown".secret-store."0.0.1" { inherit profileName; }).out;
       tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.53.1" { inherit profileName; }).out;
       zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
     };

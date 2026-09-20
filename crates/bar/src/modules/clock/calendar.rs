@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::{Datelike, Timelike};
-use daemon::calendar::{CalendarEventDto, CalendarProxy};
+use daemon_common::calendar::{CalendarEventDto, CalendarProxy};
 use futures::StreamExt;
 use iced::{
 	Element, Length, Subscription,

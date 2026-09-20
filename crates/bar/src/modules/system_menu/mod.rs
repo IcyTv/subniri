@@ -1,7 +1,7 @@
 use std::time::{Duration, Instant};
 
 use config::{ConfigFile, SystemMenuWidgets};
-use daemon::NightlightProxy;
+use daemon_common::NightlightProxy;
 use iced::{
 	Element, Font, Length, Padding, Rectangle, Subscription, Task,
 	alignment::Vertical,

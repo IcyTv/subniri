@@ -15,7 +15,7 @@ async-stream = "0.3.6"
 bluer = { version = "0.17.4", features = ["bluetoothd"] }
 clap = { version = "4.6.1", features = ["derive"] }
 config = { version = "0.0.1", path = "crates/config" }
-daemon = { path = "./crates/daemon" }
+daemon-common = { path = "./crates/daemon-common" }
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
 futures = "0.3.32"

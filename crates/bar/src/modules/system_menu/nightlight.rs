@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use config::ConfigFile;
-use daemon::{NightlightPreset, NightlightProxy};
+use daemon_common::{NightlightPreset, NightlightProxy};
 use futures::StreamExt;
 use iced::{
 	Alignment, Animation, Element, Length, Padding, Rectangle, Subscription, Task,
