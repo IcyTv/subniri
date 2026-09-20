@@ -14,3 +14,4 @@ chrono = { version = "0.4.45", features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 uuid = { version = "1.26.1", features = ["serde"] }
 zbus.workspace = true
+zvariant.workspace = true
