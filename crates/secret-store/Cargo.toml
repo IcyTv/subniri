@@ -11,6 +11,7 @@ futures-util = "0.3.34"
 serde = { workspace = true, features = ["derive"] }
 thiserror = "2.0.20"
 zbus.workspace = true
+zvariant.workspace = true
 
 [lints]
 workspace = true
