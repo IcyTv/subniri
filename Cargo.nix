@@ -41,7 +41,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "552f3fd435737c5ca774fbdbb02ded7a7a2aebd4c191747dbf3ef20b4507162f";
+  nixifiedLockHash = "af556c25b5cc79ca35438d448889ae53fbb0cbee376cdafb52965f89bd5e0b0d";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -10959,6 +10959,7 @@ in
       serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
       thiserror = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".thiserror."2.0.20" { inherit profileName; }).out;
       zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
+      zvariant = (rustPackages."git+https://github.com/IcyTv/zbus".zvariant."5.15.0" { inherit profileName; }).out;
     };
   });
   
