@@ -1,5 +1,5 @@
 use async_channel::Sender;
-use zbus::interface;
+use launcher_common::{Launcher, LauncherServer};
 
 use crate::launcher::Message;
 
@@ -12,7 +12,7 @@ pub struct DbusListener {
 
 impl DbusListener {
 	pub async fn connect(tx: Sender<Message>) -> zbus::Result<zbus::Connection> {
-		let listener = DbusListener { tx };
+		let listener = LauncherServer(DbusListener { tx });
 
 		zbus::connection::Builder::session()
 			.and_then(|s| s.name(SERVICE_NAME))
@@ -29,8 +29,7 @@ impl DbusListener {
 	}
 }
 
-#[interface(name = "de.icytv.subniri.Launcher")]
-impl DbusListener {
+impl Launcher for DbusListener {
 	async fn open(&self) -> zbus::fdo::Result<()> {
 		self.send(Message::Open).await
 	}

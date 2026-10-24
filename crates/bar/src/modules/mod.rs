@@ -231,9 +231,7 @@ impl Module {
 				controls.subscription().map(ModuleMessage::MediaControls)
 			}
 			Self::Taskbar(Some(_)) => taskbar::Taskbar::subscription().map(ModuleMessage::Taskbar),
-			Self::SystemMenu(_) => {
-				system_menu::SystemMenu::subscription().map(ModuleMessage::SystemMenu)
-			}
+			Self::SystemMenu(menu) => menu.subscription().map(ModuleMessage::SystemMenu),
 			Self::Network(Some(network)) => network.subscription().map(ModuleMessage::Network),
 			_ => Subscription::none(),
 		}

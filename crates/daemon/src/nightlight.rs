@@ -10,6 +10,7 @@ use std::{
 
 use chrono::Timelike;
 use config::NightlightSetting;
+use daemon_common::{Nightlight, NightlightServer};
 use rustix::fs::{FlockOperation, MemfdFlags, flock, memfd_create};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -39,10 +40,17 @@ pub async fn run<F>(
 where
 	F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
-	let service = NightlightDbus::new(config.clone()).await?;
+	tokio::pin!(shutdown_signal);
+	let service = tokio::select! {
+		result = NightlightDbus::new(config.clone()) => result?,
+		result = &mut shutdown_signal => {
+			result?;
+			return Ok(());
+		}
+	};
 	let added = connection
 		.object_server()
-		.at(NIGHTLIGHT_OBJECT_PATH, service.clone())
+		.at(NIGHTLIGHT_OBJECT_PATH, NightlightServer(service.clone()))
 		.await?;
 	if !added {
 		return Err("nightlight D-Bus interface is already registered".into());
@@ -63,7 +71,7 @@ where
 			.then(|| start_preset_reconciler(service.clone(), config.clone()));
 
 		let result = tokio::select! {
-			result = shutdown_signal => result,
+			result = &mut shutdown_signal => result,
 			result = async {
 				if let Some(reconciler) = &mut preset_reconciler {
 					reconciler.await?;
@@ -88,7 +96,7 @@ where
 
 	let remove_result = connection
 		.object_server()
-		.remove::<NightlightDbus, _>(NIGHTLIGHT_OBJECT_PATH)
+		.remove::<NightlightServer<NightlightDbus>, _>(NIGHTLIGHT_OBJECT_PATH)
 		.await;
 	if let Err(error) = remove_result {
 		if runtime_result.is_ok() {
@@ -391,12 +399,16 @@ impl NightlightDbus {
 	async fn emit_state_properties_changed(
 		&self, emitter: &SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
-		self.enabled_changed(emitter).await?;
-		self.brightness_changed(emitter).await?;
-		self.temperature_changed(emitter).await?;
-		self.preset_changed(emitter).await?;
-		self.state_changed(emitter).await?;
-		Ok(())
+		zbus::fdo::Properties::properties_changed(
+			emitter,
+			zbus::names::InterfaceName::from_static_str_checked(
+				daemon_common::NightlightProperties::INTERFACE_NAME,
+			),
+			std::collections::HashMap::new(),
+			std::borrow::Cow::Borrowed(daemon_common::NightlightProperties::MUTABLE_PROPERTY_NAMES),
+		)
+		.await
+		.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
 	}
 
 	async fn restore_scheduled_preset(&self, emitter: &SignalEmitter<'_>) -> zbus::fdo::Result<()> {
@@ -416,82 +428,63 @@ impl NightlightDbus {
 
 type NightlightStateTuple = (bool, bool, f64, u32, String);
 
-#[zbus::interface(name = "de.icytv.subniri.Nightlight")]
-impl NightlightDbus {
-	#[zbus(property, name = "Available")]
+impl Nightlight for NightlightDbus {
 	fn available(&self) -> bool {
 		self.inner.available
 	}
 
-	#[zbus(property, name = "Enabled")]
 	async fn enabled(&self) -> bool {
 		self.state().await.active
 	}
 
-	#[zbus(property, name = "Enabled")]
 	async fn set_enabled(
-		&self, enabled: bool, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+		&self, enabled: bool, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = enabled;
 		self.apply_state(state).await?;
-		self.enabled_changed(&emitter).await?;
-		self.state_changed(&emitter).await?;
+		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
-	#[zbus(property, name = "Brightness")]
 	async fn brightness(&self) -> f64 {
 		f64::from(self.state().await.brightness)
 	}
 
 	#[allow(clippy::cast_possible_truncation)]
-	#[zbus(property, name = "Brightness")]
 	async fn set_brightness(
-		&self, brightness: f64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+		&self, brightness: f64, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = true;
 		state.brightness = brightness as f32;
 		state.preset = NightlightPreset::Custom;
 		self.apply_state(state).await?;
-		self.enabled_changed(&emitter).await?;
-		self.brightness_changed(&emitter).await?;
-		self.preset_changed(&emitter).await?;
-		self.state_changed(&emitter).await?;
+		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
-	#[zbus(property, name = "Temperature")]
 	async fn temperature(&self) -> u32 {
 		self.state().await.temperature
 	}
 
-	#[zbus(property, name = "Temperature")]
 	async fn set_temperature(
-		&self, temperature: u32, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+		&self, temperature: u32, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = true;
 		state.temperature = temperature;
 		state.preset = NightlightPreset::Custom;
 		self.apply_state(state).await?;
-		self.enabled_changed(&emitter).await?;
-		self.temperature_changed(&emitter).await?;
-		self.preset_changed(&emitter).await?;
-		self.state_changed(&emitter).await?;
+		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
-	#[zbus(property, name = "Preset")]
 	async fn preset(&self) -> String {
 		self.state().await.preset.as_str().to_string()
 	}
 
-	#[zbus(property, name = "Preset")]
-	async fn set_preset(
-		&self, preset: &str, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-	) -> zbus::fdo::Result<()> {
+	async fn set_preset(&self, preset: &str, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		let preset = NightlightPreset::parse(preset)?;
 		let NightlightSetting {
 			brightness,
@@ -507,32 +500,24 @@ impl NightlightDbus {
 		};
 
 		self.apply_preset(preset, brightness, temperature).await?;
-		self.enabled_changed(&emitter).await?;
-		self.brightness_changed(&emitter).await?;
-		self.temperature_changed(&emitter).await?;
-		self.preset_changed(&emitter).await?;
-		self.state_changed(&emitter).await?;
+		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
-	#[zbus(property, name = "State")]
-	async fn state_property(&self) -> NightlightStateTuple {
+	async fn state(&self) -> NightlightStateTuple {
 		self.dbus_state().await
 	}
 
-	async fn toggle(
-		&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-	) -> zbus::fdo::Result<()> {
+	async fn toggle(&self, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = !state.active;
 		self.apply_state(state).await?;
-		self.enabled_changed(&emitter).await?;
-		self.state_changed(&emitter).await?;
+		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
 	async fn suspend(
-		&self, duration_secs: u64, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+		&self, duration_secs: u64, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let generation = self.begin_suspension().await;
 		self.apply_configured_preset(NightlightPreset::Day).await?;
@@ -556,9 +541,7 @@ impl NightlightDbus {
 		Ok(())
 	}
 
-	async fn unsuspend(
-		&self, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
-	) -> zbus::fdo::Result<()> {
+	async fn unsuspend(&self, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		if !self.cancel_suspension().await {
 			return Ok(());
 		}

@@ -22,6 +22,8 @@ struct ConfigOpts {
 struct VariantAttrs {
 	#[deluxe(default)]
 	name: Option<String>,
+	#[deluxe(default)]
+	other: bool,
 }
 
 #[derive(deluxe::ExtractAttributes, Default)]
@@ -242,13 +244,27 @@ fn generate_for_enum(
 	let mut parse_arms = Vec::new();
 	let mut serialize_arms = Vec::new();
 	let mut expected = Vec::new();
+	let mut catch_all_variant = None;
 
 	for variant in &mut e.variants {
-		if !matches!(variant.fields, syn::Fields::Unit) {
-			abort!(variant, "Only unit enum variants are supported");
+		if catch_all_variant.is_some() && !matches!(variant.fields, syn::Fields::Unit) {
+			abort!(variant, "Enums only support one catch-all variant");
 		}
 
 		let attrs: VariantAttrs = deluxe::extract_attributes_optional(&mut variant.attrs, &errors);
+
+		if !matches!(variant.fields, syn::Fields::Unit) {
+			if !attrs.other {
+				abort!(
+					variant,
+					"Catch-All enum variant must be marked #[config(other)] and will contain any values not parsed by unit variants."
+				);
+			}
+
+			catch_all_variant = Some(variant.clone());
+			continue;
+		}
+
 		let variant_ident = &variant.ident;
 		let variant_name = attrs
 			.name
@@ -257,6 +273,14 @@ fn generate_for_enum(
 		expected.push(variant_name.clone());
 		parse_arms.push(quote! { #variant_name => Ok(Self::#variant_ident), });
 		serialize_arms.push(quote! { Self::#variant_ident => #variant_name, });
+	}
+
+	if let Some(variant) = catch_all_variant {
+		expected.push("or others".to_string());
+		let variant_ident = &variant.ident;
+
+		parse_arms.push(quote! { other => Ok(Self::#variant_ident(other.to_string())), });
+		serialize_arms.push(quote! { Self::#variant_ident(value) => value, });
 	}
 
 	let expected = expected.join(", ");

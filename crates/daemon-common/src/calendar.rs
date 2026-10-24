@@ -1,18 +1,25 @@
-use crate::{CALENDAR_INTERFACE, CALENDAR_OBJECT_PATH, DEFAULT_BUS_NAME};
-
-#[zbus::proxy(
-	interface = CALENDAR_INTERFACE,
-	default_service = DEFAULT_BUS_NAME,
-	default_path = CALENDAR_OBJECT_PATH
+#[zbus::interface(
+	name = "de.icytv.subniri.Calendar",
+	proxy(
+		default_service = "de.icytv.subniri.Daemon",
+		default_path = "/de/icytv/subniri/Calendar",
+		gen_blocking = false,
+		visibility = "pub"
+	)
 )]
 pub trait Calendar {
-	fn get_events(
+	async fn get_events(
 		&self, start: chrono::NaiveDateTime, end: chrono::NaiveDateTime,
-	) -> zbus::Result<Vec<CalendarEventDto>>;
-	fn add_event(&self, event: AddCalendarEventDto) -> zbus::Result<()>;
+	) -> zbus::fdo::Result<Vec<CalendarEventDto>>;
+	async fn add_event(
+		&self, event: AddCalendarEventDto,
+		#[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
+	) -> zbus::fdo::Result<()>;
 
 	#[zbus(signal)]
-	fn event_added(&self, event: CalendarEventDto) -> zbus::Result<()>;
+	async fn event_added(
+		emitter: &zbus::object_server::SignalEmitter<'_>, event: CalendarEventDto,
+	) -> zbus::Result<()>;
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, zbus::zvariant::Type)]

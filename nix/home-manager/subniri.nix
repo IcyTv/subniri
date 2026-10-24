@@ -170,7 +170,7 @@
           ]
         ))
       ])
-      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "") [
+      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "" || settings.spotify.pollIntervalSeconds != 15) [
         (plain "spotify" (
           lib.optionals settings.spotify.enable [
             (flag "enabled")
@@ -178,6 +178,7 @@
           ++ lib.optionals (settings.spotify.clientId != "") [
             (leaf "client_id" settings.spotify.clientId)
           ]
+          ++ [(leaf "poll_interval_seconds" settings.spotify.pollIntervalSeconds)]
         ))
       ])
       ++ [
@@ -326,7 +327,7 @@ in {
           trackedDevices = mkOption {
             type = types.listOf types.str;
             default = [];
-            description = "Home Assistant device IDs to expose in Subniri.";
+            description = "Home Assistant entity IDs to keep active in Subniri (legacy option name).";
           };
         };
 
@@ -342,6 +343,12 @@ in {
             default = "";
             example = "0123456789abcdef0123456789abcdef";
             description = "Client ID of the user's Spotify application.";
+          };
+
+          pollIntervalSeconds = mkOption {
+            type = types.ints.between 5 3600;
+            default = 15;
+            description = "Seconds between batched Spotify saved-state checks. Values below 15 increase API usage and may trigger Spotify rate limits.";
           };
         };
 

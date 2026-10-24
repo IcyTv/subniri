@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tantivy::{
 	DocId, Index, IndexReader, IndexWriter, Score, SegmentReader, TantivyDocument,
 	collector::TopDocs, query::QueryParser, schema::Schema,

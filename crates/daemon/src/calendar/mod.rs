@@ -2,8 +2,8 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, DatabaseConnection, EntityTrait, Qu
 use zbus::object_server::SignalEmitter;
 
 use daemon_common::{
-	CALENDAR_INTERFACE, CALENDAR_OBJECT_PATH,
-	calendar::{AddCalendarEventDto, CalendarEventDto},
+	CALENDAR_OBJECT_PATH,
+	calendar::{AddCalendarEventDto, Calendar, CalendarEventDto, CalendarServer},
 };
 
 mod entity;
@@ -23,7 +23,7 @@ where
 
 	let added = connection
 		.object_server()
-		.at(CALENDAR_OBJECT_PATH, service.clone())
+		.at(CALENDAR_OBJECT_PATH, CalendarServer(service.clone()))
 		.await?;
 	if !added {
 		return Err("calendar D-Bus interface is already registered".into());
@@ -36,7 +36,7 @@ where
 
 			connection
 				.object_server()
-				.remove::<CalendarInterface, _>(CALENDAR_OBJECT_PATH)
+				.remove::<CalendarServer<CalendarInterface>, _>(CALENDAR_OBJECT_PATH)
 				.await?;
 		}
 		// TODO: Use tokio scheduler to do notifications, alerts, reminders, etc.
@@ -50,8 +50,7 @@ pub struct CalendarInterface {
 	db: DatabaseConnection,
 }
 
-#[zbus::interface(name = CALENDAR_INTERFACE)]
-impl CalendarInterface {
+impl Calendar for CalendarInterface {
 	async fn get_events(
 		&self, start: chrono::NaiveDateTime, end: chrono::NaiveDateTime,
 	) -> zbus::fdo::Result<Vec<CalendarEventDto>> {
@@ -66,7 +65,7 @@ impl CalendarInterface {
 	}
 
 	async fn add_event(
-		&self, event: AddCalendarEventDto, #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+		&self, event: AddCalendarEventDto, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let model: entity::ActiveModel = event.into();
 
@@ -75,17 +74,17 @@ impl CalendarInterface {
 			.await
 			.map_err(|e| zbus::fdo::Error::Failed(format!("Failed to insert event: {}", e)))?;
 
-		emitter.event_added(res.into()).await.map_err(|e| {
-			zbus::fdo::Error::Failed(format!("Failed to emit event_added signal: {}", e))
-		})?;
+		emitter
+			.emit(
+				"de.icytv.subniri.Calendar",
+				"EventAdded",
+				&(CalendarEventDto::from(res),),
+			)
+			.await
+			.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
 
 		Ok(())
 	}
-
-	#[zbus(signal)]
-	async fn event_added(
-		signal_emitter: &SignalEmitter<'_>, event: CalendarEventDto,
-	) -> zbus::Result<()>;
 }
 
 impl From<AddCalendarEventDto> for entity::ActiveModel {

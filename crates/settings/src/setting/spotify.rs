@@ -1,16 +1,20 @@
-use std::time::Duration;
-
 use config::ConfigFile;
-use daemon_common::SpotifyProxy;
+use daemon_common::{SPOTIFY_REDIRECT_URL, SpotifyProxy};
 use iced::{
 	Alignment, Border, Color, Element, Length, Task, font,
-	widget::{Svg, column, container, grid, row, space, svg, text, text_input},
+	widget::{Svg, column, container, grid, row, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
 	widgets::{neo_card, neo_toggle, neo_toggle_button},
 };
+
+use crate::{
+	oauth::{CallbackListener, OAUTH_CALLBACK_TIMEOUT},
+	setting::{InputCardOptions, input_card},
+};
+
 #[derive(Clone, Debug)]
 pub enum Message {
 	UpdateAuthenticationStatus(bool, String),
@@ -19,6 +23,8 @@ pub enum Message {
 	StartAuthFlow,
 
 	OnClientIdChanged(String),
+	PollIntervalChanged(String),
+	SyncPollInterval(u64),
 	ToggleEnabled(bool),
 
 	UpdateConfig,
@@ -28,6 +34,7 @@ pub struct Spotify {
 	authenticated: bool,
 	status: String,
 	auth_enabled: bool,
+	poll_interval: String,
 }
 
 impl Spotify {
@@ -36,18 +43,24 @@ impl Spotify {
 			authenticated: false,
 			status: "Checking daemon".to_string(),
 			auth_enabled: true,
+			poll_interval: "15".to_string(),
 		}
 	}
 
-	pub fn init(_config: &ConfigFile) -> Task<Message> {
-		Task::future(async {
-			match spotify_status().await {
-				Ok((authenticated, status)) => {
-					Message::UpdateAuthenticationStatus(authenticated, status)
+	pub fn init(config: &ConfigFile) -> Task<Message> {
+		Task::batch([
+			Task::done(Message::SyncPollInterval(
+				config.spotify.poll_interval_seconds,
+			)),
+			Task::future(async {
+				match spotify_status().await {
+					Ok((authenticated, status)) => {
+						Message::UpdateAuthenticationStatus(authenticated, status)
+					}
+					Err(error) => Message::AuthenticationFailed(error),
 				}
-				Err(error) => Message::AuthenticationFailed(error),
-			}
-		})
+			}),
+		])
 	}
 
 	pub fn update(&mut self, config: &mut ConfigFile, message: Message) -> Task<Message> {
@@ -81,6 +94,21 @@ impl Spotify {
 				config.spotify.client_id.clone_from(&client_id);
 				Task::done(Message::UpdateConfig)
 			}
+			Message::PollIntervalChanged(interval) => {
+				self.poll_interval.clone_from(&interval);
+				let Ok(interval) = interval.parse::<u64>() else {
+					return Task::none();
+				};
+				if !(5..=3600).contains(&interval) {
+					return Task::none();
+				}
+				config.spotify.poll_interval_seconds = interval;
+				Task::done(Message::UpdateConfig)
+			}
+			Message::SyncPollInterval(interval) => {
+				self.poll_interval = interval.to_string();
+				Task::none()
+			}
 			Message::ToggleEnabled(on) => {
 				config.spotify.enabled = on;
 				Task::done(Message::UpdateConfig)
@@ -91,6 +119,10 @@ impl Spotify {
 
 	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
 		let client_id_valid = Self::credentials_are_valid(&config.spotify.client_id);
+		let poll_interval = self.poll_interval.parse::<u64>().ok();
+		let poll_interval_valid =
+			poll_interval.is_some_and(|seconds| (5..=3600).contains(&seconds));
+		let poll_interval_warning = poll_interval.is_some_and(|seconds| (5..15).contains(&seconds));
 		column![
 			neo_card(
 				row![
@@ -138,7 +170,7 @@ impl Spotify {
 			.padding(18),
 			grid![
 				input_card(
-					InputCardOptions::<&str, _>::new(
+					InputCardOptions::<_, &str, _, _>::new(
 						&config.spotify.client_id,
 						Message::OnClientIdChanged
 					)
@@ -162,22 +194,22 @@ impl Spotify {
 				.padding(16)
 				.width(Length::Fill)
 				.height(112)
-				.on_press(Message::StartAuthFlow)
+				.on_press(Message::StartAuthFlow),
+				poll_interval_card(&self.poll_interval, poll_interval_valid),
 			]
 			.height(Length::Shrink)
 			.columns(2)
-			.spacing(14)
+			.spacing(14),
+			poll_interval_note(poll_interval_valid, poll_interval_warning)
 		]
 		.spacing(16)
 		.into()
 	}
 
-	#[inline(always)]
 	pub const fn accent_color() -> Color {
 		COLORS.decorative.green
 	}
 
-	#[inline(always)]
 	pub fn icon<'a>() -> Svg<'a> {
 		svg(phosphor_icon!("spotify-logo"))
 	}
@@ -192,6 +224,37 @@ impl Spotify {
 	}
 }
 
+fn poll_interval_card(value: &str, valid: bool) -> Element<'_, Message> {
+	input_card(
+		InputCardOptions::<_, &str, _, _>::new(value, Message::PollIntervalChanged)
+			.background(COLORS.decorative.yellow90)
+			.border(if valid {
+				COLORS.border
+			} else {
+				COLORS.feedback.danger
+			})
+			.display("POLL INTERVAL (SECONDS)")
+			.placeholder("15"),
+	)
+}
+
+fn poll_interval_note(valid: bool, warning: bool) -> Element<'static, Message> {
+	text(if warning {
+		"Polling faster than 15 seconds increases Spotify API usage and may trigger rate limits."
+	} else if valid {
+		"Spotify checks all observed tracks in one batched request per interval."
+	} else {
+		"Polling interval must be between 5 and 3600 seconds."
+	})
+	.color(if warning || !valid {
+		COLORS.feedback.danger
+	} else {
+		COLORS.text.scale_alpha(0.76)
+	})
+	.size(13)
+	.into()
+}
+
 async fn spotify_status() -> Result<(bool, String), String> {
 	let connection = zbus::Connection::session()
 		.await
@@ -203,11 +266,18 @@ async fn spotify_status() -> Result<(bool, String), String> {
 		.authenticated()
 		.await
 		.map_err(|error| error.to_string())?;
-	let status = proxy.status().await.map_err(|error| error.to_string())?;
+	let status = proxy
+		.status()
+		.await
+		.map_err(|error| error.to_string())?
+		.to_string();
 	Ok((authenticated, status))
 }
 
 async fn run_authorization() -> Result<(bool, String), String> {
+	let listener = CallbackListener::bind(SPOTIFY_REDIRECT_URL)
+		.await
+		.map_err(|error| error.to_string())?;
 	let connection = zbus::Connection::session()
 		.await
 		.map_err(|error| error.to_string())?;
@@ -218,108 +288,41 @@ async fn run_authorization() -> Result<(bool, String), String> {
 		.begin_authorization()
 		.await
 		.map_err(|error| error.to_string())?;
-
-	// Give the daemon's callback listener a chance to bind before opening the browser.
-	tokio::time::sleep(Duration::from_millis(100)).await;
-	tokio::task::spawn_blocking(move || open::that(url))
+	let open_result = tokio::task::spawn_blocking(move || open::that(url))
 		.await
 		.map_err(|error| error.to_string())?
-		.map_err(|error| error.to_string())?;
+		.map_err(|error| error.to_string());
+	if let Err(error) = open_result {
+		let _ = proxy.cancel_authorization().await;
+		return Err(error);
+	}
 
-	for _ in 0..300 {
-		tokio::time::sleep(Duration::from_secs(1)).await;
-		let authenticated = proxy
-			.authenticated()
-			.await
-			.map_err(|error| error.to_string())?;
-		let status = proxy.status().await.map_err(|error| error.to_string())?;
-		if authenticated || status != "Authorizing" {
-			return Ok((authenticated, status));
+	let callback = match tokio::time::timeout(OAUTH_CALLBACK_TIMEOUT, listener.receive()).await {
+		Ok(Ok(callback)) => callback,
+		Ok(Err(error)) => {
+			let _ = proxy.cancel_authorization().await;
+			return Err(error.to_string());
+		}
+		Err(_) => {
+			let _ = proxy.cancel_authorization().await;
+			return Err("Spotify authorization timed out".to_string());
+		}
+	};
+	let result = proxy
+		.complete_authorization(&callback.code, &callback.state)
+		.await;
+	match result {
+		Ok(true) => callback.success().await,
+		Ok(false) => {
+			callback.failure().await;
+			let _ = proxy.cancel_authorization().await;
+			return Err("Spotify did not authenticate the user".to_string());
+		}
+		Err(error) => {
+			callback.failure().await;
+			let _ = proxy.cancel_authorization().await;
+			return Err(error.to_string());
 		}
 	}
-
-	Err("Spotify authorization timed out".to_string())
-}
-
-#[derive(Debug)]
-struct InputCardOptions<'a, D: text::IntoFragment<'a>, F: Fn(String) -> Message + 'a> {
-	background: Color,
-	border: Color,
-	display: D,
-	value: &'a str,
-	placeholder: &'a str,
-	on_input: F,
-}
-
-impl<'a, D: text::IntoFragment<'a>, F: Fn(String) -> Message + 'a> InputCardOptions<'a, D, F> {
-	fn new(value: &'a str, on_input: F) -> InputCardOptions<'a, &'a str, F> {
-		InputCardOptions {
-			background: COLORS.white,
-			border: COLORS.border,
-			display: "Input",
-			value,
-			placeholder: "Enter value",
-			on_input,
-		}
-	}
-
-	fn background(mut self, color: Color) -> Self {
-		self.background = color;
-		self
-	}
-
-	fn border(mut self, color: Color) -> Self {
-		self.border = color;
-		self
-	}
-
-	fn display(mut self, display: D) -> Self {
-		self.display = display;
-		self
-	}
-
-	fn placeholder(mut self, placeholder: &'a str) -> Self {
-		self.placeholder = placeholder;
-		self
-	}
-}
-
-fn input_card<'a>(
-	options: InputCardOptions<'a, impl text::IntoFragment<'a>, impl Fn(String) -> Message + 'a>,
-) -> Element<'a, Message> {
-	neo_card(
-		column![
-			row![
-				text(options.display)
-					.width(Length::Fill)
-					.color(COLORS.text)
-					.size(18)
-					.weight(font::Weight::Bold)
-			]
-			.spacing(8),
-			text_input(options.placeholder, options.value)
-				.on_input(options.on_input)
-				.style(move |_, _status| {
-					text_input::Style {
-						border: Border {
-							width: 2.0,
-							color: options.border,
-							radius: 3.into(),
-							..Default::default()
-						},
-						background: COLORS.white.into(),
-						placeholder: COLORS.text.scale_alpha(0.76),
-						value: COLORS.text,
-						selection: options.background,
-					}
-				})
-				.padding(6)
-		]
-		.spacing(12),
-	)
-	.width(Length::Fill)
-	.height(112)
-	.padding(16)
-	.background(options.background)
-	.into()
+	spotify_status().await
 }

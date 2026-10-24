@@ -14,6 +14,7 @@ use neo_widgets::{
 
 use crate::setting::Tab;
 
+mod oauth;
 mod setting;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

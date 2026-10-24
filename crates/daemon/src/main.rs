@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use config::ConfigFile;
-use daemon::{calendar, nightlight, spotify};
+use daemon::{calendar, homeassistant, nightlight, spotify};
 use daemon_common::DEFAULT_BUS_NAME;
 use futures::{StreamExt, pin_mut};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
@@ -13,15 +13,27 @@ type Error = Box<dyn std::error::Error>;
 async fn main() -> Result<(), Error> {
 	log::init!("daemon", "permafrostd")?;
 
+	rustls::crypto::aws_lc_rs::default_provider()
+		.install_default()
+		.unwrap();
+
 	let (_doc, mut config) = ConfigFile::load()?;
 	let connection = zbus::connection::Builder::session()?
 		.name(DEFAULT_BUS_NAME)?
 		.build()
 		.await?;
 	let db = setup_db().await?;
+	let spotify = spotify::SpotifyDbus::register(connection.clone(), config.spotify.clone())
+		.await
+		.map_err(|error| std::io::Error::other(error.to_string()))?;
+	let homeassistant = homeassistant::HomeassistantService::register(
+		connection.clone(),
+		config.homeassistant.clone(),
+	)
+	.await
+	.map_err(|error| std::io::Error::other(error.to_string()))?;
 	let (shutdown_tx, _) = watch::channel(false);
 	let (nightlight_config_tx, _) = watch::channel(config.nightlight.clone());
-	let (spotify_config_tx, _) = watch::channel(config.spotify.clone());
 	let mut nightlight_supervisor = Box::pin(supervise_nightlight(
 		connection.clone(),
 		nightlight_config_tx.subscribe(),
@@ -30,11 +42,6 @@ async fn main() -> Result<(), Error> {
 	let mut calendar_supervisor = Box::pin(supervise_calendar(
 		connection.clone(),
 		db.clone(),
-		shutdown_tx.subscribe(),
-	));
-	let mut spotify_supervisor = Box::pin(supervise_spotify(
-		connection.clone(),
-		spotify_config_tx.subscribe(),
 		shutdown_tx.subscribe(),
 	));
 	let mut shutdown_signal = Box::pin(wait_for_shutdown_signal());
@@ -61,13 +68,6 @@ async fn main() -> Result<(), Error> {
 						log::error!("Calendar supervisor stopped; restarting it");
 						calendar_supervisor = Box::pin(supervise_calendar(
 							connection.clone(), db.clone(), shutdown_tx.subscribe()
-						));
-						continue;
-					}
-					() = &mut spotify_supervisor => {
-						log::error!("Spotify supervisor stopped; restarting it");
-						spotify_supervisor = Box::pin(supervise_spotify(
-							connection.clone(), spotify_config_tx.subscribe(), shutdown_tx.subscribe()
 						));
 						continue;
 					}
@@ -99,7 +99,10 @@ async fn main() -> Result<(), Error> {
 								let _ = nightlight_config_tx.send(new_config.nightlight.clone());
 							}
 							if new_config.spotify != config.spotify {
-								let _ = spotify_config_tx.send(new_config.spotify.clone());
+								spotify.reconfigure(new_config.spotify.clone()).await;
+							}
+							if new_config.homeassistant != config.homeassistant {
+								homeassistant.reconfigure(new_config.homeassistant.clone()).await;
 							}
 							config = new_config;
 						}
@@ -118,22 +121,14 @@ async fn main() -> Result<(), Error> {
 						connection.clone(), db.clone(), shutdown_tx.subscribe()
 					));
 				}
-				() = &mut spotify_supervisor => {
-					log::error!("Spotify supervisor stopped; restarting it");
-					spotify_supervisor = Box::pin(supervise_spotify(
-						connection.clone(), spotify_config_tx.subscribe(), shutdown_tx.subscribe()
-					));
-				}
 			}
 		}
 	}
 
 	let _ = shutdown_tx.send(true);
-	tokio::join!(
-		nightlight_supervisor,
-		calendar_supervisor,
-		spotify_supervisor
-	);
+	tokio::join!(nightlight_supervisor, calendar_supervisor);
+	spotify.unregister().await?;
+	homeassistant.unregister().await?;
 	db.close().await?;
 
 	Ok(())
@@ -228,30 +223,6 @@ async fn supervise_calendar(
 			}
 		}
 
-		tokio::select! {
-			() = tokio::time::sleep(backoff) => {}
-			changed = shutdown.changed() => {
-				if changed.is_err() || *shutdown.borrow_and_update() {
-					return;
-				}
-			}
-		}
-		backoff = (backoff * 2).min(Duration::from_secs(30));
-	}
-}
-
-async fn supervise_spotify(
-	connection: zbus::Connection, config: watch::Receiver<config::Spotify>,
-	mut shutdown: watch::Receiver<bool>,
-) {
-	let mut backoff = Duration::from_secs(1);
-	while !*shutdown.borrow() {
-		let result = spotify::run(connection.clone(), config.clone(), shutdown.clone()).await;
-		if *shutdown.borrow() {
-			log_service_cleanup("Spotify", result);
-			return;
-		}
-		log_service_result("Spotify", result);
 		tokio::select! {
 			() = tokio::time::sleep(backoff) => {}
 			changed = shutdown.changed() => {

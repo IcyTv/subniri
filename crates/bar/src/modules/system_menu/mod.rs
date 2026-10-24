@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{collections::HashMap, time::Duration};
 
 use config::{ConfigFile, SystemMenuWidgets};
 use daemon_common::NightlightProxy;
@@ -18,12 +18,13 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
-use strum::VariantArray;
 use zbus::Connection;
 
+use self::homeassistant::HomeassistantEntity;
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
 mod bluetooth;
+mod homeassistant;
 mod nightlight;
 mod wifi;
 
@@ -34,11 +35,11 @@ pub enum Message {
 	Wifi(wifi::Message),
 	Bluetooth(bluetooth::Message),
 	Nightlight(nightlight::Message),
+	HomeassistantEntity(String, homeassistant::Message),
 
 	OpenPowerMenu,
 	OpenSettings,
 
-	NightlightEnabled(bool),
 	BrightnessChanged(f64),
 	TemperatureChanged(u32),
 
@@ -78,9 +79,12 @@ pub struct SystemMenu {
 	avatar: image::Handle,
 	uptime: jiff::Span,
 
+	all_widgets: Vec<SystemMenuWidgets>,
+
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight: Box<nightlight::Nightlight>,
+	homeassistant_entities: HashMap<String, HomeassistantEntity>,
 
 	context_menus: Vec<ContextMenu>,
 
@@ -98,15 +102,57 @@ impl SystemMenu {
 		);
 		let uptime = uptime().unwrap_or_default();
 
+		let mut all_widgets = SystemMenuWidgets::VARIANTS.to_vec();
+
+		// TODO: This can be done more efficiently...
+		let widgets = config.system_menu.widgets.clone();
+		all_widgets.sort_by(|a, b| {
+			let a_index = widgets.iter().position(|w| w == a);
+			let b_index = widgets.iter().position(|w| w == b);
+
+			if let Some(a_index) = a_index {
+				if let Some(b_index) = b_index {
+					a_index.cmp(&b_index)
+				} else {
+					std::cmp::Ordering::Less
+				}
+			} else if b_index.is_some() {
+				std::cmp::Ordering::Greater
+			} else {
+				std::cmp::Ordering::Equal
+			}
+		});
+
+		// FIXME: Don't block!!!
+		let connection =
+			futures::executor::block_on(async { zbus::Connection::session().await }).unwrap();
+
+		let homeassistant_entities = widgets
+			.iter()
+			.filter_map(|v| match v {
+				SystemMenuWidgets::Homeassistant(id) => Some(id),
+				_ => None,
+			})
+			.map(|id| {
+				(
+					id.clone(),
+					HomeassistantEntity::new(connection.clone(), id.clone()),
+				)
+			})
+			.collect();
+
 		Self {
-			widgets: config.system_menu.widgets.clone(),
+			widgets,
 			username,
 			avatar,
 			uptime,
 
+			all_widgets,
+
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
 			nightlight: Box::new(nightlight::Nightlight::new(config)),
+			homeassistant_entities,
 
 			context_menus: Vec::new(),
 
@@ -121,8 +167,8 @@ impl SystemMenu {
 		])
 	}
 
-	pub fn subscription() -> Subscription<Message> {
-		Subscription::batch([
+	pub fn subscription(&self) -> Subscription<Message> {
+		let mut subs = vec![
 			iced::time::repeat(
 				|| async move {
 					if let Ok(uptime) = uptime() {
@@ -136,15 +182,24 @@ impl SystemMenu {
 			wifi::Wifi::subscription().map(Message::Wifi),
 			bluetooth::Bluetooth::subscription().map(Message::Bluetooth),
 			nightlight::Nightlight::subscription().map(Message::Nightlight),
-		])
+		];
+
+		for (id, entity) in &self.homeassistant_entities {
+			subs.push(
+				entity
+					.subscription()
+					.with(id.clone())
+					.map(move |(id, msg)| Message::HomeassistantEntity(id, msg)),
+			);
+		}
+
+		Subscription::batch(subs)
 	}
 
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		if matches!(
 			message,
-			Message::NightlightEnabled(_)
-				| Message::TemperatureChanged(_)
-				| Message::BrightnessChanged(_)
+			Message::TemperatureChanged(_) | Message::BrightnessChanged(_)
 		) {
 			log::trace!("{message:?}");
 		}
@@ -159,9 +214,6 @@ impl SystemMenu {
 				return self.nightlight.update(message).map(Message::Nightlight);
 			}
 
-			Message::NightlightEnabled(enabled) => {
-				self.nightlight.enabled.go_mut(enabled, Instant::now())
-			}
 			Message::TemperatureChanged(temp) => self.nightlight.temperature = temp,
 			Message::BrightnessChanged(brightness) => self.nightlight.brightness = brightness,
 
@@ -196,7 +248,18 @@ impl SystemMenu {
 			Message::EditingChanged(editing) => self.editing = editing,
 			Message::AddWidget(widget) => self.widgets.push(widget),
 			Message::RemoveWidget(widget) => self.widgets.retain(|w| *w != widget),
-			_ => (),
+			Message::HomeassistantEntity(id, message)
+				if let Some(entity) = self.homeassistant_entities.get_mut(&id) =>
+			{
+				entity.update(message)
+			}
+			Message::HomeassistantEntity(id, _) => {
+				log::warn!("Tried to address non-existant homeassistant entity: '{id}'");
+			}
+			Message::Noop
+			| Message::OpenSettings
+			| Message::OpenPowerMenu
+			| Message::OpenContextMenu(_, _, _) => (),
 		}
 
 		Task::none()
@@ -312,33 +375,13 @@ impl SystemMenu {
 
 		if !self.editing {
 			for widget in &self.widgets {
-				let widget = self.view_widget(*widget);
+				let widget = self.view_widget(widget);
 				grid = grid.push(widget);
 			}
 		} else {
-			let mut all = SystemMenuWidgets::VARIANTS.to_vec();
-
-			// TODO: This can be done more efficiently...
-			all.sort_by(|a, b| {
-				let a_index = self.widgets.iter().position(|w| w == a);
-				let b_index = self.widgets.iter().position(|w| w == b);
-
-				if let Some(a_index) = a_index {
-					if let Some(b_index) = b_index {
-						a_index.cmp(&b_index)
-					} else {
-						std::cmp::Ordering::Less
-					}
-				} else if b_index.is_some() {
-					std::cmp::Ordering::Greater
-				} else {
-					std::cmp::Ordering::Equal
-				}
-			});
-
-			for widget in all {
+			for widget in &self.all_widgets {
 				let is_addable = !self.widgets.contains(&widget);
-				let widget = self.view_editable_widget(widget, is_addable);
+				let widget = self.view_editable_widget(&widget, is_addable);
 				grid = grid.push(widget);
 			}
 		}
@@ -385,7 +428,7 @@ impl SystemMenu {
 		self.context_menus.push(menu);
 	}
 
-	fn view_widget(&self, widget: SystemMenuWidgets) -> Element<'_, Message> {
+	fn view_widget<'a>(&'a self, widget: &'a SystemMenuWidgets) -> Element<'a, Message> {
 		match widget {
 			SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
 			SystemMenuWidgets::Bluetooth => self.bluetooth.view().map(Message::Bluetooth),
@@ -421,15 +464,33 @@ impl SystemMenu {
 						Rectangle::new(position, iced::Size::new(1.0, 1.0)),
 					)
 				}),
+			SystemMenuWidgets::Homeassistant(id) => {
+				self.homeassistant_entities.get(id).map_or_else(
+					|| {
+						neo_toggle_button(
+							phosphor_icon!("house"),
+							"Unknown Entity",
+							id,
+							false,
+							None,
+						)
+						.enabled(false)
+					},
+					|e| {
+						e.view()
+							.map(|msg| Message::HomeassistantEntity(id.clone(), msg))
+					},
+				)
+			}
 		}
 		.width(Length::Fill)
 		.height(64)
 		.into()
 	}
 
-	fn view_editable_widget(
-		&self, widget: SystemMenuWidgets, is_addable: bool,
-	) -> Element<'_, Message> {
+	fn view_editable_widget<'a>(
+		&'a self, widget: &'a SystemMenuWidgets, is_addable: bool,
+	) -> Element<'a, Message> {
 		// TODO: Disable the interaction on editing. Maybe I don't have to keep a state there, and
 		// I can just use a capturing mouse_area?
 		let content = container(self.view_widget(widget)).padding(Padding {
@@ -450,9 +511,9 @@ impl SystemMenu {
 			.width(20)
 			.height(20)
 			.on_press(if is_addable {
-				Message::AddWidget(widget)
+				Message::AddWidget(widget.clone())
 			} else {
-				Message::RemoveWidget(widget)
+				Message::RemoveWidget(widget.clone())
 			}),
 		)
 		.align_right(Length::Fill)

@@ -1,0 +1,115 @@
+homeassistant {
+    enabled #true
+    url "https://assistant.icytv.de/"
+    // A list of device id's that you want to be able to control from subniri. If you go to the
+    // settings (`snowconf`), you'll be able to add all devices. But be aware, that this might
+    // require more resources from your system.
+    tracked_devices {
+        - script.1714814456677
+        - light.living_room_lamp
+        - light.bedroom_lamp
+    }
+}
+// Configuration for controlling the behavior of the nightlight.
+// Temperature controls the color temperature (like with a light bulb) in [K]elvin. Lower means
+// more red.
+// Brightness controls the brighness of the screen. You probably won't want to go below ~0.2,
+// because it becomes very hard to see.
+nightlight {
+    // If the nightlight integration should be enabled.
+    enabled #false
+    // Whether you want to use a location provider (geoclue2) and a weather API to determine the dawn
+    // and dusk times based of the real times that the sun sets.
+    // This setting can't be combined with manually setting `dawn` or `dusk`
+    use_location #false
+    // Time (usually in the morning), when the nightlight should change to the `day` settings.
+    // The format can be anything close to `"HH:MM"`
+    dawn "07:00"
+    // Time (usually in the evening), when the nightlight should change to the `night` settings.
+    // The format can be anything close to `"HH:MM"`
+    dusk "20:00"
+    // Settings for daytime (after dawn, before dusk)
+    day {
+        // Temperature of the light in [K]elvin. Basically the lower the number, the redder the light.
+        // Normal daytime temperature is 6500.
+        // Range [1000-10000]
+        temperature 6500
+        // Brightness of the light.
+        // Range [0.1-1.0]
+        brightness 1.0
+    }
+    // Settings for night time (after dusk, before dawn)
+    night {
+        // Temperature of the light in [K]elvin. Basically the lower the number, the redder the light.
+        // Normal daytime temperature is 6500.
+        // Range [1000-10000]
+        temperature 2500
+        // Brightness of the light.
+        // Range [0.1-1.0]
+        brightness 0.7
+    }
+    // Debounce delay for applying gamma table changes, in milliseconds.
+    // This prevents rapid slider updates from overwhelming the compositor.
+    debounce_ms 500
+}
+// Settings for controlling Spotify.
+// Enabling this will let you do things, like adding a song to your library from the bar, at
+// the cost of some networking overhead.
+// To connect to spotify, you'll need a client id and a client secret by creating an
+// application at <https://developer.spotify.com/dashboard> and setting the client id and
+// client secret in the settings (Or manually adding them to the key store). Then you need to
+// log in to your Spotify account.
+// As far as I undertand, this will only work using a Spotify Premium account.
+// Connection details and secrets are stored in your system's secret store.
+spotify {
+    // Whether to enable the spotify integration or not.
+    enabled #false
+    // The client ID of the user's Spotify application.
+    client_id ""
+    // How often to check observed tracks for library changes, in seconds. Values below 15 seconds
+    // increase API usage and may trigger Spotify's rolling 30-second rate limit.
+    poll_interval_seconds 15
+}
+// Settings for controlling the System Menu (the bar module with the four squares)
+system_menu {
+    // Widgets to be displayed in the system menu. These put into 2 columns by the order they
+    // appear in this list.
+    // So: `a b c d`
+    // Turns into:
+    // `a b`
+    // `c d`
+    widgets {
+        - wifi
+        - bluetooth
+        - light.bedroom_lamp
+        - script.1714814456677
+    }
+}
+// Settings for controlling the launcher
+launcher {
+    // Providers to activate for the launcher. Their results will show up as entries in the
+    // launcher.
+    providers calculator applications files
+    // Settings for typo-tolerant launcher search.
+    fuzzy_search {
+        // Minimum query length before typo matching is enabled.
+        min_chars 3
+        // Query length where the short-query typo distance applies.
+        short_query_chars 4
+        // Maximum edit distance for short typo queries.
+        short_max_distance 1
+        // Query length where the medium-query typo distance applies.
+        medium_query_chars 7
+        // Maximum edit distance for medium typo queries.
+        medium_max_distance 2
+        // Maximum edit distance for long typo queries.
+        long_max_distance 3
+    }
+}
+// Settings for controlling file indexing.
+// File indexing builds a database of files, projects, etc. on your system, which allows for
+// quick lookup of items in that database, for example from the launcher, at the cost of some
+// background resources.
+indexing {
+    enabled #true
+}

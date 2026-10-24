@@ -19,6 +19,9 @@ daemon-common = { path = "./crates/daemon-common" }
 float-ord = "0.3.2"
 freedesktop-desktop-entry = "0.8.1"
 futures = "0.3.32"
+hass-rs = { git = "https://github.com/IcyTv/hass-rs", branch = "master", features = [
+  "rustls",
+] }
 iced = { features = [
   "advanced",
   "crisp",
@@ -66,13 +69,13 @@ tokio = { version = "1.52.3", features = ["full"] }
 url = "2.5.8"
 utilities = { path = "crates/utilities" }
 wayland-client = "0.31.14"
-zbus = { git = "https://github.com/IcyTv/zbus", rev = "6bad131", features = [
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9", features = [
   "tokio",
   "chrono",
   "uuid",
 ] }
-zbus_xml = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }
-zvariant = { git = "https://github.com/IcyTv/zbus", rev = "6bad131", features = [
+zbus_xml = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9", features = [
   "chrono",
   "uuid",
 ] }
@@ -97,5 +100,5 @@ unimplemented = "deny"
 
 [patch.crates-io]
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }
-zbus = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }
-zvariant = { git = "https://github.com/IcyTv/zbus", rev = "6bad131" }
+zbus = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9" }
+zvariant = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9" }

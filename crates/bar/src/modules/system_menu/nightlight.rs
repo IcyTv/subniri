@@ -313,7 +313,7 @@ async fn set_enabled(enabled: bool) -> zbus::Result<()> {
 	proxy.set_enabled(enabled).await
 }
 
-async fn suspend(duration_secs: u64) -> zbus::Result<()> {
+async fn suspend(duration_secs: u64) -> zbus::fdo::Result<()> {
 	let connection = zbus::Connection::session().await?;
 	let proxy = NightlightProxy::new(&connection).await?;
 	proxy.suspend(duration_secs).await

@@ -11,19 +11,27 @@ pub const FILE_INDEXER_PATH: ObjectPath =
 pub const NIX_INDEXER_PATH: ObjectPath =
 	ObjectPath::from_static_str_checked("/de/icytv/subniri/NixIndexer");
 
-pub const INDEXER_SEARCH: &str = "Search";
-
-#[zbus::proxy(
-	interface = INDEXER_INTERFACE,
-	default_service = INDEXER_BUS_NAME,
-	default_path = FILE_INDEXER_PATH,
+#[zbus::interface(
+	name = "de.icytv.subniri.Indexer",
+	proxy(
+		default_service = "de.icytv.subniri.Indexer",
+		default_path = "/de/icytv/subniri/Indexer",
+		gen_blocking = false,
+		visibility = "pub"
+	)
 )]
 pub trait Indexer {
-	#[zbus(name = "Search")]
-	async fn search(&self, query: &str, limit: u32) -> zbus::Result<Vec<Item>>;
+	#[zbus(property)]
+	fn enbabled(&self) -> bool;
+
+	#[zbus(property)]
+	fn status(&self) -> IndexerStatus;
+
+	async fn search(&self, query: &str, limit: u32) -> zbus::fdo::Result<Vec<Item>>;
+	fn rescan(&mut self) -> zbus::fdo::Result<()>;
 }
 
-#[derive(Debug, serde::Deserialize, zvariant::Type)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, zvariant::Type)]
 pub struct Item {
 	pub path: String,
 	pub parent: String,
@@ -32,14 +40,42 @@ pub struct Item {
 	pub size: u64,
 }
 
-#[zbus::proxy(
-	interface = INDEXER_INTERFACE,
-	default_service = INDEXER_BUS_NAME,
-	default_path = NIX_INDEXER_PATH
+#[zbus::interface(
+	name = "de.icytv.subniri.Indexer",
+	proxy(
+		default_service = "de.icytv.subniri.Indexer",
+		default_path = "/de/icytv/subniri/NixIndexer",
+		gen_blocking = false,
+		visibility = "pub"
+	)
 )]
 pub trait NixIndexer {
-	#[zbus(name = "Search")]
-	async fn search(&self, query: &str, limit: u32) -> zbus::Result<Vec<Package>>;
+	#[zbus(property)]
+	fn enabled(&self) -> bool;
+
+	#[zbus(property)]
+	fn status(&self) -> IndexerStatus;
+
+	async fn search(&self, query: &str, limit: u32) -> zbus::fdo::Result<Vec<Package>>;
+	async fn rescan(&mut self) -> zbus::fdo::Result<()>;
+}
+
+#[derive(
+	Clone,
+	Copy,
+	Debug,
+	PartialEq,
+	serde::Serialize,
+	serde::Deserialize,
+	zvariant::Type,
+	zvariant::Value,
+	zvariant::OwnedValue,
+)]
+#[repr(u8)]
+pub enum IndexerStatus {
+	Idle = 0,
+	Indexing,
+	Disabled,
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize, zvariant::Type)]

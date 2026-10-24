@@ -292,13 +292,20 @@ impl ConfigFile {
 			declarative.spotify.client_id.as_str(),
 			nix_string,
 		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.spotify.pollIntervalSeconds",
+			self.spotify.poll_interval_seconds,
+			declarative.spotify.poll_interval_seconds,
+			|value| value.to_string(),
+		);
 
 		nix_assignment(
 			&mut out,
 			"services.subniri.settings.systemMenu.widgets",
 			&self.system_menu.widgets,
 			&declarative.system_menu.widgets,
-			|widgets| nix_list(widgets.iter().copied().map(system_menu_widget_name)),
+			|widgets| nix_list(widgets.iter().map(system_menu_widget_name)),
 		);
 		nix_assignment(
 			&mut out,
@@ -432,7 +439,7 @@ fn nix_list<'a>(values: impl IntoIterator<Item = &'a str>) -> String {
 	)
 }
 
-const fn system_menu_widget_name(widget: SystemMenuWidgets) -> &'static str {
+fn system_menu_widget_name<'a>(widget: &'a SystemMenuWidgets) -> &'a str {
 	match widget {
 		SystemMenuWidgets::Wifi => "wifi",
 		SystemMenuWidgets::Bluetooth => "bluetooth",
@@ -440,6 +447,7 @@ const fn system_menu_widget_name(widget: SystemMenuWidgets) -> &'static str {
 		SystemMenuWidgets::Microphone => "microphone",
 		SystemMenuWidgets::Vpn => "vpn",
 		SystemMenuWidgets::Nightlight => "nightlight",
+		SystemMenuWidgets::Homeassistant(entity_id) => entity_id,
 	}
 }
 
@@ -721,29 +729,45 @@ impl NightlightSetting {
 #[garde(allow_unvalidated)]
 pub struct Homeassistant {
 	/// Should the homeassistant integration be enabled? If it's disabled, you won't be able to
-	/// control your homeassistant-controlled devices from subniri.
+	/// control Home Assistant entities from subniri.
 	pub enabled: bool,
 	/// The url of your homeassistant instance.
 	/// Format "<http://homeassistant.local:8123>"
 	pub url: Option<url::Url>,
-	/// A list of device id's that you want to be able to control from subniri. If you go to the
-	/// settings (`snowconf`), you'll be able to add all devices. But be aware, that this might
-	/// require more resources from your system.
+	/// A list of entity IDs whose updates should remain active without a D-Bus observer. The legacy
+	/// `tracked_devices` key is retained so existing configuration files continue to load.
 	#[config(list_style = children)]
 	pub tracked_devices: Vec<String>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 pub struct Spotify {
 	/// Whether to enable the spotify integration or not.
+	#[garde(skip)]
 	pub enabled: bool,
 	/// The client ID of the user's Spotify application.
 	#[config(default)]
+	#[garde(skip)]
 	pub client_id: String,
+	/// How often to check observed tracks for library changes, in seconds. Values below 15 seconds
+	/// increase API usage and may trigger Spotify's rolling 30-second rate limit.
+	#[config(default = 15)]
+	#[garde(range(min = 5, max = 3600))]
+	pub poll_interval_seconds: u64,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Config, strum::VariantArray)]
+impl Default for Spotify {
+	fn default() -> Self {
+		Self {
+			enabled: false,
+			client_id: String::new(),
+			poll_interval_seconds: 15,
+		}
+	}
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Config, strum::EnumDiscriminants)]
+#[strum_discriminants(derive(strum::VariantArray))]
 pub enum SystemMenuWidgets {
 	Wifi,
 	Bluetooth,
@@ -751,6 +775,19 @@ pub enum SystemMenuWidgets {
 	Microphone,
 	Vpn,
 	Nightlight,
+	#[config(other)]
+	Homeassistant(String),
+}
+
+impl SystemMenuWidgets {
+	pub const VARIANTS: &'static [Self] = &[
+		Self::Wifi,
+		Self::Bluetooth,
+		Self::Speaker,
+		Self::Microphone,
+		Self::Vpn,
+		Self::Nightlight,
+	];
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
@@ -928,6 +965,7 @@ mod tests {
 		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
 		let _environment = TestEnvironment::new("lifecycle");
 		let (mut doc, mut config) = ConfigFile::load_declarative().unwrap();
+		assert_eq!(config.spotify.poll_interval_seconds, 15);
 
 		config.spotify.client_id = "0123456789abcdef0123456789abcdef".to_string();
 		config.write(&mut doc).unwrap();
@@ -962,17 +1000,35 @@ mod tests {
 	}
 
 	#[test]
+	fn spotify_poll_interval_defaults_and_validates() {
+		let mut spotify = Spotify::default();
+		assert_eq!(spotify.poll_interval_seconds, 15);
+		assert!(spotify.validate().is_ok());
+
+		spotify.poll_interval_seconds = 4;
+		assert!(spotify.validate().is_err());
+		spotify.poll_interval_seconds = 5;
+		assert!(spotify.validate().is_ok());
+		spotify.poll_interval_seconds = 3600;
+		assert!(spotify.validate().is_ok());
+		spotify.poll_interval_seconds = 3601;
+		assert!(spotify.validate().is_err());
+	}
+
+	#[test]
 	fn nix_diff_contains_only_changed_assignments() {
 		let base = ConfigFile::default();
 		let mut effective = base.clone();
 		effective.spotify.enabled = true;
 		effective.spotify.client_id = "client\"${id}".to_string();
+		effective.spotify.poll_interval_seconds = 30;
 
 		assert_eq!(
 			effective.nix_diff(&base),
 			concat!(
 				"services.subniri.settings.spotify.enable = true;\n",
 				"services.subniri.settings.spotify.clientId = \"client\\\"\\${id}\";\n",
+				"services.subniri.settings.spotify.pollIntervalSeconds = 30;\n",
 			)
 		);
 	}
