@@ -1,4 +1,6 @@
-use std::{pin::pin, time::Instant};
+use std::time::{Duration, Instant};
+
+use futures::StreamExt;
 
 use iced::{Animation, Length, Subscription, Task};
 use neo_widgets::{
@@ -10,10 +12,13 @@ use nmrs::{DeviceState, NetworkManager};
 
 #[derive(Debug, Clone)]
 pub enum Message {
-	AsyncDataLoaded(Option<AsyncData>),
+	AsyncDataLoaded(Result<AsyncData, String>),
 	StateChanged(WifiState),
 	Toggle,
-	Toggled(WifiState),
+	Toggled {
+		revision: u64,
+		result: Result<WifiState, String>,
+	},
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +48,9 @@ pub struct Wifi {
 	active_connection: Option<WifiConnection>,
 	extra_active_connections: usize,
 	wired_connected: bool,
+	revision: u64,
+	pending: Option<u64>,
+	error: Option<String>,
 }
 
 impl Wifi {
@@ -53,73 +61,32 @@ impl Wifi {
 			active_connection: None,
 			extra_active_connections: 0,
 			wired_connected: false,
+			revision: 0,
+			pending: None,
+			error: None,
 		}
-	}
-
-	pub fn init(&self) -> Task<Message> {
-		let _ = self;
-		Task::perform(load_data(), Message::AsyncDataLoaded)
 	}
 
 	pub fn subscription() -> Subscription<Message> {
 		Subscription::run(|| {
 			async_stream::stream! {
-				let nm = match NetworkManager::new().await {
-					Ok(nm) => nm,
-					Err(error) => {
-						log::warn!("Failed to connect to NetworkManager for Wi-Fi monitoring: {error}");
-						return;
-					}
-				};
-
-				let (tx, rx) = async_channel::unbounded::<()>();
-				let device_tx = tx.clone();
-				let device_monitor_nm = nm.clone();
-				let device_monitor = device_monitor_nm.monitor_device_changes(move || {
-					let _ = device_tx.try_send(());
-				});
-				let mut device_monitor = pin!(device_monitor);
-				let network_monitor_nm = nm.clone();
-				let network_monitor = network_monitor_nm.monitor_network_changes(move || {
-					let _ = tx.try_send(());
-				});
-				let mut network_monitor = pin!(network_monitor);
-				let mut device_monitor_running = true;
-				let mut network_monitor_running = true;
-
+				let mut backoff = Duration::from_secs(1);
 				loop {
-					tokio::select! {
-						result = &mut device_monitor, if device_monitor_running => {
-							if let Err(error) = result {
-								log::warn!("Wi-Fi device monitor disconnected: {error}");
+					let mut events = Box::pin(state_events());
+					let error = loop {
+						match events.next().await {
+							Some(Ok(message)) => {
+								backoff = Duration::from_secs(1);
+								yield message;
 							}
-
-							device_monitor_running = false;
-							if !network_monitor_running {
-								break;
-							}
+							Some(Err(error)) => break error,
+							None => break "Wi-Fi monitor stopped".to_string(),
 						}
-						result = &mut network_monitor, if network_monitor_running => {
-							if let Err(error) = result {
-								log::warn!("Wi-Fi network monitor disconnected: {error}");
-							}
-
-							network_monitor_running = false;
-							if !device_monitor_running {
-								break;
-							}
-						}
-						event = rx.recv() => {
-							if event.is_err() {
-								break;
-							}
-
-							match load_state(&nm).await {
-								Ok(state) => yield Message::StateChanged(state),
-								Err(error) => log::warn!("Failed to refresh Wi-Fi state: {error}"),
-							}
-						}
-					}
+					};
+					drop(events); // Drop both nmrs MonitorHandles before reconnecting.
+					yield Message::AsyncDataLoaded(Err(error));
+					tokio::time::sleep(backoff).await;
+					backoff = (backoff * 2).min(Duration::from_secs(30));
 				}
 			}
 		})
@@ -127,45 +94,56 @@ impl Wifi {
 
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
-			Message::AsyncDataLoaded(Some(data)) => {
+			Message::AsyncDataLoaded(Ok(data)) => {
 				self.set_state(data.state.clone());
+				self.pending = None;
 				self.async_data = Some(data);
 			}
-			Message::Toggle if let Some(data) = &self.async_data => {
+			Message::AsyncDataLoaded(Err(error)) => {
+				log::warn!("Wi-Fi unavailable: {error}");
+				self.async_data = None;
+				self.pending = None;
+				self.revision = self.revision.wrapping_add(1);
+				self.error = Some(error);
+			}
+			Message::Toggle
+				if self.pending.is_none()
+					&& let Some(data) = &self.async_data =>
+			{
 				let nm = data.nm.clone();
+				self.revision = self.revision.wrapping_add(1);
+				let revision = self.revision;
+				self.pending = Some(revision);
 				return Task::perform(
-					async move {
-						let radios = match nm.airplane_mode_state().await {
-							Ok(radios) => radios,
-							Err(error) => {
-								log::warn!("Failed to read NetworkManager radio state: {error}");
-								return WifiState::default();
-							}
-						};
-						let enabled = !radios.wifi.enabled;
-						if let Err(error) = nm.set_wireless_enabled(enabled).await {
-							log::warn!("Failed to set Wi-Fi enabled state: {error}");
-							return WifiState {
-								enabled: radios.wifi.enabled,
-								..Default::default()
-							};
-						}
-						load_state(&nm).await.unwrap_or_else(|_| WifiState {
-							enabled,
-							..Default::default()
-						})
-					},
-					Message::Toggled,
+					request(async move {
+						let radios = nm.airplane_mode_state().await?;
+						nm.set_wireless_enabled(!radios.wifi.enabled).await?;
+						load_state(&nm).await
+					}),
+					move |result| Message::Toggled { revision, result },
 				);
 			}
-			Message::Toggled(state) | Message::StateChanged(state) => self.set_state(state),
-			Message::AsyncDataLoaded(None) | Message::Toggle => (),
+			Message::Toggled { revision, result } if self.pending == Some(revision) => {
+				self.pending = None;
+				match result {
+					Ok(state) if self.revision == revision => self.set_state(state),
+					Ok(_) => (),
+					Err(error) => {
+						log::warn!("Failed to toggle Wi-Fi: {error}");
+						self.error = Some(error);
+					}
+				}
+			}
+			Message::StateChanged(state) => self.set_state(state),
+			_ => (),
 		}
 
 		Task::none()
 	}
 
 	fn set_state(&mut self, state: WifiState) {
+		self.revision = self.revision.wrapping_add(1);
+		self.error = None;
 		self.enabled.go_mut(state.enabled, Instant::now());
 		self.active_connection = state.active_connection;
 		self.extra_active_connections = state.extra_active_connections;
@@ -189,12 +167,19 @@ impl Wifi {
 		)
 		.background(background)
 		.on_press(Message::Toggle)
+		.enabled(self.async_data.is_some() && self.pending.is_none())
 		.width(Length::Fill)
 		.height(64)
 	}
 
 	fn subtitle(&self) -> String {
-		if let Some(connection) = &self.active_connection {
+		if self.async_data.is_none() {
+			"Unavailable · retrying".to_string()
+		} else if self.pending.is_some() {
+			"Updating…".to_string()
+		} else if self.error.is_some() {
+			"Update failed".to_string()
+		} else if let Some(connection) = &self.active_connection {
 			let strength = connection
 				.strength
 				.map_or_else(|| "-- %".to_string(), |strength| format!("{strength}%"));
@@ -217,29 +202,49 @@ impl Wifi {
 	}
 }
 
-async fn load_data() -> Option<AsyncData> {
-	let nm = match NetworkManager::new().await {
-		Ok(nm) => nm,
-		Err(error) => {
-			log::warn!("Failed to connect to NetworkManager: {error}");
-			return None;
+async fn request<T, E: std::fmt::Display>(
+	future: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+	tokio::time::timeout(Duration::from_secs(5), future)
+		.await
+		.map_err(|_| "Wi-Fi request timed out".to_string())?
+		.map_err(|error| error.to_string())
+}
+
+fn state_events() -> impl futures::Stream<Item = Result<Message, String>> {
+	async_stream::try_stream! {
+		let nm = request(NetworkManager::new()).await?;
+		let (tx, rx) = async_channel::bounded::<()>(1);
+		let device_tx = tx.clone();
+		// These methods return handles after setup, not long-running futures.
+		// Keep the handles alive; dropping them immediately stops monitoring.
+		let _monitors = request(async {
+			let devices = nm.monitor_device_changes(move || { let _ = device_tx.try_send(()); }).await?;
+			let networks = nm.monitor_network_changes(move || { let _ = tx.try_send(()); }).await?;
+			Ok::<_, nmrs::ConnectionError>((devices, networks))
+		}).await?;
+		let state = request(load_state(&nm)).await?;
+		yield Message::AsyncDataLoaded(Ok(AsyncData { nm: nm.clone(), state }));
+		let mut refresh = tokio::time::interval(Duration::from_secs(5));
+		refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+		refresh.tick().await;
+		loop {
+			let event = tokio::select! {
+				() = nm.dbus_connection().closed() => Err("Wi-Fi D-Bus connection closed".to_string()),
+				event = rx.recv() => event.map_err(|_| "Wi-Fi monitors stopped".to_string()),
+				_ = refresh.tick() => Ok(()),
+			};
+			event?;
+			yield Message::StateChanged(request(load_state(&nm)).await?);
 		}
-	};
-
-	let state = load_state(&nm).await.unwrap_or_default();
-
-	log::trace!("Wifi enabled: {}", state.enabled);
-
-	Some(AsyncData { nm, state })
+	}
 }
 
 async fn load_state(nm: &NetworkManager) -> nmrs::Result<WifiState> {
 	let enabled = nm.airplane_mode_state().await?.wifi.enabled;
 	let mut active_networks = nm
 		.list_networks(None)
-		.await
-		.inspect_err(|error| log::warn!("Failed to list Wi-Fi networks: {error}"))
-		.unwrap_or_default()
+		.await?
 		.into_iter()
 		.filter(|network| network.is_active)
 		.collect::<Vec<_>>();
@@ -263,4 +268,129 @@ async fn load_state(nm: &NetworkManager) -> nmrs::Result<WifiState> {
 		extra_active_connections,
 		wired_connected,
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::modules::test_bus;
+	use futures::StreamExt;
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn missing_networkmanager_is_reported() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::system_menu::wifi::tests::missing_service_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn missing_service_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let recipe = iced::advanced::subscription::into_recipes(Wifi::subscription())
+			.into_iter()
+			.next()
+			.ok_or("missing subscription")?;
+		let mut stream = recipe.stream(futures::stream::pending().boxed());
+		let message =
+			tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await?;
+		assert!(
+			matches!(message, Some(Message::AsyncDataLoaded(Err(_)))),
+			"Wi-Fi monitor must report service failure instead of silently ending"
+		);
+		Ok(())
+	}
+
+	#[test]
+	fn newer_observation_wins_over_delayed_toggle() {
+		let mut wifi = Wifi::new();
+		wifi.revision = 3;
+		wifi.pending = Some(3);
+		let _ = wifi.update(Message::StateChanged(WifiState::default()));
+		let _ = wifi.update(Message::Toggled {
+			revision: 3,
+			result: Ok(WifiState {
+				enabled: true,
+				..WifiState::default()
+			}),
+		});
+		assert!(!wifi.enabled.value());
+		assert!(wifi.pending.is_none());
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn nonreplying_wifi_request_is_bounded() {
+		assert!(request::<(), String>(std::future::pending()).await.is_err());
+	}
+
+	struct Manager {
+		enabled: bool,
+	}
+
+	#[zbus::interface(name = "org.freedesktop.NetworkManager")]
+	impl Manager {
+		fn get_devices(&self) -> Vec<zvariant::OwnedObjectPath> {
+			vec![]
+		}
+		#[zbus(property)]
+		fn wireless_enabled(&self) -> bool {
+			self.enabled
+		}
+		#[zbus(property)]
+		fn set_wireless_enabled(&mut self, value: bool) {
+			self.enabled = value;
+		}
+		#[zbus(property)]
+		fn wireless_hardware_enabled(&self) -> bool {
+			true
+		}
+		#[zbus(property)]
+		fn wwan_enabled(&self) -> bool {
+			false
+		}
+		#[zbus(property)]
+		fn wwan_hardware_enabled(&self) -> bool {
+			false
+		}
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn restores_state_and_controls_when_service_appears() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::system_menu::wifi::tests::recovery_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn recovery_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let recipe = iced::advanced::subscription::into_recipes(Wifi::subscription())
+			.into_iter()
+			.next()
+			.ok_or("missing subscription")?;
+		let mut stream = recipe.stream(futures::stream::pending().boxed());
+		let first = tokio::time::timeout(Duration::from_secs(2), stream.next()).await?;
+		assert!(matches!(first, Some(Message::AsyncDataLoaded(Err(_)))));
+		let _manager = zbus::connection::Builder::session()?
+			.name("org.freedesktop.NetworkManager")?
+			.serve_at("/org/freedesktop/NetworkManager", Manager { enabled: true })?
+			.build()
+			.await?;
+		let next = tokio::time::timeout(Duration::from_secs(3), stream.next())
+			.await?
+			.ok_or("Wi-Fi monitor ended instead of recovering")?;
+		let mut wifi = Wifi::new();
+		let _ = wifi.update(next);
+		assert!(wifi.enabled.value());
+		assert!(wifi.async_data.is_some());
+		let task = wifi.update(Message::Toggle);
+		assert_eq!(wifi.update(Message::Toggle).units(), 0);
+		let message =
+			tokio::time::timeout(Duration::from_secs(2), test_bus::task_message(task)).await??;
+		let _ = wifi.update(message);
+		assert!(
+			!wifi.enabled.value(),
+			"the recovered backend must accept a real property write"
+		);
+		Ok(())
+	}
 }

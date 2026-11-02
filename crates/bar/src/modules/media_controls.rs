@@ -629,6 +629,7 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 					continue;
 				}
 			};
+			let connection = mpris.connection();
 			mpris.watch();
 
 			let mut players = HashMap::<PlayerIdentity, MprisPlayer>::new();
@@ -636,6 +637,13 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 
 			loop {
 				tokio::select! {
+					() = connection.closed() => {
+						// A completed mprizzle signal stream need not close its
+						// event channel. Watch transport loss independently.
+						log::warn!("MPRIS D-Bus connection closed, reconnecting");
+						yield Message::MprisDisconnected;
+						break;
+					}
 					event = mpris.recv() => {
 						match event {
 							Ok(Ok(event)) => {
@@ -656,6 +664,9 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 						}
 					}
 					event = rx.recv() => {
+						if event.is_err() {
+							return;
+						}
 						if let Some(msg) = handle_player_command(event, &mut players, &mut current_player).await {
 							yield msg;
 						}
@@ -663,6 +674,9 @@ fn mpris_to_msg_stream(rx: Receiver<PlayerCommand>) -> impl Stream<Item = Messag
 				}
 			}
 
+			drop(players);
+			drop(mpris);
+			drop(connection);
 			tokio::time::sleep(Duration::from_secs(1)).await;
 		}
 	}
@@ -1090,6 +1104,93 @@ fn spotify_saved_message(
 #[cfg(test)]
 mod tests {
 	use super::spotify_track_id;
+
+	struct ChildGuard(std::process::Child);
+
+	impl Drop for ChildGuard {
+		fn drop(&mut self) {
+			let _ = self.0.kill();
+			let _ = self.0.wait();
+		}
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; starts and stops only a private broker"]
+	fn broker_loss_reaches_bar() -> Result<(), Box<dyn std::error::Error>> {
+		use std::io::{BufRead, Read};
+		use std::process::{Command, Stdio};
+		let mut broker = ChildGuard(
+			Command::new("dbus-daemon")
+				.args(["--session", "--nofork", "--print-address=1"])
+				.stdout(Stdio::piped())
+				.spawn()?,
+		);
+		let mut address = String::new();
+		std::io::BufReader::new(broker.0.stdout.take().ok_or("missing broker stdout")?)
+			.read_line(&mut address)?;
+		if !address.starts_with("unix:") {
+			return Err("unexpected private broker address".into());
+		}
+		// Run the real subscription in another process. Never mutate the test
+		// process's bus environment or stop the user's broker.
+		let mut child = ChildGuard(
+			Command::new(std::env::current_exe()?)
+				.args([
+					"--exact",
+					"modules::media_controls::tests::broker_loss_child",
+					"--ignored",
+					"--nocapture",
+				])
+				.env("DBUS_SESSION_BUS_ADDRESS", address.trim())
+				.env("SUBNIRI_MPRIS_TEST_CHILD", "1")
+				.stdout(Stdio::piped())
+				.spawn()?,
+		);
+		let mut output =
+			std::io::BufReader::new(child.0.stdout.take().ok_or("missing child stdout")?);
+		loop {
+			let mut line = String::new();
+			if output.read_line(&mut line)? == 0 {
+				return Err("MPRIS test child exited before setup completed".into());
+			}
+			if line.contains("MPRIS_TEST_READY") {
+				break;
+			}
+		}
+		broker.0.kill()?;
+		broker.0.wait()?;
+		let mut rest = String::new();
+		output.read_to_string(&mut rest)?;
+		assert!(
+			child.0.wait()?.success(),
+			"broker-loss child failed: {rest}"
+		);
+		Ok(())
+	}
+
+	#[tokio::test]
+	#[ignore = "subprocess helper for broker_loss_reaches_bar"]
+	async fn broker_loss_child() -> Result<(), Box<dyn std::error::Error>> {
+		use futures::StreamExt;
+		use std::io::Write;
+		if std::env::var_os("SUBNIRI_MPRIS_TEST_CHILD").is_none() {
+			return Ok(());
+		}
+		let (_tx, rx) = async_channel::unbounded();
+		let mut stream = Box::pin(super::mpris_to_msg_stream(rx));
+		assert!(
+			tokio::time::timeout(std::time::Duration::from_millis(200), stream.next())
+				.await
+				.is_err(),
+			"empty private bus should not emit a player event during setup"
+		);
+		println!("MPRIS_TEST_READY");
+		std::io::stdout().flush()?;
+		let message =
+			tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await?;
+		assert!(matches!(message, Some(super::Message::MprisDisconnected)));
+		Ok(())
+	}
 
 	#[test]
 	fn extracts_spotify_track_ids() {

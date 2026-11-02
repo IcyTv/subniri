@@ -1,3 +1,5 @@
+use std::{future::Future, time::Duration};
+
 use config::ConfigFile;
 use iced::{Color, Element, Rectangle, Subscription, Task, widget::text, window::Id};
 use neo_widgets::{
@@ -13,11 +15,14 @@ mod system_menu;
 mod taskbar;
 mod volume;
 
+#[cfg(test)]
+mod test_bus;
+
 #[derive(Debug)]
 pub enum Module {
 	SystemMenu(system_menu::SystemMenu),
-	Network(Option<network::Network>),
-	Bluetooth(Option<bluetooth::Bluetooth>),
+	Network(ServiceState<network::Network>),
+	Bluetooth(ServiceState<bluetooth::Bluetooth>),
 	Clock(clock::Clock),
 	Volume(Result<volume::Volume, String>),
 	MediaControls(media_controls::MediaControls),
@@ -46,6 +51,7 @@ pub enum ModuleMessage {
 
 	NetworkInitialized(Result<network::Network, String>),
 	Network(network::Message),
+	NetworkEvent(utilities::Hashable<nmrs::NetworkManager>, network::Message),
 
 	BluetoothInitialized(Result<bluetooth::Bluetooth, String>),
 	Bluetooth(bluetooth::Message),
@@ -70,13 +76,42 @@ const MODULE_HEIGHT: f32 = 48.0;
 const MODULE_RADIUS: f32 = 8.0;
 const ICON_HEIGHT: f32 = 20.0;
 
+const INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[derive(Debug)]
+pub enum ServiceState<T> {
+	Connecting,
+	Ready(T),
+	Unavailable { error: String, attempt: u32 },
+}
+
+impl<T> ServiceState<T> {
+	fn failed(&mut self, error: String) -> Duration {
+		let attempt = match self {
+			Self::Unavailable { attempt, .. } => attempt.saturating_add(1),
+			_ => 0,
+		};
+		*self = Self::Unavailable { error, attempt };
+		Duration::from_secs((1_u64 << attempt.min(5)).min(30))
+	}
+}
+
+async fn initialize<T>(
+	delay: Duration, connect: impl Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+	tokio::time::sleep(delay).await;
+	tokio::time::timeout(INITIALIZATION_TIMEOUT, connect)
+		.await
+		.map_err(|_| "Service initialization timed out".to_string())?
+}
+
 impl Module {
 	pub fn clock() -> Self {
 		Self::Clock(clock::Clock::new())
 	}
 
 	pub fn bluetooth() -> Self {
-		Self::Bluetooth(None)
+		Self::Bluetooth(ServiceState::Connecting)
 	}
 
 	pub fn volume() -> Self {
@@ -96,7 +131,7 @@ impl Module {
 	}
 
 	pub fn network() -> Self {
-		Self::Network(None)
+		Self::Network(ServiceState::Connecting)
 	}
 
 	pub fn set_popup_id(&mut self, id: Id) {
@@ -105,16 +140,17 @@ impl Module {
 
 	pub fn init_task(&self) -> Task<ModuleMessage> {
 		match self {
-			Self::Bluetooth(None) => Task::perform(
-				bluetooth::Bluetooth::new(),
+			Self::Bluetooth(ServiceState::Connecting) => Task::perform(
+				initialize(Duration::ZERO, bluetooth::Bluetooth::new()),
 				ModuleMessage::BluetoothInitialized,
 			),
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
 			}
-			Self::Network(None) => {
-				Task::perform(network::Network::new(), ModuleMessage::NetworkInitialized)
-			}
+			Self::Network(ServiceState::Connecting) => Task::perform(
+				initialize(Duration::ZERO, network::Network::new()),
+				ModuleMessage::NetworkInitialized,
+			),
 			Self::SystemMenu(menu) => menu.init().map(ModuleMessage::SystemMenu),
 			_ => Task::none(),
 		}
@@ -151,27 +187,69 @@ impl Module {
 			}
 			(Self::Bluetooth(bluetooth), ModuleMessage::BluetoothInitialized(result)) => {
 				match result {
-					Ok(initialized) => *bluetooth = Some(initialized),
-					Err(error) => log::warn!("Failed to initialize Bluetooth module: {error}"),
+					Ok(initialized) => *bluetooth = ServiceState::Ready(initialized),
+					Err(error) => {
+						log::warn!("Failed to initialize Bluetooth module: {error}");
+						let delay = bluetooth.failed(error);
+						return Task::perform(
+							initialize(delay, bluetooth::Bluetooth::new()),
+							ModuleMessage::BluetoothInitialized,
+						);
+					}
 				}
 			}
 			(Self::Taskbar(taskbar), ModuleMessage::TaskbarInitialized(result)) => match result {
 				Ok(initialized) => *taskbar = Some(initialized),
 				Err(error) => log::warn!("Failed to initialize Niri taskbar: {error}"),
 			},
-			(Self::Bluetooth(Some(bluetooth)), ModuleMessage::Bluetooth(message)) => {
+			(
+				Self::Bluetooth(ServiceState::Ready(bluetooth)),
+				ModuleMessage::Bluetooth(message),
+			) => {
 				bluetooth.update(message);
 			}
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
-			(Self::Network(network), ModuleMessage::NetworkInitialized(result)) => match result {
-				Ok(initialized) => *network = Some(initialized),
-				Err(error) => log::warn!("Failed to initialize Network module: {error}"),
-			},
-			(Self::Network(Some(network)), ModuleMessage::Network(message)) => {
+			(Self::Network(network), ModuleMessage::NetworkInitialized(Ok(initialized))) => {
+				*network = ServiceState::Ready(initialized);
+			}
+			(Self::Network(network), ModuleMessage::NetworkInitialized(Err(error))) => {
+				log::warn!("Failed to initialize Network module: {error}");
+				let delay = network.failed(error);
+				return Task::perform(
+					initialize(delay, network::Network::new()),
+					ModuleMessage::NetworkInitialized,
+				);
+			}
+			(Self::Network(ServiceState::Ready(network)), ModuleMessage::Network(message)) => {
 				log::trace!("Network module update: {:?}", message);
-				return network.update(message).map(ModuleMessage::Network);
+				let connection = network.connection();
+				return network
+					.update(message)
+					.map(move |message| ModuleMessage::NetworkEvent(connection.clone(), message));
+			}
+			(Self::Network(state), ModuleMessage::NetworkEvent(connection, message)) => {
+				let ServiceState::Ready(network) = state else {
+					return Task::none();
+				};
+				if network.connection().as_ptr() != connection.as_ptr() {
+					return Task::none();
+				}
+				if let network::Message::Disconnected(error) = message {
+					log::warn!("Network module disconnected: {error}");
+					let delay = state.failed(error);
+					return Task::perform(
+						async move {
+							let _ = connection.dbus_connection().clone().close().await;
+							initialize(delay, network::Network::new()).await
+						},
+						ModuleMessage::NetworkInitialized,
+					);
+				}
+				return network
+					.update(message)
+					.map(move |message| ModuleMessage::NetworkEvent(connection.clone(), message));
 			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => {
 				if let Some(action) = clock.update(message) {
@@ -236,7 +314,7 @@ impl Module {
 
 	pub fn subscription(&self) -> Subscription<ModuleMessage> {
 		match self {
-			Self::Bluetooth(Some(bluetooth)) => {
+			Self::Bluetooth(ServiceState::Ready(bluetooth)) => {
 				bluetooth.subscription().map(ModuleMessage::Bluetooth)
 			}
 			Self::Volume(Ok(volume)) => volume.subscription().map(ModuleMessage::Volume),
@@ -246,7 +324,13 @@ impl Module {
 			}
 			Self::Taskbar(Some(_)) => taskbar::Taskbar::subscription().map(ModuleMessage::Taskbar),
 			Self::SystemMenu(menu) => menu.subscription().map(ModuleMessage::SystemMenu),
-			Self::Network(Some(network)) => network.subscription().map(ModuleMessage::Network),
+			Self::Network(ServiceState::Ready(network)) => {
+				let connection = network.connection();
+				network
+					.subscription()
+					.with(connection)
+					.map(|(connection, message)| ModuleMessage::NetworkEvent(connection, message))
+			}
 			_ => Subscription::none(),
 		}
 	}
@@ -274,20 +358,26 @@ impl Module {
 				.into(),
 			// TODO
 			Self::Volume(Err(_e)) => loading(COLORS.decorative.yellow),
-			Self::Network(None) => loading(COLORS.decorative.green),
-			Self::Network(Some(network)) => network
+			Self::Network(ServiceState::Connecting) => loading(COLORS.decorative.green),
+			Self::Network(ServiceState::Unavailable { error, .. }) => {
+				unavailable("Network unavailable", error, COLORS.decorative.green)
+			}
+			Self::Network(ServiceState::Ready(network)) => network
 				.view()
 				.map(ModuleMessage::Network)
 				.on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::Network, bounds))
 				.into(),
-			Self::Bluetooth(Some(bluetooth)) => bluetooth
+			Self::Bluetooth(ServiceState::Ready(bluetooth)) => bluetooth
 				.view()
 				.map(ModuleMessage::Bluetooth)
 				.on_press_with_bounds(|bounds| {
 					ModuleMessage::Pressed(ModuleKind::Bluetooth, bounds)
 				})
 				.into(),
-			Self::Bluetooth(None) => loading(COLORS.decorative.blue),
+			Self::Bluetooth(ServiceState::Connecting) => loading(COLORS.decorative.blue),
+			Self::Bluetooth(ServiceState::Unavailable { error, .. }) => {
+				unavailable("Bluetooth unavailable", error, COLORS.decorative.blue)
+			}
 			Self::Clock(clock) => clock
 				.view()
 				.map(ModuleMessage::Clock)
@@ -305,9 +395,13 @@ impl Module {
 			}
 			Self::SystemMenu(menu) => menu.view_popup().map(ModuleMessage::SystemMenu),
 			Self::Volume(Ok(vol)) => vol.view_popup().map(ModuleMessage::Volume),
-			Self::Bluetooth(Some(bt)) => bt.view_popup().map(ModuleMessage::Bluetooth),
+			Self::Bluetooth(ServiceState::Ready(bt)) => {
+				bt.view_popup().map(ModuleMessage::Bluetooth)
+			}
 			Self::Clock(clock) => clock.view_popup().map(ModuleMessage::Clock),
-			Self::Network(Some(network)) => network.view_popup().map(ModuleMessage::Network),
+			Self::Network(ServiceState::Ready(network)) => {
+				network.view_popup().map(ModuleMessage::Network)
+			}
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),
@@ -333,4 +427,83 @@ pub fn loading<'a>(background: Color) -> Element<'a, ModuleMessage> {
 		.background(background)
 		.radius(MODULE_RADIUS)
 		.into()
+}
+
+fn unavailable<'a>(
+	label: &'a str, error: &'a str, background: Color,
+) -> Element<'a, ModuleMessage> {
+	iced::widget::tooltip(
+		neo_button(text(label))
+			.height(MODULE_HEIGHT)
+			.background(background)
+			.radius(MODULE_RADIUS),
+		text(format!("{error}\nRetrying automatically")),
+		iced::widget::tooltip::Position::Bottom,
+	)
+	.into()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{Module, ModuleMessage, ServiceState};
+
+	#[test]
+	fn network_startup_failure_schedules_recovery() {
+		let mut module = Module::network();
+		let task = module.update(ModuleMessage::NetworkInitialized(Err("unavailable".into())));
+		assert!(
+			task.units() > 0,
+			"network initialization failure must retry"
+		);
+		assert!(matches!(
+			module,
+			Module::Network(ServiceState::Unavailable { .. })
+		));
+		assert_eq!(module.subscription().units(), 0);
+	}
+
+	#[test]
+	fn bluetooth_startup_failure_schedules_recovery() {
+		let mut module = Module::bluetooth();
+		let task = module.update(ModuleMessage::BluetoothInitialized(Err(
+			"unavailable".into()
+		)));
+		assert!(
+			task.units() > 0,
+			"Bluetooth initialization failure must retry"
+		);
+		assert!(matches!(
+			module,
+			Module::Bluetooth(ServiceState::Unavailable { .. })
+		));
+		assert_eq!(module.subscription().units(), 0);
+	}
+
+	#[test]
+	fn retries_are_capped_and_reset_after_success() {
+		let mut state = ServiceState::<()>::Connecting;
+		for seconds in [1, 2, 4, 8, 16, 30, 30] {
+			assert_eq!(state.failed("unavailable".into()).as_secs(), seconds);
+		}
+		state = ServiceState::Ready(());
+		assert_eq!(state.failed("disconnected".into()).as_secs(), 1);
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn nonreplying_initialization_times_out() {
+		let result =
+			super::initialize::<()>(std::time::Duration::ZERO, std::future::pending()).await;
+		assert!(result.is_err());
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn retry_delay_precedes_connection_attempt() {
+		let start = tokio::time::Instant::now();
+		let result = super::initialize(std::time::Duration::from_secs(4), async {
+			assert!(start.elapsed() >= std::time::Duration::from_secs(4));
+			Ok(())
+		})
+		.await;
+		assert!(result.is_ok());
+	}
 }

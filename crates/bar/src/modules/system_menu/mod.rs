@@ -18,6 +18,7 @@ use neo_widgets::{
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
+use utilities::Hashable;
 use zbus::Connection;
 
 use self::homeassistant::HomeassistantEntity;
@@ -37,6 +38,9 @@ pub enum Message {
 	Bluetooth(bluetooth::Message),
 	Nightlight(nightlight::Message),
 	HomeassistantEntity(String, homeassistant::Message),
+	HomeassistantConnected(u64, Result<Hashable<Connection>, String>),
+	HomeassistantDisconnected(u64),
+	HomeassistantObserved(u64, String, homeassistant::Message),
 
 	OpenPowerMenu,
 	OpenSettings,
@@ -86,6 +90,9 @@ pub struct SystemMenu {
 	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight: Box<nightlight::Nightlight>,
 	homeassistant_entities: HashMap<String, HomeassistantEntity>,
+	homeassistant_connection: Option<Hashable<Connection>>,
+	homeassistant_generation: u64,
+	homeassistant_attempt: u32,
 
 	context_menus: Vec<ContextMenu>,
 
@@ -114,24 +121,6 @@ impl SystemMenu {
 			.collect::<Vec<_>>();
 		log::debug!("All HA devices: {all_ha_devices:?}");
 
-		// FIXME: Don't block!!!
-		let connection =
-			futures::executor::block_on(async { zbus::Connection::session().await }).unwrap();
-
-		let homeassistant_entities = all_ha_devices
-			.iter()
-			.filter_map(|v| match v {
-				SystemMenuWidgets::Homeassistant(id) => Some(id),
-				_ => None,
-			})
-			.map(|id| {
-				(
-					id.clone(),
-					HomeassistantEntity::new(connection.clone(), id.clone()),
-				)
-			})
-			.collect();
-
 		all_widgets.extend(all_ha_devices);
 		for widget in &config.system_menu.widgets {
 			if !all_widgets.contains(widget) {
@@ -154,7 +143,10 @@ impl SystemMenu {
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
 			nightlight: Box::new(nightlight::Nightlight::new(config)),
-			homeassistant_entities,
+			homeassistant_entities: HashMap::new(),
+			homeassistant_connection: None,
+			homeassistant_generation: 0,
+			homeassistant_attempt: 0,
 
 			context_menus: Vec::new(),
 
@@ -163,10 +155,21 @@ impl SystemMenu {
 	}
 
 	pub fn init(&self) -> Task<Message> {
-		Task::batch([
-			self.wifi.init().map(Message::Wifi),
-			self.bluetooth.init().map(Message::Bluetooth),
-		])
+		self.connect_homeassistant(Duration::ZERO)
+	}
+
+	fn connect_homeassistant(&self, delay: Duration) -> Task<Message> {
+		let generation = self.homeassistant_generation;
+		Task::future(async move {
+			let result = crate::modules::initialize(delay, async {
+				Connection::session()
+					.await
+					.map(Hashable::new)
+					.map_err(|error| error.to_string())
+			})
+			.await;
+			Message::HomeassistantConnected(generation, result)
+		})
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
@@ -186,13 +189,24 @@ impl SystemMenu {
 			nightlight::Nightlight::subscription().map(Message::Nightlight),
 		];
 
+		let generation = self.homeassistant_generation;
+		if let Some(connection) = &self.homeassistant_connection {
+			subs.push(Subscription::run_with(
+				(generation, connection.clone()),
+				|data| {
+					let (generation, connection) = data.clone();
+					async_stream::stream! {
+						connection.closed().await;
+						yield Message::HomeassistantDisconnected(generation);
+						std::future::pending::<()>().await;
+					}
+				},
+			));
+		}
 		for (id, entity) in &self.homeassistant_entities {
-			subs.push(
-				entity
-					.subscription()
-					.with(id.clone())
-					.map(move |(id, msg)| Message::HomeassistantEntity(id, msg)),
-			);
+			subs.push(entity.subscription().with(id.clone()).with(generation).map(
+				move |(generation, (id, msg))| Message::HomeassistantObserved(generation, id, msg),
+			));
 		}
 
 		Subscription::batch(subs)
@@ -207,6 +221,59 @@ impl SystemMenu {
 		}
 
 		match message {
+			Message::HomeassistantConnected(generation, result)
+				if generation == self.homeassistant_generation
+					&& self.homeassistant_connection.is_none() =>
+			{
+				match result {
+					Ok(connection) => {
+						self.homeassistant_attempt = 0;
+						self.homeassistant_entities = self
+							.all_widgets
+							.iter()
+							.filter_map(|widget| {
+								if let SystemMenuWidgets::Homeassistant(id) = widget {
+									Some((
+										id.clone(),
+										HomeassistantEntity::new((*connection).clone(), id.clone()),
+									))
+								} else {
+									None
+								}
+							})
+							.collect();
+						self.homeassistant_connection = Some(connection);
+					}
+					Err(error) => {
+						log::warn!("Home Assistant session bus unavailable: {error}");
+						let delay = Duration::from_secs(
+							(1_u64 << self.homeassistant_attempt.min(5)).min(30),
+						);
+						self.homeassistant_attempt = self.homeassistant_attempt.saturating_add(1);
+						self.homeassistant_generation =
+							self.homeassistant_generation.wrapping_add(1);
+						return self.connect_homeassistant(delay);
+					}
+				}
+			}
+			Message::HomeassistantDisconnected(generation)
+				if generation == self.homeassistant_generation
+					&& self.homeassistant_connection.is_some() =>
+			{
+				self.homeassistant_connection = None;
+				self.homeassistant_entities.clear();
+				self.homeassistant_generation = self.homeassistant_generation.wrapping_add(1);
+				return self.connect_homeassistant(Duration::from_secs(1));
+			}
+			Message::HomeassistantObserved(generation, id, message)
+				if generation == self.homeassistant_generation
+					&& self.homeassistant_connection.is_some() =>
+			{
+				return self.update(Message::HomeassistantEntity(id, message));
+			}
+			Message::HomeassistantConnected(..)
+			| Message::HomeassistantDisconnected(..)
+			| Message::HomeassistantObserved(..) => {}
 			Message::UptimeUpdated(uptime) => self.uptime = uptime,
 			Message::Wifi(message) => return self.wifi.update(message).map(Message::Wifi),
 			Message::Bluetooth(message) => {
@@ -256,9 +323,10 @@ impl SystemMenu {
 			Message::HomeassistantEntity(id, message)
 				if let Some(entity) = self.homeassistant_entities.get_mut(&id) =>
 			{
-				return entity
-					.update(message)
-					.map(move |message| Message::HomeassistantEntity(id.clone(), message));
+				let generation = self.homeassistant_generation;
+				return entity.update(message).map(move |message| {
+					Message::HomeassistantObserved(generation, id.clone(), message)
+				});
 			}
 			Message::HomeassistantEntity(id, _) => {
 				log::warn!("Tried to address non-existant homeassistant entity: '{id}'");
@@ -565,4 +633,97 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 			.smallest(smallest)
 			.relative(&boot_time),
 	)?)
+}
+
+#[cfg(test)]
+mod reliability_tests {
+	use super::SystemMenu;
+	use crate::modules::test_bus;
+
+	#[test]
+	#[ignore = "private subprocess with a deliberately unavailable session bus"]
+	fn absent_session_bus_does_not_crash_menu() -> Result<(), test_bus::Error> {
+		test_bus::run_without_session("modules::system_menu::reliability_tests::absent_bus_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn absent_bus_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let mut menu = SystemMenu::new(&config::ConfigFile::default());
+		let message = tokio::time::timeout(
+			std::time::Duration::from_secs(2),
+			test_bus::task_message(menu.init()),
+		)
+		.await??;
+		let retry = menu.update(message);
+		assert!(
+			retry.units() > 0,
+			"a transient session-bus failure must retry asynchronously"
+		);
+		Ok(())
+	}
+
+	#[test]
+	#[ignore = "private session-bus subprocess"]
+	fn shared_transport_recovers_and_rejects_stale_events() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::system_menu::reliability_tests::shared_transport_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn shared_transport_child() -> Result<(), test_bus::Error> {
+		use super::Message;
+		use futures::StreamExt;
+
+		test_bus::require_child()?;
+
+		let mut config = config::ConfigFile::default();
+		config.homeassistant.tracked_devices = vec!["switch.test".into(), "light.test".into()];
+
+		let mut menu = SystemMenu::new(&config);
+		let message = test_bus::task_message(menu.init()).await?;
+		let _ = menu.update(message);
+		assert_eq!(menu.homeassistant_entities.len(), 2);
+
+		let connection = menu
+			.homeassistant_connection
+			.clone()
+			.ok_or("missing shared connection")?;
+		let old_generation = menu.homeassistant_generation;
+
+		// Drive the real menu subscriptions against the isolated broker and
+		// wait specifically for the shared transport's closure notification.
+		let mut streams = futures::stream::select_all(
+			iced::advanced::subscription::into_recipes(menu.subscription())
+				.into_iter()
+				.map(|recipe| recipe.stream(futures::stream::pending().boxed())),
+		);
+		(*connection).clone().close().await?;
+		let disconnected = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+			loop {
+				if let Some(message @ Message::HomeassistantDisconnected(_)) = streams.next().await
+				{
+					break message;
+				}
+			}
+		})
+		.await?;
+
+		drop(streams);
+		let reconnect = menu.update(disconnected);
+		assert!(menu.homeassistant_entities.is_empty());
+
+		let message = test_bus::task_message(reconnect).await?;
+		let _ = menu.update(message);
+		assert_eq!(menu.homeassistant_entities.len(), 2);
+		assert!(menu.homeassistant_connection.is_some());
+
+		let stale = menu.update(Message::HomeassistantDisconnected(old_generation));
+		assert_eq!(stale.units(), 0);
+		assert!(menu.homeassistant_connection.is_some());
+		assert_eq!(menu.homeassistant_entities.len(), 2);
+
+		Ok(())
+	}
 }

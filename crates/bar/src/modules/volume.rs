@@ -47,6 +47,9 @@ use utilities::Hashable;
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	DefaultSinkVolumeChangeRequest(f32),
@@ -161,6 +164,8 @@ pub struct Volume {
 	device_routes: HashMap<Id, PwDeviceState>,
 	default_source: Option<Id>,
 	default_sink: Option<Id>,
+	default_source_name: Option<String>,
+	default_sink_name: Option<String>,
 	reconnect_attempt: u32,
 	reconnect_in_flight: bool,
 	pending_health_check: Option<(u32, Instant)>,
@@ -218,6 +223,8 @@ impl PwConnection {
 						&event_tx,
 						format!("PipeWire core error {res}: {message}"),
 					);
+				} else {
+					log::warn!("PipeWire object {id} rejected a request ({res}): {message}");
 				}
 			}
 		}));
@@ -259,8 +266,8 @@ impl PwConnection {
 							device_id: props.get("device.id").and_then(|id| id.parse().ok()),
 							name,
 							label,
-							is_sink,
-							is_source,
+							is_sink: is_sink || is_duplex,
+							is_source: is_source || is_duplex,
 							volume: PwVolume::default(),
 						},
 						proxy: node.clone(),
@@ -385,28 +392,29 @@ impl PwConnection {
 						      value: Option<&str>| {
 							match key {
 								Some("default.audio.sink") => {
-									if let Some(name) = default_node_name(value) {
-										log::info!("default sink node.name = {name}");
-										if let Err(e) = event_tx
-											.send_blocking(PwEvent::DefaultSinkChanged(name))
-										{
-											log::warn!(
-												"Failed to dispatch default sink change: {e}"
-											);
-										}
+									let name = default_node_name(value).unwrap_or_default();
+									log::info!("default sink node.name = {name}");
+									if let Err(e) =
+										event_tx.send_blocking(PwEvent::DefaultSinkChanged(name))
+									{
+										log::warn!("Failed to dispatch default sink change: {e}");
 									}
 								}
 								Some("default.audio.source") => {
-									if let Some(name) = default_node_name(value) {
-										log::info!("default source node.name = {name}");
-										if let Err(e) = event_tx
-											.send_blocking(PwEvent::DefaultSourceChanged(name))
-										{
-											log::warn!(
-												"Failed to dispatch default source change: {e}"
-											);
-										}
+									let name = default_node_name(value).unwrap_or_default();
+									log::info!("default source node.name = {name}");
+									if let Err(e) =
+										event_tx.send_blocking(PwEvent::DefaultSourceChanged(name))
+									{
+										log::warn!("Failed to dispatch default source change: {e}");
 									}
+								}
+								None => {
+									let _ = event_tx
+										.send_blocking(PwEvent::DefaultSinkChanged(String::new()));
+									let _ = event_tx.send_blocking(PwEvent::DefaultSourceChanged(
+										String::new(),
+									));
 								}
 								_ => (),
 							}
@@ -468,6 +476,8 @@ impl Volume {
 			device_routes: HashMap::new(),
 			default_source: None,
 			default_sink: None,
+			default_source_name: None,
+			default_sink_name: None,
 			reconnect_attempt: 0,
 			reconnect_in_flight: false,
 			pending_health_check: None,
@@ -499,6 +509,7 @@ impl Volume {
 			Message::PwEvent(PwEvent::UpsertNode { node, proxy }) => {
 				self.node_proxies.insert(node.id, proxy);
 				self.devices.insert(node.id, node);
+				self.resolve_defaults();
 				Task::none()
 			}
 			Message::PwEvent(PwEvent::UpsertDeviceRoute {
@@ -514,30 +525,17 @@ impl Volume {
 				let _ = self.node_proxies.remove(&id);
 				let _ = self.device_routes.remove(&id);
 				let _ = self.devices.remove(&id);
+				self.resolve_defaults();
 				Task::none()
 			}
 			Message::PwEvent(PwEvent::DefaultSinkChanged(name)) => {
-				let id = self
-					.devices
-					.values()
-					.find(|d| d.name.as_deref() == Some(&name))
-					.map(|d| d.id);
-				if id.is_none() {
-					log::warn!("Default device '{name}' not found");
-				}
-				self.default_sink = id;
+				self.default_sink_name = (!name.is_empty()).then_some(name);
+				self.resolve_defaults();
 				Task::none()
 			}
 			Message::PwEvent(PwEvent::DefaultSourceChanged(name)) => {
-				let id = self
-					.devices
-					.values()
-					.find(|d| d.name.as_deref() == Some(&name))
-					.map(|d| d.id);
-				if id.is_none() {
-					log::warn!("Default device '{name}' not found");
-				}
-				self.default_source = id;
+				self.default_source_name = (!name.is_empty()).then_some(name);
+				self.resolve_defaults();
 				Task::none()
 			}
 			Message::PwEvent(PwEvent::VolumeChanged { node, volume }) => {
@@ -580,157 +578,105 @@ impl Volume {
 		let Some(node) = self.devices.get(&sink_id) else {
 			return Task::none();
 		};
-		let Some(device_id) = node.device_id else {
-			log::warn!("Default sink has no device id");
-			return Task::none();
-		};
-		let Some(device) = self.device_routes.get(&device_id) else {
-			log::warn!("Default sink device route not found");
-			return Task::none();
-		};
-
 		let current = node.volume.normalized();
-		let max = node.volume.max_normalized().max(1.0);
-		let target = (current + delta).clamp(0.0, max);
-		let channels = node.volume.channel_count();
-		let channel_volume = node.volume.raw_from_normalized(target);
-		let channel_volumes = vec![channel_volume; channels];
-		let route_props = match build_route_props_pod(&channel_volumes, None) {
-			Ok(route_props) => route_props,
-			Err(error) => {
-				log::warn!("Failed to build route props for volume adjustment: {error:?}");
-				return Task::none();
-			}
-		};
-		let route = device.route.clone();
-
-		if let Err(e) = device.proxy.set_param(
-			ParamType::Route,
-			ObjectType::ParamRoute,
-			0,
-			Box::new(move |builder| {
-				builder
-					.push_property(Route::Index, PropertyFlags::empty(), route.index)
-					.push_property(Route::Device, PropertyFlags::empty(), route.device)
-					.push_property(
-						Route::Direction,
-						PropertyFlags::empty(),
-						SpaPodId(route.direction),
-					)
-					.push_property(Route::Props, PropertyFlags::empty(), route_props)
-			}),
-		) {
-			log::warn!("Failed to set default sink route volume: {e}");
-			if is_connection_error(&e) {
-				return self
-					.handle_connection_lost(format!("Failed to set sink route volume: {e}"));
-			}
-		}
-
-		Task::none()
+		self.set_default_sink_volume(current + delta)
 	}
 
 	fn set_default_sink_volume(&mut self, target: f32) -> Task<Message> {
+		if !target.is_finite() {
+			log::warn!("Ignoring non-finite volume request");
+			return Task::none();
+		}
 		let Some(sink_id) = self.default_sink else {
 			return Task::none();
 		};
 		let Some(node) = self.devices.get(&sink_id) else {
 			return Task::none();
 		};
-		let Some(device_id) = node.device_id else {
-			log::warn!("Default sink has no device id");
-			return Task::none();
-		};
-		let Some(device) = self.device_routes.get(&device_id) else {
-			log::warn!("Default sink device route not found");
-			return Task::none();
-		};
-
 		let target = target.clamp(0.0, node.volume.max_normalized().max(1.0));
 		let channels = node.volume.channel_count();
 		let channel_volume = node.volume.raw_from_normalized(target);
 		let channel_volumes = vec![channel_volume; channels];
-		let route_props = match build_route_props_pod(&channel_volumes, None) {
-			Ok(route_props) => route_props,
-			Err(error) => {
-				log::warn!("Failed to build route props for volume update: {error:?}");
-				return Task::none();
-			}
-		};
-		let route = device.route.clone();
-
-		if let Err(e) = device.proxy.set_param(
-			ParamType::Route,
-			ObjectType::ParamRoute,
-			0,
-			Box::new(move |builder| {
-				builder
-					.push_property(Route::Index, PropertyFlags::empty(), route.index)
-					.push_property(Route::Device, PropertyFlags::empty(), route.device)
-					.push_property(
-						Route::Direction,
-						PropertyFlags::empty(),
-						SpaPodId(route.direction),
-					)
-					.push_property(Route::Props, PropertyFlags::empty(), route_props)
-			}),
-		) {
-			log::warn!("Failed to set default sink volume: {e}");
-			if is_connection_error(&e) {
-				return self.handle_connection_lost(format!("Failed to set sink volume: {e}"));
-			}
-		}
-
-		Task::none()
+		self.set_default_sink_props(Some(channel_volumes), None)
 	}
 
 	fn set_default_sink_mute(&mut self, mute: bool) -> Task<Message> {
+		self.set_default_sink_props(None, Some(mute))
+	}
+
+	fn set_default_sink_props(
+		&mut self, channels: Option<Vec<f32>>, mute: Option<bool>,
+	) -> Task<Message> {
 		let Some(sink_id) = self.default_sink else {
 			return Task::none();
 		};
 		let Some(node) = self.devices.get(&sink_id) else {
 			return Task::none();
 		};
-		let Some(device_id) = node.device_id else {
-			log::warn!("Default sink has no device id");
-			return Task::none();
-		};
-		let Some(device) = self.device_routes.get(&device_id) else {
-			log::warn!("Default sink device route not found");
-			return Task::none();
-		};
-		let route_props = match build_route_props_pod(&node.volume.channel_volums, Some(mute)) {
-			Ok(route_props) => route_props,
-			Err(error) => {
-				log::warn!("Failed to build route props for mute update: {error:?}");
-				return Task::none();
-			}
-		};
-		let route = device.route.clone();
+		let result = if let Some(device) = node.device_id.and_then(|id| self.device_routes.get(&id))
+		{
+			let route_props = match build_route_props_pod(channels.as_deref(), mute) {
+				Ok(route_props) => route_props,
+				Err(error) => {
+					log::warn!("Failed to build route properties: {error:?}");
+					return Task::none();
+				}
+			};
+			let route = device.route.clone();
 
-		if let Err(e) = device.proxy.set_param(
-			ParamType::Route,
-			ObjectType::ParamRoute,
-			0,
-			Box::new(move |builder| {
-				builder
-					.push_property(Route::Index, PropertyFlags::empty(), route.index)
-					.push_property(Route::Device, PropertyFlags::empty(), route.device)
-					.push_property(
-						Route::Direction,
-						PropertyFlags::empty(),
-						SpaPodId(route.direction),
-					)
-					.push_property(Route::Props, PropertyFlags::empty(), route_props)
-			}),
-		) {
-			log::warn!("Failed to set default sink route mute: {e}");
+			device.proxy.set_param(
+				ParamType::Route,
+				ObjectType::ParamRoute,
+				0,
+				Box::new(move |builder| {
+					builder
+						.push_property(Route::Index, PropertyFlags::empty(), route.index)
+						.push_property(Route::Device, PropertyFlags::empty(), route.device)
+						.push_property(
+							Route::Direction,
+							PropertyFlags::empty(),
+							SpaPodId(route.direction),
+						)
+						.push_property(Route::Props, PropertyFlags::empty(), route_props)
+				}),
+			)
+		} else if let Some(proxy) = self.node_proxies.get(&sink_id) {
+			// Virtual sinks have no physical Device/Route, and hardware routes
+			// can temporarily disappear during a profile change. Node Props
+			// remain the control interface corresponding to our volume reads.
+			proxy.set_param(
+				ParamType::Props,
+				ObjectType::Props,
+				0,
+				Box::new(move |builder| volume_props(builder, channels.as_deref(), mute)),
+			)
+		} else {
+			log::warn!("No control proxy for default sink {sink_id}");
+			return Task::none();
+		};
+		if let Err(e) = result {
+			log::warn!("Failed to set default sink properties: {e}");
 			if is_connection_error(&e) {
-				return self.handle_connection_lost(format!("Failed to set sink route mute: {e}"));
+				return self.handle_connection_lost(format!("Failed to set sink properties: {e}"));
 			}
 		}
 
 		Task::none()
+	}
+
+	fn resolve_defaults(&mut self) {
+		self.default_sink = self.default_sink_name.as_deref().and_then(|name| {
+			self.devices
+				.values()
+				.find(|node| node.is_sink && node.name.as_deref() == Some(name))
+				.map(|node| node.id)
+		});
+		self.default_source = self.default_source_name.as_deref().and_then(|name| {
+			self.devices
+				.values()
+				.find(|node| node.is_source && node.name.as_deref() == Some(name))
+				.map(|node| node.id)
+		});
 	}
 
 	fn default_sink_toggle_mute(&mut self) -> Task<Message> {
@@ -834,6 +780,8 @@ impl Volume {
 		self.device_routes.clear();
 		self.default_sink = None;
 		self.default_source = None;
+		self.default_sink_name = None;
+		self.default_source_name = None;
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -1171,29 +1119,37 @@ fn decode_route(pod: &RawPodOwned) -> Result<Option<PwRoute>, pipewire_native_sp
 }
 
 fn build_route_props_pod(
-	channel_volumes: &[f32], mute: Option<bool>,
+	channel_volumes: Option<&[f32]>, mute: Option<bool>,
 ) -> Result<RawPodOwned, pipewire_native_spa::pod::Error> {
 	let mut route_props = [0u8; 4096];
 	let builder = Builder::new(route_props.as_mut_slice()).push_object(
 		ObjectType::Props,
-		ParamType::Route as u32,
-		|builder| {
-			let builder = builder.push_property(
-				Prop::ChannelVolumes,
-				PropertyFlags::empty(),
-				channel_volumes.to_vec(),
-			);
-
-			if let Some(mute) = mute {
-				builder.push_property(Prop::Mute, PropertyFlags::empty(), mute)
-			} else {
-				builder
-			}
-		},
+		ParamType::Props as u32,
+		|builder| volume_props(builder, channel_volumes, mute),
 	);
 
 	let built = builder.build()?;
 	RawPodOwned::wrap(Vec::from(built))
+}
+
+fn volume_props<'a>(
+	builder: pipewire_native_spa::pod::builder::ObjectBuilder<'a>, channels: Option<&[f32]>,
+	mute: Option<bool>,
+) -> pipewire_native_spa::pod::builder::ObjectBuilder<'a> {
+	let builder = if let Some(channels) = channels {
+		builder.push_property(
+			Prop::ChannelVolumes,
+			PropertyFlags::empty(),
+			channels.to_vec(),
+		)
+	} else {
+		builder
+	};
+	if let Some(mute) = mute {
+		builder.push_property(Prop::Mute, PropertyFlags::empty(), mute)
+	} else {
+		builder
+	}
 }
 
 fn parse_channelmix_max_volume(

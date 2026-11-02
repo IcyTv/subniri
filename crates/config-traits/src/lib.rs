@@ -563,10 +563,9 @@ impl ConfigValue for jiff::Timestamp {
 
 		dateparser::parse(string)
 			.map_err(|e| ConfigError::date_time_parse(e, None))
-			.map(|dt| {
-				#[allow(clippy::unwrap_used)]
+			.and_then(|dt| {
 				jiff::Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos().cast_signed())
-					.unwrap()
+					.map_err(|error| ConfigError::invalid_date_time(error, None))
 			})
 	}
 
@@ -640,5 +639,26 @@ impl ConfigValue for std::path::PathBuf {
 
 	fn to_kdl_value(&self) -> kdl::KdlValue {
 		kdl::KdlValue::String(self.to_string_lossy().to_string())
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::ConfigValue;
+
+	#[test]
+	fn unsupported_leap_second_returns_error_instead_of_panicking() {
+		let value = kdl::KdlValue::String("2016-12-31T23:59:60Z".into());
+		assert!(jiff::Timestamp::from_kdl_value(&value).is_err());
+	}
+
+	#[test]
+	fn ordinary_timestamp_round_trips() -> Result<(), Box<dyn std::error::Error>> {
+		let expected: jiff::Timestamp = "2026-11-02T12:34:56Z".parse()?;
+		assert_eq!(
+			jiff::Timestamp::from_kdl_value(&expected.to_kdl_value())?,
+			expected
+		);
+		Ok(())
 	}
 }

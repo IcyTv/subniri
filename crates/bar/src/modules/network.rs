@@ -31,7 +31,7 @@ pub enum Message {
 	ScanWifi,
 	StoppedScanningWifi,
 	Tick(Instant),
-	Noop,
+	Disconnected(String),
 }
 
 #[derive(Clone, Debug)]
@@ -44,6 +44,10 @@ pub struct Network {
 }
 
 impl Network {
+	pub fn connection(&self) -> Hashable<NetworkManager> {
+		self.manager.clone()
+	}
+
 	pub async fn new() -> Result<Self, String> {
 		let manager = NetworkManager::new().await.map_err(|e| e.to_string())?;
 		let snapshot = Self::snapshot(&manager).await.map_err(|e| e.to_string())?;
@@ -61,30 +65,7 @@ impl Network {
 
 	pub fn subscription(&self) -> Subscription<Message> {
 		let events = Subscription::run_with(self.manager.clone(), |manager| {
-			let manager = manager.clone();
-			async_stream::stream! {
-				let mut stream = match manager.network_events().await {
-					Ok(stream) => stream,
-					Err(error) => {
-						log::warn!("Failed to subscribe to network events: {error}");
-						return;
-					}
-				};
-
-				while let Some(event) = stream.next().await {
-					match event {
-						Ok(_) => {
-							match Self::snapshot(&manager).await {
-								Ok(snapshot) => yield Message::SnapshotChanged(snapshot),
-								Err(error) => log::warn!("Failed to refresh network snapshot: {error}"),
-							}
-						}
-						Err(error) => {
-							log::warn!("Network event error: {error}");
-						}
-					}
-				}
-			}
+			network_events(manager.clone())
 		});
 
 		let anim_tick = if self.scanning.value() {
@@ -102,29 +83,24 @@ impl Network {
 				self.snapshot = snapshot;
 			}
 			Message::ToggleWifi(on) => {
-				// TODO: Let's try to be optimistic about this update.
 				let manager = self.manager.clone();
 				return Task::future(async move {
-					if let Err(e) = manager.set_wireless_enabled(on).await {
-						log::warn!("Failed to set wireless enabled: {}", e);
-					};
-
-					Message::Noop
+					match request(async {
+						manager.set_wireless_enabled(on).await?;
+						Self::snapshot(&manager).await
+					})
+					.await
+					{
+						Ok(snapshot) => Message::SnapshotChanged(snapshot),
+						Err(error) => Message::Disconnected(error),
+					}
 				});
 			}
 			Message::ScanWifi => {
 				log::debug!("Scanning for wifi networks");
 				self.stopping_rotation = None;
 				self.scanning.go_mut(true, Instant::now());
-				let manager = self.manager.clone();
-				return Task::future(async move {
-					tokio::time::sleep(Duration::from_secs_f32(2.5)).await;
-					if let Err(e) = manager.scan_networks(None).await {
-						log::warn!("Failed to rescan networks: {e}");
-					}
-
-					Message::StoppedScanningWifi
-				});
+				return Task::future(scan(self.manager.clone()));
 			}
 			Message::StoppedScanningWifi => {
 				log::debug!("Stopped scanning for wifi networks");
@@ -146,7 +122,7 @@ impl Network {
 					}
 				}
 			}
-			Message::Noop => (),
+			Message::Disconnected(_) => (), // Handled by the module's connection lifecycle.
 		}
 		Task::none()
 	}
@@ -432,6 +408,233 @@ impl Network {
 			.retain(|ap| seen.insert(ap.ssid.clone()));
 
 		Ok(snapshot)
+	}
+}
+
+fn network_events(manager: Hashable<NetworkManager>) -> impl futures::Stream<Item = Message> {
+	async_stream::stream! {
+		let error = match request(manager.network_events()).await {
+			Ok(mut stream) => loop {
+				let event = tokio::select! {
+					() = manager.dbus_connection().closed() => None,
+					event = stream.next() => event,
+				};
+				match event {
+					Some(Ok(nmrs::NetworkEvent::NetworkManagerRestarted)) => {
+						break "NetworkManager owner changed".to_string();
+					}
+					Some(Ok(_)) => match request(Network::snapshot(&manager)).await {
+						Ok(snapshot) => yield Message::SnapshotChanged(snapshot),
+						Err(error) => break error,
+					},
+					Some(Err(error)) => break error.to_string(),
+					None => break "Network event stream disconnected".to_string(),
+				}
+			},
+			Err(error) => error,
+		};
+		// nmrs spawns monitor tasks. Closing this module's old transport also
+		// terminates their signal streams before a replacement is started.
+		let _ = manager.dbus_connection().clone().close().await;
+		yield Message::Disconnected(error);
+	}
+}
+
+async fn request<T, E: std::fmt::Display>(
+	future: impl std::future::Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+	tokio::time::timeout(Duration::from_secs(5), future)
+		.await
+		.map_err(|_| "NetworkManager request timed out".to_string())?
+		.map_err(|error| error.to_string())
+}
+
+async fn scan(manager: Hashable<NetworkManager>) -> Message {
+	match request(manager.scan_networks(None)).await {
+		Ok(()) => Message::StoppedScanningWifi,
+		Err(error) => Message::Disconnected(error),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::modules::test_bus;
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn failed_monitor_setup_is_reported() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::network::tests::monitor_failure_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn monitor_failure_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let manager = NetworkManager::new().await?;
+		let mut stream = Box::pin(network_events(Hashable::new(manager)));
+		let message = tokio::time::timeout(Duration::from_secs(2), stream.next()).await?;
+		assert!(
+			matches!(message, Some(Message::Disconnected(_))),
+			"a failed monitor must notify the module instead of silently ending"
+		);
+		Ok(())
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn nonreplying_network_request_is_bounded() {
+		assert!(request::<(), String>(std::future::pending()).await.is_err());
+	}
+
+	struct NonreplyingManager;
+
+	#[zbus::interface(name = "org.freedesktop.NetworkManager")]
+	impl NonreplyingManager {
+		async fn get_devices(&self) -> Vec<zvariant::OwnedObjectPath> {
+			std::future::pending().await
+		}
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn nonreplying_scan_completes() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::network::tests::scan_timeout_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn scan_timeout_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let _service = zbus::connection::Builder::session()?
+			.name("org.freedesktop.NetworkManager")?
+			.serve_at("/org/freedesktop/NetworkManager", NonreplyingManager)?
+			.build()
+			.await?;
+		let manager = Hashable::new(NetworkManager::new().await?);
+		let message = tokio::time::timeout(Duration::from_secs(8), scan(manager)).await?;
+		assert!(matches!(message, Message::Disconnected(_)));
+		Ok(())
+	}
+
+	struct SnapshotManager;
+
+	#[zbus::interface(name = "org.freedesktop.NetworkManager")]
+	impl SnapshotManager {
+		fn get_devices(&self) -> Vec<zvariant::OwnedObjectPath> {
+			vec![]
+		}
+		#[zbus(property)]
+		fn wireless_enabled(&self) -> bool {
+			true
+		}
+		#[zbus(property)]
+		fn wireless_hardware_enabled(&self) -> bool {
+			true
+		}
+		#[zbus(property)]
+		fn wwan_enabled(&self) -> bool {
+			false
+		}
+		#[zbus(property)]
+		fn wwan_hardware_enabled(&self) -> bool {
+			false
+		}
+		#[zbus(property)]
+		fn active_connections(&self) -> Vec<zvariant::OwnedObjectPath> {
+			vec![]
+		}
+	}
+
+	struct Settings;
+
+	#[zbus::interface(name = "org.freedesktop.NetworkManager.Settings")]
+	impl Settings {
+		fn list_connections(&self) -> Vec<zvariant::OwnedObjectPath> {
+			vec![]
+		}
+		#[zbus(property)]
+		fn connections(&self) -> Vec<zvariant::OwnedObjectPath> {
+			vec![]
+		}
+	}
+
+	async fn snapshot_service() -> Result<zbus::Connection, test_bus::Error> {
+		Ok(zbus::connection::Builder::session()?
+			.name("org.freedesktop.NetworkManager")?
+			.serve_at("/org/freedesktop/NetworkManager", SnapshotManager)?
+			.serve_at("/org/freedesktop/NetworkManager/Settings", Settings)?
+			.build()
+			.await?)
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn duplicate_and_stale_disconnects_do_not_restart_new_connection() -> Result<(), test_bus::Error>
+	{
+		test_bus::run("modules::network::tests::connection_identity_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn connection_identity_child() -> Result<(), test_bus::Error> {
+		use crate::modules::{Module, ModuleMessage, ServiceState};
+		test_bus::require_child()?;
+		let _service = snapshot_service().await?;
+		let network = tokio::time::timeout(Duration::from_secs(2), Network::new()).await??;
+		let old = network.connection();
+		let mut module = Module::Network(ServiceState::Ready(network));
+		let task = module.update(ModuleMessage::NetworkEvent(
+			old.clone(),
+			Message::Disconnected("lost".into()),
+		));
+		assert!(task.units() > 0);
+		let duplicate = module.update(ModuleMessage::NetworkEvent(
+			old.clone(),
+			Message::Disconnected("duplicate".into()),
+		));
+		assert_eq!(
+			duplicate.units(),
+			0,
+			"only one replacement may be in flight"
+		);
+		let response =
+			tokio::time::timeout(Duration::from_secs(3), test_bus::task_message(task)).await??;
+		let _ = module.update(response);
+		assert!(matches!(module, Module::Network(ServiceState::Ready(_))));
+		let stale = module.update(ModuleMessage::NetworkEvent(
+			old,
+			Message::Disconnected("stale".into()),
+		));
+		assert_eq!(stale.units(), 0);
+		assert!(
+			matches!(module, Module::Network(ServiceState::Ready(_))),
+			"an old task must not tear down its replacement"
+		);
+		Ok(())
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn owner_loss_is_reported() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::network::tests::owner_loss_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn owner_loss_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let service = snapshot_service().await?;
+		let manager = Hashable::new(NetworkManager::new().await?);
+		let mut stream = Box::pin(network_events(manager));
+		assert!(
+			tokio::time::timeout(Duration::from_millis(200), stream.next())
+				.await
+				.is_err()
+		);
+		service.close().await?;
+		let message = tokio::time::timeout(Duration::from_secs(2), stream.next()).await?;
+		assert!(matches!(message, Some(Message::Disconnected(_))));
+		Ok(())
 	}
 }
 

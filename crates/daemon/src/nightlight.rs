@@ -70,17 +70,8 @@ where
 			.enabled
 			.then(|| start_preset_reconciler(service.clone(), config.clone()));
 
-		let result = tokio::select! {
-			result = &mut shutdown_signal => result,
-			result = async {
-				if let Some(reconciler) = &mut preset_reconciler {
-					reconciler.await?;
-					Err("nightlight preset reconciler stopped unexpectedly".into())
-				} else {
-					std::future::pending().await
-				}
-			} => result,
-		};
+		let result =
+			wait_for_runtime_exit(&service, &mut preset_reconciler, &mut shutdown_signal).await;
 
 		if let Some(reconciler) = preset_reconciler.take() {
 			reconciler.abort();
@@ -106,6 +97,39 @@ where
 	}
 
 	runtime_result
+}
+
+async fn wait_for_runtime_exit<F>(
+	service: &NightlightDbus, reconciler: &mut Option<JoinHandle<()>>, shutdown: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+	F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+	tokio::select! {
+		biased;
+		result = shutdown => result,
+		() = async {
+			if let Some(controller) = &service.inner.controller {
+				// The receiver is owned by the worker. Error, normal exit and
+				// panic all close it, unlike the outer D-Bus service future.
+				controller.command_tx.closed().await;
+			} else {
+				std::future::pending().await
+			}
+		} => Err("nightlight controller stopped unexpectedly".into()),
+		result = async {
+			if let Some(task) = reconciler.as_mut() {
+				let result = task.await;
+				// A JoinHandle cannot be polled again after completion. Taking
+				// it here also leaves cancellation safe while it is pending.
+				reconciler.take();
+				result?;
+				Err("nightlight preset reconciler stopped unexpectedly".into())
+			} else {
+				std::future::pending().await
+			}
+		} => result,
+	}
 }
 
 async fn activate_current_preset(service: NightlightDbus, config: &config::Nightlight) {
@@ -1062,6 +1086,62 @@ fn raw_temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
 	use super::GammaControlLock;
+
+	#[tokio::test]
+	async fn controller_loss_reaches_service_supervisor() {
+		let (command_tx, command_rx) = tokio::sync::mpsc::channel(8);
+		let service = super::NightlightDbus {
+			inner: std::sync::Arc::new(super::NightlightDbusInner {
+				available: true,
+				config: config::Nightlight::default(),
+				controller: Some(super::NightlightController { command_tx }),
+				state: Default::default(),
+				suspension: Default::default(),
+			}),
+		};
+		// A failed or panicking real controller drops its command receiver.
+		drop(command_rx);
+		let result = tokio::time::timeout(
+			std::time::Duration::from_millis(50),
+			super::wait_for_runtime_exit(&service, &mut None, std::future::pending()),
+		)
+		.await;
+		assert!(
+			matches!(result, Ok(Err(_))),
+			"controller loss must end the service so its supervisor can restart it"
+		);
+	}
+
+	#[tokio::test]
+	async fn disabled_service_does_not_report_controller_loss()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let service = super::NightlightDbus::new(config::Nightlight::default()).await?;
+		let result = tokio::time::timeout(
+			std::time::Duration::from_millis(50),
+			super::wait_for_runtime_exit(&service, &mut None, std::future::pending()),
+		)
+		.await;
+		assert!(result.is_err(), "a disabled service has no worker to lose");
+		let result = super::wait_for_runtime_exit(&service, &mut None, async { Ok(()) }).await;
+		assert!(result.is_ok(), "normal shutdown must still complete");
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn completed_reconciler_is_not_awaited_twice() -> Result<(), Box<dyn std::error::Error>> {
+		let service = super::NightlightDbus::new(config::Nightlight::default()).await?;
+		let mut reconciler = Some(tokio::spawn(async {}));
+		assert!(
+			super::wait_for_runtime_exit(&service, &mut reconciler, std::future::pending())
+				.await
+				.is_err()
+		);
+		assert!(
+			reconciler.is_none(),
+			"a completed JoinHandle must be removed before the service cleanup path"
+		);
+		Ok(())
+	}
 
 	#[test]
 	fn gamma_control_lock_allows_takeover_after_release() -> Result<(), Box<dyn std::error::Error>>

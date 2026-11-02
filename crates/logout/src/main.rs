@@ -20,6 +20,26 @@ use neo_widgets::{
 };
 use zbus::Connection;
 
+fn shortcut_entry(character: &str) -> Option<usize> {
+	match character.as_bytes() {
+		[digit @ b'1'..=b'6'] => Some(usize::from(*digit - b'1')),
+		_ => None,
+	}
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+	#[test]
+	fn character_payload_must_be_exactly_one_shortcut_digit() {
+		for invalid in ["", "1x", "1234", "1\u{301}", "0", "7", "12", "１"] {
+			assert_eq!(super::shortcut_entry(invalid), None, "{invalid:?}");
+		}
+		for (digit, index) in [("1", 0), ("2", 1), ("3", 2), ("4", 3), ("5", 4), ("6", 5)] {
+			assert_eq!(super::shortcut_entry(digit), Some(index));
+		}
+	}
+}
+
 #[derive(Debug, Clone, Parser)]
 #[command(version, about)]
 struct Args {
@@ -192,11 +212,7 @@ impl Logout {
 			keyboard::Event::KeyPressed {
 				key: keyboard::Key::Character(c),
 				..
-			} if ('1'..='6').contains(&c.chars().next().unwrap_or_default()) => {
-				#[allow(clippy::unwrap_used)]
-				let index: u8 = c.parse().unwrap();
-				Message::SelectEntry(index as usize - 1)
-			}
+			} => shortcut_entry(&c).map_or(Message::Noop, Message::SelectEntry),
 			keyboard::Event::KeyPressed {
 				key: keyboard::Key::Named(keyboard::key::Named::Enter),
 				..
