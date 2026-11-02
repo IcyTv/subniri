@@ -27,6 +27,7 @@ pub enum Module {
 #[derive(Debug, Clone)]
 pub enum ModuleMessage {
 	ConfigUpdated(ConfigFile),
+	SaveSystemMenuWidgets(Vec<config::SystemMenuWidgets>),
 	PopupClosed,
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
@@ -200,11 +201,24 @@ impl Module {
 				taskbar.update(message);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
+				let previous_widgets = matches!(message, system_menu::Message::WidgetsEdited(_))
+					.then(|| menu.widgets().to_vec());
 				let closes_context_menus = message.closes_context_menus();
 				if closes_context_menus {
 					menu.close_context_menus();
 				}
 				let update = menu.update(message).map(ModuleMessage::SystemMenu);
+				let update = if previous_widgets.is_some_and(|previous| previous != menu.widgets())
+				{
+					Task::batch([
+						update,
+						Task::done(ModuleMessage::SaveSystemMenuWidgets(
+							menu.widgets().to_vec(),
+						)),
+					])
+				} else {
+					update
+				};
 				return if closes_context_menus {
 					Task::batch([update, Task::done(ModuleMessage::CloseContextMenus)])
 				} else {

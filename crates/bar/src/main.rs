@@ -29,6 +29,7 @@ use wayland_client::Connection;
 use crate::modules::{Module, ModuleKind, ModuleMessage};
 
 mod modules;
+mod widget_config;
 
 // mod clock;
 // mod icons;
@@ -102,6 +103,7 @@ struct Bar {
 	shell_events: ShellReceiver,
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
+	widget_config: widget_config::Writer,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -136,6 +138,7 @@ impl Bar {
 			shell_events,
 			config_doc,
 			config_file,
+			widget_config: widget_config::Writer::default(),
 		};
 
 		let tasks = Task::batch([
@@ -155,7 +158,7 @@ impl Bar {
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
 			BarMessage::ConfigUpdated => {
-				let (doc, config) = match ConfigFile::load() {
+				let (doc, mut config) = match ConfigFile::load() {
 					Ok(config) => config,
 					Err(error) => {
 						log::warn!("Error loading config: {error}");
@@ -163,10 +166,23 @@ impl Bar {
 					}
 				};
 
+				if let Some(widgets) = self.widget_config.latest() {
+					config.system_menu.widgets = widgets.to_vec();
+				}
 				self.config_doc = doc;
 				self.config_file = config.clone();
 
 				self.broadcast_module_message(ModuleMessage::ConfigUpdated(config))
+			}
+			BarMessage::Module(_, _, _, ModuleMessage::SaveSystemMenuWidgets(widgets)) => {
+				self.config_file.system_menu.widgets = widgets.clone();
+				self.widget_config.queue(widgets)
+			}
+			BarMessage::SystemMenuWidgetsSaved(result) => {
+				if let Err(error) = result {
+					log::warn!("Failed to save system-menu layout: {error}");
+				}
+				self.widget_config.completed()
 			}
 			BarMessage::Resumed => Task::future(async {
 				tokio::time::sleep(Duration::from_millis(500)).await;
@@ -783,6 +799,7 @@ enum BarMessage {
 	WindowClosed(Id),
 	CloseContextDescendants { parent: Id, expected_child: Id },
 	ConfigUpdated,
+	SystemMenuWidgetsSaved(Result<(), String>),
 	Resumed,
 	RestartAfterResume,
 	Module(Option<Id>, Section, usize, ModuleMessage),

@@ -55,25 +55,6 @@ impl Bluetooth {
 			false
 		};
 
-		// let device_count = if let Some(adapter) = &adapter {
-		// 	let mut connected = 0;
-		// 	for addr in adapter
-		// 		.device_addresses()
-		// 		.await
-		// 		.map_err(|e| e.to_string())?
-		// 	{
-		// 		let device = adapter.device(addr).map_err(|e| e.to_string())?;
-		//
-		// 		if device.is_connected().await.map_err(|e| e.to_string())? {
-		// 			connected += 1;
-		// 		}
-		// 	}
-		//
-		// 	connected
-		// } else {
-		// 	0
-		// };
-
 		let devices = vec![];
 
 		Ok(Self {

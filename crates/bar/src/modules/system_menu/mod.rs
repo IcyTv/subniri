@@ -3,10 +3,10 @@ use std::{collections::HashMap, time::Duration};
 use config::{ConfigFile, SystemMenuWidgets};
 use daemon_common::NightlightProxy;
 use iced::{
-	Element, Font, Length, Padding, Rectangle, Subscription, Task,
+	Element, Font, Length, Rectangle, Subscription, Task,
 	alignment::Vertical,
 	font,
-	widget::{column, container, grid, image, row, stack, svg, text},
+	widget::{column, grid, image, row, svg, text},
 };
 use jiff::{
 	SpanRound, Unit,
@@ -24,6 +24,7 @@ use self::homeassistant::HomeassistantEntity;
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
 mod bluetooth;
+mod editor;
 mod homeassistant;
 mod nightlight;
 mod wifi;
@@ -48,8 +49,7 @@ pub enum Message {
 
 	EditingChanged(bool),
 	OpenContextMenu(ContextMenu, usize, Rectangle),
-	AddWidget(SystemMenuWidgets),
-	RemoveWidget(SystemMenuWidgets),
+	WidgetsEdited(Vec<SystemMenuWidgets>),
 
 	Noop,
 }
@@ -58,11 +58,12 @@ impl Message {
 	pub fn closes_context_menus(&self) -> bool {
 		matches!(
 			self,
-			Self::Nightlight(
-				nightlight::Message::Toggle
-					| nightlight::Message::Suspend(_)
-					| nightlight::Message::SetPreset(_)
-			)
+			Self::EditingChanged(true)
+				| Self::Nightlight(
+					nightlight::Message::Toggle
+						| nightlight::Message::Suspend(_)
+						| nightlight::Message::SetPreset(_)
+				)
 		)
 	}
 }
@@ -104,30 +105,20 @@ impl SystemMenu {
 
 		let mut all_widgets = SystemMenuWidgets::VARIANTS.to_vec();
 
-		// TODO: This can be done more efficiently...
-		let widgets = config.system_menu.widgets.clone();
-		all_widgets.sort_by(|a, b| {
-			let a_index = widgets.iter().position(|w| w == a);
-			let b_index = widgets.iter().position(|w| w == b);
-
-			if let Some(a_index) = a_index {
-				if let Some(b_index) = b_index {
-					a_index.cmp(&b_index)
-				} else {
-					std::cmp::Ordering::Less
-				}
-			} else if b_index.is_some() {
-				std::cmp::Ordering::Greater
-			} else {
-				std::cmp::Ordering::Equal
-			}
-		});
+		let all_ha_devices = config
+			.homeassistant
+			.tracked_devices
+			.iter()
+			.cloned()
+			.map(SystemMenuWidgets::Homeassistant)
+			.collect::<Vec<_>>();
+		log::debug!("All HA devices: {all_ha_devices:?}");
 
 		// FIXME: Don't block!!!
 		let connection =
 			futures::executor::block_on(async { zbus::Connection::session().await }).unwrap();
 
-		let homeassistant_entities = widgets
+		let homeassistant_entities = all_ha_devices
 			.iter()
 			.filter_map(|v| match v {
 				SystemMenuWidgets::Homeassistant(id) => Some(id),
@@ -140,6 +131,17 @@ impl SystemMenu {
 				)
 			})
 			.collect();
+
+		all_widgets.extend(all_ha_devices);
+		for widget in &config.system_menu.widgets {
+			if !all_widgets.contains(widget) {
+				all_widgets.push(widget.clone());
+			}
+		}
+
+		log::debug!("All widgets: {all_widgets:?}");
+
+		let widgets = config.system_menu.widgets.clone();
 
 		Self {
 			widgets,
@@ -246,12 +248,17 @@ impl SystemMenu {
 			}
 
 			Message::EditingChanged(editing) => self.editing = editing,
-			Message::AddWidget(widget) => self.widgets.push(widget),
-			Message::RemoveWidget(widget) => self.widgets.retain(|w| *w != widget),
+			Message::WidgetsEdited(widgets) => {
+				if self.editing {
+					self.widgets = widgets;
+				}
+			}
 			Message::HomeassistantEntity(id, message)
 				if let Some(entity) = self.homeassistant_entities.get_mut(&id) =>
 			{
-				entity.update(message)
+				return entity
+					.update(message)
+					.map(move |message| Message::HomeassistantEntity(id.clone(), message));
 			}
 			Message::HomeassistantEntity(id, _) => {
 				log::warn!("Tried to address non-existant homeassistant entity: '{id}'");
@@ -269,6 +276,10 @@ impl SystemMenu {
 		if !self.editing {
 			self.sync_widgets(&config.system_menu.widgets);
 		}
+	}
+
+	pub(super) fn widgets(&self) -> &[SystemMenuWidgets] {
+		&self.widgets
 	}
 
 	pub fn popup_closed(&mut self) {
@@ -350,7 +361,8 @@ impl SystemMenu {
 
 		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
 
-		if self.nightlight.enabled.value() {
+		// Transient device controls are not part of the editable widget layout.
+		if !self.editing && self.nightlight.enabled.value() {
 			let temp = row![
 				svg(phosphor_icon!("sun")).width(16),
 				neo_slider(1000..=6500, self.nightlight.temperature)
@@ -373,25 +385,33 @@ impl SystemMenu {
 			grid = grid.push(brightness);
 		}
 
-		if !self.editing {
-			for widget in &self.widgets {
-				let widget = self.view_widget(widget);
-				grid = grid.push(widget);
-			}
-		} else {
-			for widget in &self.all_widgets {
-				let is_addable = !self.widgets.contains(&widget);
-				let widget = self.view_editable_widget(&widget, is_addable);
-				grid = grid.push(widget);
-			}
+		let mut ordered = self.widgets.iter().collect::<Vec<_>>();
+		if self.editing {
+			ordered.extend(
+				self.all_widgets
+					.iter()
+					.filter(|widget| !self.widgets.contains(widget)),
+			);
 		}
+		// The normal and edit layouts share precisely the same card visuals.
+		let entries = ordered
+			.into_iter()
+			.map(|widget| (widget.clone(), self.view_widget(widget)))
+			.collect::<Vec<_>>();
+		let widgets: Element<'_, Message> = if self.editing {
+			editor::grid(self.widgets.len(), entries)
+		} else {
+			for (_, view) in entries {
+				grid = grid.push(view);
+			}
+			grid.into()
+		};
 
-		content = content.push(grid);
-
-		pub const POPUP_SIZE: (u32, u32) = (480, 640);
+		content = content.push(widgets);
 
 		neo_card(content)
-			.width(POPUP_SIZE.0 as f32)
+			.width(480)
+			.height(Length::Shrink)
 			.background(COLORS.decorative.blue)
 			.radius(MODULE_RADIUS)
 			.into()
@@ -486,40 +506,6 @@ impl SystemMenu {
 		.width(Length::Fill)
 		.height(64)
 		.into()
-	}
-
-	fn view_editable_widget<'a>(
-		&'a self, widget: &'a SystemMenuWidgets, is_addable: bool,
-	) -> Element<'a, Message> {
-		// TODO: Disable the interaction on editing. Maybe I don't have to keep a state there, and
-		// I can just use a capturing mouse_area?
-		let content = container(self.view_widget(widget)).padding(Padding {
-			top: 6.0,
-			right: 6.0,
-			bottom: 0.0,
-			left: 0.0,
-		});
-
-		let badge = container(
-			neo_button(if is_addable {
-				svg(phosphor_icon!("plus"))
-			} else {
-				svg(phosphor_icon!("x"))
-			})
-			.padding(1)
-			.shadow_width(2.0)
-			.width(20)
-			.height(20)
-			.on_press(if is_addable {
-				Message::AddWidget(widget.clone())
-			} else {
-				Message::RemoveWidget(widget.clone())
-			}),
-		)
-		.align_right(Length::Fill)
-		.align_top(Length::Fill);
-
-		stack![content, badge].into()
 	}
 }
 

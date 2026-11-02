@@ -497,7 +497,7 @@ impl MediaControls {
 		{
 			content = content.push(
 				neo_slider(0.0..=snap.length.as_secs_f32(), self.active_player_position)
-					.step(0.01)
+					.step(0.01_f32)
 					.on_change(|_| Message::Noop),
 			);
 			content = content.push(space().height(2));

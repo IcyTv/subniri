@@ -80,9 +80,12 @@ system_menu {
     // `c d`
     widgets {
         - wifi
+        - nightlight
         - bluetooth
         - light.bedroom_lamp
+        - microphone
         - script.1714814456677
+        - speaker
     }
 }
 // Settings for controlling the launcher

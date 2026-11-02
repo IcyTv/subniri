@@ -1,9 +1,15 @@
-use std::{sync::Arc, time::Instant};
+use std::{
+	sync::Arc,
+	time::{Duration, Instant},
+};
 
-use daemon_common::HomeassistantEntityProxy;
+use daemon_common::{
+	HomeassistantCallableProxy, HomeassistantCapability, HomeassistantEntityProxy,
+	HomeassistantTogglableProxy,
+};
 use futures::StreamExt;
 use iced::{
-	Animation, Border, Length, Subscription,
+	Animation, Border, Length, Subscription, Task,
 	alignment::{Horizontal, Vertical},
 	widget::{column, container, row, svg, text},
 };
@@ -16,8 +22,15 @@ use utilities::Hashable;
 
 #[derive(Debug, Clone)]
 pub enum Message {
-	NameUpdated(String),
-	Noop,
+	Snapshot {
+		name: String,
+		state: String,
+		available: bool,
+		capabilities: Vec<HomeassistantCapability>,
+	},
+	Disconnected,
+	Activate,
+	CommandFinished(Result<(), String>),
 }
 
 #[derive(Debug, Clone)]
@@ -27,6 +40,10 @@ pub struct HomeassistantEntity {
 	name: String,
 	enabled: Animation<bool>,
 	ty: HomeassistantEntityType,
+	capabilities: Vec<HomeassistantCapability>,
+	available: bool,
+	reported_enabled: bool,
+	pending: bool,
 }
 
 // TODO: Does this belong here? Not really, right?
@@ -98,78 +115,133 @@ impl HomeassistantEntity {
 			connection: Hashable::new(connection),
 			name: "Unknown".to_string(),
 			enabled: Animation::new(false).very_quick(),
+			capabilities: Vec::new(),
+			available: false,
+			reported_enabled: false,
+			pending: false,
 		}
 	}
-	//
-	// pub fn init(&self) -> Task<Message> {
-	// 	let connection = self.connection.clone();
-	// 	Task::future(async move {
-	// 		let proxy = HomeassistantEntityProxy::builder(&connection).destination(format!(
-	// 			"/de/icytv/subniri/Homeassistant/entity/{}",
-	// 			id.replace('.', "/")
-	// 		))?;
-	// 	})
-	// }
 
 	pub fn subscription(&self) -> Subscription<Message> {
-		// TODO: This is horrid...
 		Subscription::run_with(
 			Arc::new((self.connection.clone(), self.id.clone())),
 			move |data| {
 				let (connection, id) = Arc::unwrap_or_clone(data.clone());
 				async_stream::stream! {
-					let path = format!(
-								"/de/icytv/subniri/Homeassistant/entity/{}",
-								id.replace('.', "/")
-							);
-
-					log::trace!("Trying to connect to object at '{path}'");
-
-					let proxy =
-						HomeassistantEntityProxy::builder(&connection)
-							.path(path)
-							.unwrap()
-							.build()
-							.await
-							.unwrap();
-
-					match proxy.observe().await {
-						Ok(true) => log::info!("Observing homeassistant entity '{id}'"),
-						Ok(false) => log::warn!("Failed to observe homeassistant entity '{id}'"),
-						Err(e) => log::warn!("Failed to observe homeassistant entity '{id}': {e}"),
-					}
-
-					let name = proxy.friendly_name().await.unwrap();
-
-					yield Message::NameUpdated(name);
-
-					let mut changed_stream = proxy.receive_friendly_name_changed().await;
-					while let Some(event) = changed_stream.next().await {
-						let new_name = match event.get().await {
-							Ok(name) => name,
-							Err(e) => {
-								log::warn!("Failed to get property '{}' of '{id}': {e}", event.name());
+					loop {
+						if let Err(error) = entity_subscription(&connection, &id).await {
+							log::warn!("Failed to observe Home Assistant entity '{id}': {error}");
+							yield Message::Disconnected;
+							tokio::time::sleep(Duration::from_secs(2)).await;
+							continue;
+						}
+						let observation = Observation { connection: connection.clone(), id: id.clone(), armed: true };
+						// Subscribe before reading, so changes during the initial read are not lost.
+						let result = async {
+							let properties = zbus::fdo::PropertiesProxy::builder(&*connection)
+								.destination(daemon_common::DEFAULT_BUS_NAME)?.path(entity_path(&id))?.build().await?;
+							let changes = properties.receive_properties_changed_with_args(&[
+								(0, daemon_common::HomeassistantEntityInfo::INTERFACE_NAME),
+							]).await?;
+							Ok::<_, zbus::Error>(changes)
+						}.await;
+						let mut changes = match result {
+							Ok(changes) => changes,
+							Err(error) => {
+								log::warn!("Failed to watch Home Assistant entity '{id}': {error}");
+								yield Message::Disconnected;
+								observation.release().await;
+								tokio::time::sleep(Duration::from_secs(2)).await;
 								continue;
 							}
 						};
-
-						yield Message::NameUpdated(new_name);
+						loop {
+							match read_entity(&connection, &id).await {
+								Ok(snapshot) => yield snapshot,
+								Err(error) => {
+									log::warn!("Failed to read Home Assistant entity '{id}': {error}");
+									yield Message::Disconnected;
+									break;
+								}
+							}
+							tokio::select! {
+								change = changes.next() => if change.is_none() { break; },
+								_ = tokio::time::sleep(Duration::from_secs(15)) => {
+									// Restore observation after a daemon restart even if the
+									// entity was recreated between two successful reads.
+									if let Err(error) = entity_subscription(&connection, &id).await {
+										log::warn!("Failed to reobserve Home Assistant entity '{id}': {error}");
+										yield Message::Disconnected;
+										break;
+									}
+								},
+							}
+						}
+						// Drop the old observation before registering a replacement.
+						observation.release().await;
+						tokio::time::sleep(Duration::from_secs(2)).await;
 					}
-
-					log::warn!("Change stream for entity '{id}' lost...");
-
-
-					let _ = proxy.unobserve().await;
 				}
 			},
 		)
 	}
 
-	pub fn update(&mut self, message: Message) {
+	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
-			Message::NameUpdated(name) => self.name = name,
-			Message::Noop => (),
+			Message::Snapshot {
+				name,
+				state,
+				available,
+				capabilities,
+			} => {
+				self.name = name;
+				self.available = available;
+				self.capabilities = capabilities;
+				self.reported_enabled = state == "on";
+				if !self.pending {
+					self.enabled.go_mut(self.reported_enabled, Instant::now());
+				}
+			}
+			Message::Disconnected => self.available = false,
+			Message::Activate if self.available && !self.pending => {
+				let callable = self
+					.capabilities
+					.contains(&HomeassistantCapability::Callable);
+				if !callable
+					&& !self
+						.capabilities
+						.contains(&HomeassistantCapability::Togglable)
+				{
+					return Task::none();
+				}
+				let target = callable || !self.enabled.value();
+				self.enabled.go_mut(target, Instant::now());
+				self.pending = true;
+				let connection = self.connection.clone();
+				let id = self.id.clone();
+				return Task::future(async move {
+					Message::CommandFinished(
+						activate(&connection, &id, callable, target)
+							.await
+							.map_err(|error| error.to_string()),
+					)
+				});
+			}
+			Message::CommandFinished(result) => {
+				self.pending = false;
+				if let Err(error) = result {
+					log::warn!("Home Assistant command for '{}' failed: {error}", self.id);
+					self.enabled.go_mut(self.reported_enabled, Instant::now());
+				} else if self
+					.capabilities
+					.contains(&HomeassistantCapability::Callable)
+				{
+					self.enabled.go_mut(self.reported_enabled, Instant::now());
+				}
+			}
+			Message::Activate => {}
 		}
+		Task::none()
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -178,19 +250,13 @@ impl HomeassistantEntity {
 				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
 		let background =
 			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
+				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
 
-		// neo_toggle_button(
-		// 	self.icon(),
-		// 	&self.name,
-		// 	&self.id,
-		// 	self.enabled.value(),
-		// 	Some(icon_color),
-		// )
-		// .background(background)
-		use HomeassistantEntityType::*;
-		match self.ty {
-			Script => neo_button(
+		let callable = self
+			.capabilities
+			.contains(&HomeassistantCapability::Callable);
+		let button = if callable {
+			neo_button(
 				row![
 					container(svg(self.icon()).height(Length::Fill))
 						.width(42)
@@ -221,16 +287,27 @@ impl HomeassistantEntity {
 				.align_y(Vertical::Center)
 				.width(Length::Fill)
 				.spacing(12),
-			),
-			_ => neo_toggle_button(
+			)
+			.background(background)
+		} else {
+			neo_toggle_button(
 				self.icon(),
 				&self.name,
 				&self.id,
 				self.enabled.value(),
 				Some(icon_color),
 			)
-			.background(background),
-		}
+			.background(background)
+		};
+		// Keep the optimistic colors visible while the command is in flight.
+		// update() serializes presses until its result arrives.
+		button.on_press(Message::Activate).enabled(
+			self.available
+				&& (callable
+					|| self
+						.capabilities
+						.contains(&HomeassistantCapability::Togglable)),
+		)
 	}
 
 	// TODO: Allow for setting custom icons for entities. Maybe HA even provides some icons?
@@ -248,5 +325,95 @@ impl HomeassistantEntity {
 			Script => phosphor_icon!("file"),
 			_ => phosphor_icon!("house"),
 		}
+	}
+}
+
+fn entity_path(id: &str) -> String {
+	format!(
+		"{}/entity/{}",
+		daemon_common::HOMEASSISTANT_OBJECT_PATH,
+		id.replace('.', "/")
+	)
+}
+
+async fn entity_proxy<'a>(
+	connection: &'a zbus::Connection, id: &str,
+) -> zbus::Result<HomeassistantEntityProxy<'a>> {
+	HomeassistantEntityProxy::builder(connection)
+		.path(entity_path(id))?
+		.cache_properties(zbus::proxy::CacheProperties::No)
+		.build()
+		.await
+}
+
+async fn entity_subscription(connection: &zbus::Connection, id: &str) -> zbus::Result<()> {
+	entity_proxy(connection, id).await?.observe().await?;
+	Ok(())
+}
+
+async fn read_entity(connection: &zbus::Connection, id: &str) -> zbus::Result<Message> {
+	let proxy = entity_proxy(connection, id).await?;
+	let (name, state, available, capabilities) = tokio::try_join!(
+		proxy.friendly_name(),
+		proxy.state(),
+		proxy.available(),
+		proxy.capabilities()
+	)?;
+	Ok(Message::Snapshot {
+		name,
+		state,
+		available,
+		capabilities,
+	})
+}
+
+async fn activate(
+	connection: &zbus::Connection, id: &str, callable: bool, target: bool,
+) -> zbus::Result<()> {
+	if callable {
+		HomeassistantCallableProxy::builder(connection)
+			.path(entity_path(id))?
+			.build()
+			.await?
+			.call()
+			.await?;
+	} else {
+		HomeassistantTogglableProxy::builder(connection)
+			.path(entity_path(id))?
+			.build()
+			.await?
+			.set_enabled(target)
+			.await?;
+	}
+	Ok(())
+}
+
+struct Observation {
+	connection: Hashable<zbus::Connection>,
+	id: String,
+	armed: bool,
+}
+
+impl Observation {
+	async fn release(mut self) {
+		if let Ok(proxy) = entity_proxy(&self.connection, &self.id).await {
+			let _ = proxy.unobserve().await;
+		}
+		self.armed = false;
+	}
+}
+
+impl Drop for Observation {
+	fn drop(&mut self) {
+		if !self.armed {
+			return;
+		}
+		let connection = self.connection.clone();
+		let id = self.id.clone();
+		tokio::spawn(async move {
+			if let Ok(proxy) = entity_proxy(&connection, &id).await {
+				let _ = proxy.unobserve().await;
+			}
+		});
 	}
 }
