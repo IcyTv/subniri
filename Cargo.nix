@@ -42,7 +42,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "5df9862215a055a234c20597c06c07624bfa7eb2aacf7088d4186c8d50d9ae12";
+  nixifiedLockHash = "f90c2a692876cfc860b5fac1f184530fd276d5c83862294ce3165a1393c2a4b9";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -2384,7 +2384,7 @@ in
       etagere = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".etagere."0.2.15" { inherit profileName; }).out;
       lru = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".lru."0.16.4" { inherit profileName; }).out;
       rustc_hash = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rustc-hash."2.1.3" { inherit profileName; }).out;
-      wgpu = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu."29.0.4" { inherit profileName; }).out;
+      wgpu = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu."29.0.4" { inherit profileName; }).out;
     };
   });
   
@@ -5151,7 +5151,7 @@ in
       resvg = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".resvg."0.45.1" { inherit profileName; }).out;
       rustc_hash = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rustc-hash."2.1.3" { inherit profileName; }).out;
       thiserror = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".thiserror."2.0.21" { inherit profileName; }).out;
-      wgpu = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu."29.0.4" { inherit profileName; }).out;
+      wgpu = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu."29.0.4" { inherit profileName; }).out;
     };
   });
   
@@ -7123,11 +7123,15 @@ in
     src = fetchCratesIo { inherit name version; sha256 = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"; };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".naga."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".naga."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "naga";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "b2bf919621e7975acb27d881bae2fb993e0d45c8e0446e85e6272971e00dc8df"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "naga";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "default" ]
       [ "glsl-out" ]
@@ -14576,11 +14580,15 @@ in
     ];
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "76e8840e1ba2881d4cbb18d2147627a56af426ff064c0401eb0c8410c6325d07"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "default" ]
       [ "dx12" ]
@@ -14602,7 +14610,7 @@ in
       hashbrown = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".hashbrown."0.16.1" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "js_sys" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".js-sys."0.3.85" { inherit profileName; }).out;
       log = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".log."0.4.35" { inherit profileName; }).out;
-      naga = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".naga."29.0.4" { inherit profileName; }).out;
+      naga = (rustPackages."git+https://github.com/IcyTv/wgpu".naga."29.0.4" { inherit profileName; }).out;
       parking_lot = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".parking_lot."0.12.5" { inherit profileName; }).out;
       ${ if !(hostPlatform.cargo2nix.max-atomic-width >= 64) then "portable_atomic" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".portable-atomic."1.15.0" { inherit profileName; }).out;
       profiling = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".profiling."1.0.18" { inherit profileName; }).out;
@@ -14612,20 +14620,24 @@ in
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "wasm_bindgen" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wasm-bindgen."0.2.108" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "wasm_bindgen_futures" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wasm-bindgen-futures."0.4.58" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "web_sys" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".web-sys."0.3.85" { inherit profileName; }).out;
-      wgpu_core = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-core."29.0.4" { inherit profileName; }).out;
-      ${ if !(hostPlatform.parsed.cpu.name == "wasm32") || hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_hal" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" { inherit profileName; }).out;
-      wgpu_types = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-types."29.0.4" { inherit profileName; }).out;
+      wgpu_core = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-core."29.0.4" { inherit profileName; }).out;
+      ${ if !(hostPlatform.parsed.cpu.name == "wasm32") || hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_hal" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" { inherit profileName; }).out;
+      wgpu_types = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-types."29.0.4" { inherit profileName; }).out;
     };
     buildDependencies = {
       cfg_aliases = (buildRustPackages."registry+https://github.com/rust-lang/crates.io-index".cfg_aliases."0.2.2" { profileName = "__noProfile"; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-core."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-core."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-core";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "2f519832254e56965a9940c4af57dcb75f702b6f6fa4a0b172f685395843a4d7"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-core";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "default" ]
       [ "dx12" ]
@@ -14650,7 +14662,7 @@ in
       hashbrown = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".hashbrown."0.16.1" { inherit profileName; }).out;
       indexmap = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".indexmap."2.13.1" { inherit profileName; }).out;
       log = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".log."0.4.35" { inherit profileName; }).out;
-      naga = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".naga."29.0.4" { inherit profileName; }).out;
+      naga = (rustPackages."git+https://github.com/IcyTv/wgpu".naga."29.0.4" { inherit profileName; }).out;
       once_cell = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".once_cell."1.21.4" { inherit profileName; }).out;
       parking_lot = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".parking_lot."0.12.5" { inherit profileName; }).out;
       ${ if !(hostPlatform.cargo2nix.max-atomic-width >= 64) then "portable_atomic" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".portable-atomic."1.15.0" { inherit profileName; }).out;
@@ -14659,49 +14671,61 @@ in
       rustc_hash = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rustc-hash."1.1.0" { inherit profileName; }).out;
       smallvec = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".smallvec."1.16.4" { inherit profileName; }).out;
       thiserror = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".thiserror."2.0.21" { inherit profileName; }).out;
-      ${ if hostPlatform.parsed.vendor.name == "apple" then "wgpu_core_deps_apple" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-apple."29.0.4" { inherit profileName; }).out;
-      ${ if hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_core_deps_emscripten" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-emscripten."29.0.4" { inherit profileName; }).out;
-      ${ if hostPlatform.isWindows || hostPlatform.parsed.kernel.name == "linux" || hostPlatform.parsed.kernel.name == "android" || hostPlatform.parsed.kernel.name == "freebsd" then "wgpu_core_deps_windows_linux_android" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-windows-linux-android."29.0.4" { inherit profileName; }).out;
-      wgpu_hal = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" { inherit profileName; }).out;
-      wgpu_naga_bridge = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-naga-bridge."29.0.4" { inherit profileName; }).out;
-      wgpu_types = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-types."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.parsed.vendor.name == "apple" then "wgpu_core_deps_apple" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-core-deps-apple."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_core_deps_emscripten" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-core-deps-emscripten."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.isWindows || hostPlatform.parsed.kernel.name == "linux" || hostPlatform.parsed.kernel.name == "android" || hostPlatform.parsed.kernel.name == "freebsd" then "wgpu_core_deps_windows_linux_android" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-core-deps-windows-linux-android."29.0.4" { inherit profileName; }).out;
+      wgpu_hal = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" { inherit profileName; }).out;
+      wgpu_naga_bridge = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-naga-bridge."29.0.4" { inherit profileName; }).out;
+      wgpu_types = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-types."29.0.4" { inherit profileName; }).out;
     };
     buildDependencies = {
       cfg_aliases = (buildRustPackages."registry+https://github.com/rust-lang/crates.io-index".cfg_aliases."0.2.2" { profileName = "__noProfile"; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-apple."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-core-deps-apple."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-core-deps-apple";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "f5e39e26c4c0e07589e67d18546cf79ff45383659fc72fca4dd293358a0347f3"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-core-deps-apple";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "metal" ]
     ];
     dependencies = {
-      ${ if hostPlatform.parsed.vendor.name == "apple" then "wgpu_hal" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.parsed.vendor.name == "apple" then "wgpu_hal" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" { inherit profileName; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-emscripten."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-core-deps-emscripten."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-core-deps-emscripten";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "01e09be551dc939498bdd5f6b2c66e55ab275dad25825267a08605a80fc9f0af"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-core-deps-emscripten";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "gles" ]
     ];
     dependencies = {
-      ${ if hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_hal" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.parsed.kernel.name == "emscripten" then "wgpu_hal" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" { inherit profileName; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-core-deps-windows-linux-android."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-core-deps-windows-linux-android."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-core-deps-windows-linux-android";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "4e592c1bbef6ad047647ae6e666ebd8cee7a32bb4544d9700ec96cbf73230257"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-core-deps-windows-linux-android";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "dx12" ]
       [ "gles" ]
@@ -14709,15 +14733,19 @@ in
       [ "vulkan" ]
     ];
     dependencies = {
-      ${ if hostPlatform.isWindows || hostPlatform.parsed.kernel.name == "linux" || hostPlatform.parsed.kernel.name == "android" || hostPlatform.parsed.kernel.name == "freebsd" || hostPlatform.parsed.kernel.name == "netbsd" then "wgpu_hal" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" { inherit profileName; }).out;
+      ${ if hostPlatform.isWindows || hostPlatform.parsed.kernel.name == "linux" || hostPlatform.parsed.kernel.name == "android" || hostPlatform.parsed.kernel.name == "freebsd" || hostPlatform.parsed.kernel.name == "netbsd" then "wgpu_hal" else null } = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" { inherit profileName; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-hal."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-hal."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-hal";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "97ace1c17727311c22a46e4e3faf56ea6de81af99dcc839bdfb54857b94d448d"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-hal";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "dx12" ]
       [ "gles" ]
@@ -14745,7 +14773,7 @@ in
       ${ if hostPlatform.isUnix then "libc" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".libc."0.2.191" { inherit profileName; }).out;
       ${ if !(hostPlatform.parsed.cpu.name == "wasm32") || hostPlatform.parsed.kernel.name == "emscripten" then "libloading" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".libloading."0.8.9" { inherit profileName; }).out;
       log = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".log."0.4.35" { inherit profileName; }).out;
-      naga = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".naga."29.0.4" { inherit profileName; }).out;
+      naga = (rustPackages."git+https://github.com/IcyTv/wgpu".naga."29.0.4" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.kernel.name == "android" then "ndk_sys" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".ndk-sys."0.6.0+11769913" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.vendor.name == "apple" then "objc2" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".objc2."0.6.5" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.vendor.name == "apple" then "objc2_core_foundation" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".objc2-core-foundation."0.3.2" { inherit profileName; }).out;
@@ -14753,7 +14781,7 @@ in
       ${ if hostPlatform.parsed.vendor.name == "apple" then "objc2_metal" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".objc2-metal."0.3.2" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.vendor.name == "apple" then "objc2_quartz_core" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".objc2-quartz-core."0.3.2" { inherit profileName; }).out;
       ${ if hostPlatform.isWindows then "once_cell" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".once_cell."1.21.4" { inherit profileName; }).out;
-      ordered_float = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".ordered-float."5.4.0" { inherit profileName; }).out;
+      ordered_float = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".ordered-float."4.6.0" { inherit profileName; }).out;
       parking_lot = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".parking_lot."0.12.5" { inherit profileName; }).out;
       ${ if !(hostPlatform.cargo2nix.max-atomic-width >= 64) || !(hostPlatform.cargo2nix.max-atomic-width >= hostPlatform.cargo2nix.target-pointer-width) then "portable_atomic" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".portable-atomic."1.15.0" { inherit profileName; }).out;
       ${ if !(hostPlatform.cargo2nix.max-atomic-width >= hostPlatform.cargo2nix.target-pointer-width) then "portable_atomic_util" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".portable-atomic-util."0.2.8" { inherit profileName; }).out;
@@ -14767,8 +14795,8 @@ in
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "wasm_bindgen" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wasm-bindgen."0.2.108" { inherit profileName; }).out;
       ${ if hostPlatform.isUnix then "wayland_sys" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wayland-sys."0.31.11" { inherit profileName; }).out;
       ${ if hostPlatform.parsed.cpu.name == "wasm32" && !(hostPlatform.parsed.kernel.name == "emscripten") then "web_sys" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".web-sys."0.3.85" { inherit profileName; }).out;
-      wgpu_naga_bridge = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-naga-bridge."29.0.4" { inherit profileName; }).out;
-      wgpu_types = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-types."29.0.4" { inherit profileName; }).out;
+      wgpu_naga_bridge = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-naga-bridge."29.0.4" { inherit profileName; }).out;
+      wgpu_types = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-types."29.0.4" { inherit profileName; }).out;
       ${ if hostPlatform.isWindows then "windows" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".windows."0.62.2" { inherit profileName; }).out;
       ${ if hostPlatform.isWindows then "windows_core" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".windows-core."0.62.2" { inherit profileName; }).out;
       ${ if hostPlatform.isWindows then "windows_result" else null } = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".windows-result."0.4.1" { inherit profileName; }).out;
@@ -14778,22 +14806,30 @@ in
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-naga-bridge."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-naga-bridge."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-naga-bridge";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "95226013f547544b223281cd16a4fb549aa9dcb562adbda0faae4c73ffbbc161"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-naga-bridge";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     dependencies = {
-      naga = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".naga."29.0.4" { inherit profileName; }).out;
-      wgpu_types = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".wgpu-types."29.0.4" { inherit profileName; }).out;
+      naga = (rustPackages."git+https://github.com/IcyTv/wgpu".naga."29.0.4" { inherit profileName; }).out;
+      wgpu_types = (rustPackages."git+https://github.com/IcyTv/wgpu".wgpu-types."29.0.4" { inherit profileName; }).out;
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".wgpu-types."29.0.4" = overridableMkRustCrate (profileName: rec {
+  "git+https://github.com/IcyTv/wgpu".wgpu-types."29.0.4" = overridableMkRustCrate (profileName: rec {
     name = "wgpu-types";
     version = "29.0.4";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "84bf84cd9ca8ca45e2b223a3868f1adf9bfc0c66aeac212e76ee7e40fdadf8f5"; };
+    registry = "git+https://github.com/IcyTv/wgpu";
+    src = fetchCrateGit {
+      url = "https://github.com/IcyTv/wgpu";
+      name = "wgpu-types";
+      version = "29.0.4";
+      rev = "20113eea20269ad37e1485df714783f05450c551";};
     features = builtins.concatLists [
       [ "std" ]
       [ "web" ]

@@ -99,6 +99,17 @@ todo = "deny"
 unimplemented = "deny"
 
 [patch.crates-io]
+# Keep the wgpu family on the same 29.0.4-based fork revision so their shared
+# types are not duplicated across registry/git sources. The fix itself is in HAL.
+wgpu = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-core = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-hal = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-types = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-naga-bridge = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-core-deps-apple = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-core-deps-emscripten = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+wgpu-core-deps-windows-linux-android = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
+naga = { git = "https://github.com/IcyTv/wgpu", rev = "20113eea20269ad37e1485df714783f05450c551" }
 softbuffer = { git = "https://github.com/rust-windowing/softbuffer", rev = "840683cfce68a04d20cfb75b2976d009d3ba77d8" }
 zbus = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9" }
 zvariant = { git = "https://github.com/IcyTv/zbus", rev = "f8e7b0c9" }
