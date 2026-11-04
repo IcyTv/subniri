@@ -7,7 +7,7 @@ use config::SystemMenuWidgets;
 use iced::{
 	Border, Element, Event, Length, Point, Rectangle, Size, Vector,
 	advanced::{
-		Layout, Renderer as _, Shell, Widget, layout, mouse, renderer,
+		Layout, Shell, Widget, layout, mouse, renderer,
 		widget::{Tree, tree},
 	},
 	keyboard::{self, key::Named},
@@ -32,10 +32,10 @@ pub(super) fn grid<'a>(
 	})
 }
 
-struct Editor<'a> {
+struct Editor<'a, Renderer: iced::advanced::Renderer = iced::Renderer> {
 	active: usize,
 	keys: Vec<SystemMenuWidgets>,
-	children: Vec<Element<'a, Message>>,
+	children: Vec<Element<'a, Message, iced::Theme, Renderer>>,
 }
 
 #[derive(Default)]
@@ -97,7 +97,7 @@ fn slot_bounds(bounds: Rectangle, index: usize) -> Rectangle {
 	}
 }
 
-impl Editor<'_> {
+impl<Renderer: iced::advanced::Renderer> Editor<'_, Renderer> {
 	fn changed_widgets(&self, press: &Press) -> Vec<SystemMenuWidgets> {
 		super::layout::changed_widgets(
 			&self.keys,
@@ -108,7 +108,9 @@ impl Editor<'_> {
 	}
 }
 
-impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
+impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
+	for Editor<'_, Renderer>
+{
 	fn tag(&self) -> tree::Tag {
 		tree::Tag::of::<State>()
 	}
@@ -150,7 +152,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
 	}
 
 	fn layout(
-		&mut self, tree: &mut Tree, renderer: &iced::Renderer, limits: &layout::Limits,
+		&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits,
 	) -> layout::Node {
 		let width = limits.max().width;
 		let rows = self.children.len().div_ceil(COLUMNS);
@@ -190,7 +192,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
 
 	fn update(
 		&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
-		renderer: &iced::Renderer, shell: &mut Shell<'_, Message>, viewport: &Rectangle,
+		renderer: &Renderer, shell: &mut Shell<'_, Message>, viewport: &Rectangle,
 	) {
 		let state = tree.state.downcast_mut::<State>();
 		state.viewport = Some(*viewport);
@@ -309,7 +311,7 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
 
 	fn mouse_interaction(
 		&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
-		_renderer: &iced::Renderer,
+		_renderer: &Renderer,
 	) -> mouse::Interaction {
 		let state = tree.state.downcast_ref::<State>();
 		if state
@@ -336,8 +338,8 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
 	}
 
 	fn draw(
-		&self, tree: &Tree, renderer: &mut iced::Renderer, theme: &iced::Theme,
-		style: &renderer::Style, layout: Layout<'_>, _cursor: mouse::Cursor, viewport: &Rectangle,
+		&self, tree: &Tree, renderer: &mut Renderer, theme: &iced::Theme, style: &renderer::Style,
+		layout: Layout<'_>, _cursor: mouse::Cursor, viewport: &Rectangle,
 	) {
 		let dragging = tree
 			.state
@@ -406,6 +408,9 @@ impl Widget<Message, iced::Theme, iced::Renderer> for Editor<'_> {
 		}
 	}
 }
+
+#[cfg(test)]
+mod interaction_tests;
 
 #[cfg(test)]
 mod tests {
@@ -500,7 +505,7 @@ mod tests {
 				}
 			}
 		}
-		let editor = Editor {
+		let editor: Editor<'_> = Editor {
 			active: 2,
 			keys: vec![
 				SystemMenuWidgets::Wifi,
