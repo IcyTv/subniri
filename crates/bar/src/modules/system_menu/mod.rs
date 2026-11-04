@@ -16,7 +16,7 @@ use jiff::{
 use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
-	widgets::{NeoButton, neo_button, neo_card, neo_slider, neo_toggle_button},
+	widgets::{NeoButton, gif, gif::Frames, neo_button, neo_card, neo_slider, neo_toggle_button},
 };
 use nix::unistd::{Uid, User};
 use zbus::Connection;
@@ -74,10 +74,17 @@ pub enum ContextMenu {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum Avatar {
+	Gif(Frames),
+	Image(image::Handle),
+}
+
+#[derive(Debug, Clone)]
 pub struct SystemMenu {
 	layout: layout::Layout,
 	username: String,
-	avatar: image::Handle,
+	avatar: Avatar,
 	uptime: jiff::Span,
 
 	wifi: Box<wifi::Wifi>,
@@ -94,9 +101,12 @@ impl SystemMenu {
 			.ok()
 			.flatten()
 			.map_or_else(|| "<unknown>".to_string(), |u| u.name);
-		let avatar = image::Handle::from_bytes(
-			include_bytes!("../../../../../assets/avatar.gif").as_slice(),
+
+		let avatar = Avatar::Gif(
+			Frames::from_bytes(include_bytes!("../../../../../assets/avatar.gif").as_slice())
+				.expect("Embedded avatar to be a valid GIF"),
 		);
+
 		let uptime = uptime().unwrap_or_default();
 
 		let layout = layout::Layout::new(config);
@@ -251,7 +261,7 @@ impl SystemMenu {
 		let mut content = column![].spacing(8);
 
 		let user_card = row![
-			neo_card(image(&self.avatar).width(50.0).height(50.0))
+			neo_card(self.avatar())
 				.padding(2)
 				.background(COLORS.decorative.pink),
 			column![
@@ -348,6 +358,13 @@ impl SystemMenu {
 			.background(COLORS.decorative.blue)
 			.radius(MODULE_RADIUS)
 			.into()
+	}
+
+	fn avatar<'a>(&'a self) -> Element<'a, Message> {
+		match &self.avatar {
+			Avatar::Gif(frames) => gif(&frames).width(50.0).height(50.0).into(),
+			Avatar::Image(handle) => image(handle.clone()).width(50.0).height(50.0).into(),
+		}
 	}
 
 	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {

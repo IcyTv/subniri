@@ -210,10 +210,13 @@ impl HomeassistantEntity {
 				}
 			}
 		};
+
 		let change = self.interaction.update(event);
+
 		if let Some(enabled) = change.animate {
 			self.enabled.go_mut(enabled, Instant::now());
 		}
+
 		if let Some(command) = change.command {
 			let connection = self.connection.clone();
 			let id = self.id.clone();
@@ -225,6 +228,7 @@ impl HomeassistantEntity {
 				)
 			});
 		}
+
 		Task::none()
 	}
 

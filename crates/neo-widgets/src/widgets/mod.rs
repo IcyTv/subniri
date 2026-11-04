@@ -29,3 +29,6 @@ pub use neo_tumbler::neo_tumbler;
 
 mod spinner;
 pub use spinner::{Spinner, spinner};
+
+pub mod gif;
+pub use gif::{Gif, gif};
