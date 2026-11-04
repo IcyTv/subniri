@@ -18,6 +18,8 @@ use neo_widgets::{
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 use utilities::Hashable;
 
+pub(super) mod integration;
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	DeviceConnected(BtDevice),
@@ -377,7 +379,12 @@ mod tests {
 	#[tokio::test]
 	#[ignore = "private-bus subprocess helper"]
 	async fn owner_loss_child() -> Result<(), test_bus::Error> {
-		use crate::modules::{Module, ModuleMessage, ServiceState};
+		use crate::modules::{Module, ModuleMessage};
+		let session = |connection, message| {
+			ModuleMessage::Bluetooth(integration::Message::Session(connection, message))
+		};
+		let ready =
+			|module: &Module| matches!(module, Module::Bluetooth(bluetooth) if bluetooth.ready());
 		test_bus::require_child()?;
 		let daemon = bluez().await?;
 		let bluetooth = Bluetooth::new().await?;
@@ -399,15 +406,15 @@ mod tests {
 			"owner loss must reach the lifecycle owner"
 		);
 		drop(events);
-		let mut module = Module::Bluetooth(ServiceState::Ready(bluetooth));
-		let task = module.update(ModuleMessage::BluetoothEvent(
+		let mut module = Module::Bluetooth(integration::Integration::connected(bluetooth));
+		let task = module.update(session(
 			old_connection.clone(),
 			lost.ok_or("missing terminal event")?,
 		));
 		assert!(task.units() > 0);
 		assert_eq!(
 			module
-				.update(ModuleMessage::BluetoothEvent(
+				.update(session(
 					old_connection.clone(),
 					Message::Disconnected("duplicate".into())
 				))
@@ -418,17 +425,17 @@ mod tests {
 		let message =
 			tokio::time::timeout(Duration::from_secs(3), test_bus::task_message(task)).await??;
 		let _ = module.update(message);
-		assert!(matches!(module, Module::Bluetooth(ServiceState::Ready(_))));
+		assert!(ready(&module));
 		assert_eq!(
 			module
-				.update(ModuleMessage::BluetoothEvent(
+				.update(session(
 					old_connection,
 					Message::Disconnected("stale".into())
 				))
 				.units(),
 			0
 		);
-		assert!(matches!(module, Module::Bluetooth(ServiceState::Ready(_))));
+		assert!(ready(&module));
 		Ok(())
 	}
 }

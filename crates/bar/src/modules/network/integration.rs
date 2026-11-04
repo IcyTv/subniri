@@ -7,7 +7,10 @@ use neo_widgets::style::COLORS;
 use utilities::Hashable;
 
 use super::{Message as Event, Network};
-use crate::modules::{ServiceState, initialize, loading, unavailable};
+use crate::modules::{
+	connection::{State as ServiceState, initialize},
+	loading, unavailable,
+};
 
 #[derive(Debug)]
 pub struct Integration {

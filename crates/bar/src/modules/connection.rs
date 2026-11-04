@@ -2,7 +2,7 @@
 use std::{future::Future, time::Duration};
 
 #[derive(Debug)]
-pub(crate) enum State<T> {
+pub(super) enum State<T> {
 	Connecting,
 	Ready(T),
 	Unavailable { error: String, attempt: u32 },
