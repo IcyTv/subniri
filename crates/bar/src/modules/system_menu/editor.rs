@@ -99,23 +99,12 @@ fn slot_bounds(bounds: Rectangle, index: usize) -> Rectangle {
 
 impl Editor<'_> {
 	fn changed_widgets(&self, press: &Press) -> Vec<SystemMenuWidgets> {
-		let mut widgets = self
-			.keys
-			.iter()
-			.take(self.active)
-			.cloned()
-			.collect::<Vec<_>>();
-		if press.source >= self.active {
-			if let Some(widget) = self.keys.get(press.source) {
-				widgets.push(widget.clone());
-			}
-		} else if press.dragging(self.active) {
-			let widget = widgets.remove(press.source);
-			widgets.insert(press.target, widget);
-		} else {
-			widgets.remove(press.source);
-		}
-		widgets
+		super::layout::changed_widgets(
+			&self.keys,
+			self.active,
+			press.source,
+			press.dragging(self.active).then_some(press.target),
+		)
 	}
 }
 

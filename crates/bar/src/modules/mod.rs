@@ -217,24 +217,16 @@ impl Module {
 				taskbar.update(message);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::SystemMenu(message)) => {
-				let previous_widgets = matches!(message, system_menu::Message::WidgetsEdited(_))
-					.then(|| menu.widgets().to_vec());
 				let closes_context_menus = message.closes_context_menus();
 				if closes_context_menus {
 					menu.close_context_menus();
 				}
-				let update = menu.update(message).map(ModuleMessage::SystemMenu);
-				let update = if previous_widgets.is_some_and(|previous| previous != menu.widgets())
-				{
-					Task::batch([
-						update,
-						Task::done(ModuleMessage::SaveSystemMenuWidgets(
-							menu.widgets().to_vec(),
-						)),
-					])
-				} else {
-					update
-				};
+				let update = menu.update(message).map(|message| match message {
+					system_menu::Message::SaveWidgets(widgets) => {
+						ModuleMessage::SaveSystemMenuWidgets(widgets)
+					}
+					message => ModuleMessage::SystemMenu(message),
+				});
 				return if closes_context_menus {
 					Task::batch([update, Task::done(ModuleMessage::CloseContextMenus)])
 				} else {
@@ -368,6 +360,35 @@ fn unavailable<'a, Message: Clone + 'a>(
 #[cfg(test)]
 mod tests {
 	use super::{Module, ModuleMessage, ServiceState};
+
+	#[tokio::test]
+	async fn layout_changes_save_only_accepted_changed_edits() -> Result<(), super::test_bus::Error>
+	{
+		use super::system_menu::Message;
+		use config::SystemMenuWidgets::{Bluetooth, Wifi};
+		let mut config = config::ConfigFile::default();
+		config.system_menu.widgets = vec![Wifi, Bluetooth];
+		let mut module = Module::system_menu(&config);
+		let edit = || ModuleMessage::SystemMenu(Message::WidgetsEdited(vec![Bluetooth]));
+		assert_eq!(module.update(edit()).units(), 0);
+		let _ = module.update(ModuleMessage::SystemMenu(Message::EditingChanged(true)));
+		let task = module.update(edit());
+		let message = super::test_bus::task_message(task).await?;
+		assert!(
+			matches!(message, ModuleMessage::SaveSystemMenuWidgets(widgets) if widgets == vec![Bluetooth])
+		);
+		assert_eq!(module.update(edit()).units(), 0);
+		let _ = module.update(ModuleMessage::PopupClosed);
+		assert_eq!(
+			module
+				.update(ModuleMessage::SystemMenu(Message::WidgetsEdited(vec![
+					Wifi
+				])))
+				.units(),
+			0
+		);
+		Ok(())
+	}
 
 	#[test]
 	fn network_startup_failure_schedules_recovery() {

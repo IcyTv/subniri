@@ -933,6 +933,44 @@ mod tests {
 		}
 	}
 
+	#[tokio::test]
+	async fn failed_layout_writes_keep_newer_edits_and_request_final_reload()
+	-> Result<(), Box<dyn std::error::Error>> {
+		use config::SystemMenuWidgets::{Bluetooth, Wifi};
+		let mut bar = empty_bar();
+		// Drop write tasks without running them; never touch the user's config.
+		let _ = bar.update(BarMessage::Module(
+			None,
+			Section::Left,
+			0,
+			ModuleMessage::SaveSystemMenuWidgets(vec![Wifi]),
+		));
+		let _ = bar.update(BarMessage::Module(
+			None,
+			Section::Left,
+			0,
+			ModuleMessage::SaveSystemMenuWidgets(vec![Bluetooth]),
+		));
+		assert_eq!(bar.widget_config.latest(), Some([Bluetooth].as_slice()));
+		let next = bar.update(BarMessage::SystemMenuWidgetsSaved(Err(
+			"first write failed".into(),
+		)));
+		assert!(next.units() > 0);
+		drop(next);
+		assert_eq!(bar.widget_config.latest(), Some([Bluetooth].as_slice()));
+		let final_task = bar.update(BarMessage::SystemMenuWidgetsSaved(Err(
+			"second write failed".into(),
+		)));
+		let mut actions = iced_runtime::task::into_stream(final_task).ok_or("missing reload")?;
+		assert!(matches!(
+			actions.next().await,
+			Some(iced_runtime::Action::Output(BarMessage::ConfigUpdated))
+		));
+		assert!(bar.widget_config.latest().is_none());
+		assert_eq!(bar.config_file.system_menu.widgets, vec![Bluetooth]);
+		Ok(())
+	}
+
 	async fn opened_id(task: Task<BarMessage>) -> Result<Id, Box<dyn std::error::Error>> {
 		let mut actions = iced_runtime::task::into_stream(task).ok_or("missing task")?;
 		while let Some(action) = actions.next().await {

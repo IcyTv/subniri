@@ -24,6 +24,7 @@ use zbus::Connection;
 mod bluetooth;
 mod editor;
 mod homeassistant;
+mod layout;
 mod nightlight;
 mod wifi;
 
@@ -48,6 +49,7 @@ pub enum Message {
 	EditingChanged(bool),
 	OpenContextMenu(ContextMenu, usize, Rectangle),
 	WidgetsEdited(Vec<SystemMenuWidgets>),
+	SaveWidgets(Vec<SystemMenuWidgets>),
 
 	Noop,
 }
@@ -73,12 +75,10 @@ pub enum ContextMenu {
 
 #[derive(Debug, Clone)]
 pub struct SystemMenu {
-	widgets: Vec<SystemMenuWidgets>,
+	layout: layout::Layout,
 	username: String,
 	avatar: image::Handle,
 	uptime: jiff::Span,
-
-	all_widgets: Vec<SystemMenuWidgets>,
 
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
@@ -86,8 +86,6 @@ pub struct SystemMenu {
 	homeassistant: homeassistant::integration::Integration,
 
 	context_menus: Vec<ContextMenu>,
-
-	editing: bool,
 }
 
 impl SystemMenu {
@@ -101,29 +99,10 @@ impl SystemMenu {
 		);
 		let uptime = uptime().unwrap_or_default();
 
-		let mut all_widgets = SystemMenuWidgets::VARIANTS.to_vec();
-
-		let all_ha_devices = config
-			.homeassistant
-			.tracked_devices
-			.iter()
-			.cloned()
-			.map(SystemMenuWidgets::Homeassistant)
-			.collect::<Vec<_>>();
-		log::debug!("All HA devices: {all_ha_devices:?}");
-
-		all_widgets.extend(all_ha_devices);
-		for widget in &config.system_menu.widgets {
-			if !all_widgets.contains(widget) {
-				all_widgets.push(widget.clone());
-			}
-		}
-
-		log::debug!("All widgets: {all_widgets:?}");
-
-		let widgets = config.system_menu.widgets.clone();
+		let layout = layout::Layout::new(config);
 		let homeassistant = homeassistant::integration::Integration::new(
-			all_widgets
+			layout
+				.available()
 				.iter()
 				.filter_map(|widget| {
 					if let SystemMenuWidgets::Homeassistant(id) = widget {
@@ -136,12 +115,10 @@ impl SystemMenu {
 		);
 
 		Self {
-			widgets,
+			layout,
 			username,
 			avatar,
 			uptime,
-
-			all_widgets,
 
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
@@ -149,8 +126,6 @@ impl SystemMenu {
 			homeassistant,
 
 			context_menus: Vec::new(),
-
-			editing: false,
 		}
 	}
 
@@ -236,12 +211,15 @@ impl SystemMenu {
 				});
 			}
 
-			Message::EditingChanged(editing) => self.editing = editing,
+			Message::EditingChanged(editing) => {
+				self.layout.update(layout::Event::Editing(editing));
+			}
 			Message::WidgetsEdited(widgets) => {
-				if self.editing {
-					self.widgets = widgets;
+				if let Some(widgets) = self.layout.update(layout::Event::Edited(widgets)) {
+					return Task::done(Message::SaveWidgets(widgets));
 				}
 			}
+			Message::SaveWidgets(_) => {}
 			Message::Noop
 			| Message::OpenSettings
 			| Message::OpenPowerMenu
@@ -252,29 +230,17 @@ impl SystemMenu {
 	}
 
 	pub fn sync_config(&mut self, config: &ConfigFile) {
-		if !self.editing {
-			self.sync_widgets(&config.system_menu.widgets);
-		}
-	}
-
-	pub(super) fn widgets(&self) -> &[SystemMenuWidgets] {
-		&self.widgets
+		self.layout
+			.update(layout::Event::Reload(config.system_menu.widgets.clone()));
 	}
 
 	pub fn popup_closed(&mut self) {
-		self.editing = false;
+		self.layout.update(layout::Event::Closed);
 		self.close_context_menus();
 	}
 
 	pub fn close_context_menus(&mut self) {
 		self.context_menus.clear();
-	}
-
-	fn sync_widgets(&mut self, widgets: &[SystemMenuWidgets]) {
-		if self.widgets.as_slice() != widgets {
-			self.widgets.clear();
-			self.widgets.extend_from_slice(widgets);
-		}
 	}
 
 	pub fn view(&self) -> NeoButton<'_, Message> {
@@ -321,12 +287,12 @@ impl SystemMenu {
 				.width(32)
 				.height(32)
 				.padding(6)
-				.background(if self.editing {
+				.background(if self.layout.editing() {
 					COLORS.decorative.blue
 				} else {
 					COLORS.white
 				})
-				.on_press(Message::EditingChanged(!self.editing)),
+				.on_press(Message::EditingChanged(!self.layout.editing())),
 		]
 		.width(Length::Fill)
 		.spacing(8)
@@ -341,7 +307,7 @@ impl SystemMenu {
 		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
 
 		// Transient device controls are not part of the editable widget layout.
-		if !self.editing && self.nightlight.enabled.value() {
+		if !self.layout.editing() && self.nightlight.enabled.value() {
 			let temp = row![
 				svg(phosphor_icon!("sun")).width(16),
 				neo_slider(1000..=6500, self.nightlight.temperature)
@@ -364,21 +330,15 @@ impl SystemMenu {
 			grid = grid.push(brightness);
 		}
 
-		let mut ordered = self.widgets.iter().collect::<Vec<_>>();
-		if self.editing {
-			ordered.extend(
-				self.all_widgets
-					.iter()
-					.filter(|widget| !self.widgets.contains(widget)),
-			);
-		}
 		// The normal and edit layouts share precisely the same card visuals.
-		let entries = ordered
+		let entries = self
+			.layout
+			.entries()
 			.into_iter()
 			.map(|widget| (widget.clone(), self.view_widget(widget)))
 			.collect::<Vec<_>>();
-		let widgets: Element<'_, Message> = if self.editing {
-			editor::grid(self.widgets.len(), entries)
+		let widgets: Element<'_, Message> = if self.layout.editing() {
+			editor::grid(self.layout.selected().len(), entries)
 		} else {
 			for (_, view) in entries {
 				grid = grid.push(view);
@@ -546,6 +506,35 @@ fn uptime() -> Result<jiff::Span, Box<dyn std::error::Error>> {
 mod reliability_tests {
 	use super::SystemMenu;
 	use crate::modules::test_bus;
+
+	#[test]
+	fn config_reload_preserves_edits_and_keeps_existing_available_widget_catalog() {
+		use config::SystemMenuWidgets::{Bluetooth, Homeassistant, Wifi};
+		let mut config = config::ConfigFile::default();
+		config.system_menu.widgets = vec![Wifi, Homeassistant("light.untracked".into())];
+		let mut menu = SystemMenu::new(&config);
+		assert!(
+			menu.layout
+				.available()
+				.contains(&Homeassistant("light.untracked".into()))
+		);
+		let available = menu.layout.available().to_vec();
+		let _ = menu.update(super::Message::EditingChanged(true));
+		config.system_menu.widgets = vec![Bluetooth, Bluetooth];
+		config.homeassistant.tracked_devices = vec!["light.new".into()];
+		menu.sync_config(&config);
+		assert_eq!(
+			menu.layout.selected(),
+			&[Wifi, Homeassistant("light.untracked".into())]
+		);
+		menu.popup_closed();
+		menu.sync_config(&config);
+		assert_eq!(menu.layout.selected(), &[Bluetooth, Bluetooth]);
+		assert_eq!(menu.layout.available(), available);
+		config.system_menu.widgets.clear();
+		menu.sync_config(&config);
+		assert!(menu.layout.selected().is_empty());
+	}
 
 	#[test]
 	#[ignore = "private subprocess with a deliberately unavailable session bus"]
