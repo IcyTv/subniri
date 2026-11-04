@@ -12,7 +12,7 @@ use async_channel::{Receiver, Sender};
 use daemon_common::{DEFAULT_BUS_NAME, SpotifyProxy, SpotifyTrackProxy};
 use futures::{Stream, StreamExt};
 use iced::{
-	Animation, Element, Font, Length, Padding, Subscription, Task,
+	Animation, ContentFit, Element, Font, Length, Padding, Subscription, Task,
 	alignment::{Horizontal, Vertical},
 	font,
 	widget::{column, container, image, row, space, svg, text},
@@ -369,6 +369,7 @@ impl MediaControls {
 		.align_x(Horizontal::Right)
 		.width(Length::Fill)
 		.spacing(8);
+
 		if self.saved_track.observation().is_some() {
 			let icon = if self.saved_track.saved() == Some(true) {
 				phosphor_icon!("heart", "fill")
@@ -383,21 +384,24 @@ impl MediaControls {
 					.on_press(Message::ToggleSpotifySaved),
 			);
 		}
+
 		let art_row =
 			row![space::horizontal(), self.get_thumbnail(), actions].align_y(Vertical::Center);
-		let title = (if let Some(title) = self.active_player.as_ref().map(|p| p.1.title.clone()) {
+
+		let title = if let Some(title) = self.active_player.as_ref().map(|p| p.1.title.clone()) {
 			text(title)
 		} else {
 			text("<unknowwn>")
-		})
-		.font(Font {
-			weight: font::Weight::Bold,
-			..Default::default()
-		})
-		.size(24)
-		.color(COLORS.text)
-		.wrapping(text::Wrapping::WordOrGlyph)
-		.width(Length::Shrink);
+		};
+		let title = title
+			.font(Font {
+				weight: font::Weight::Bold,
+				..Default::default()
+			})
+			.size(24)
+			.color(COLORS.text)
+			.wrapping(text::Wrapping::WordOrGlyph)
+			.width(Length::Shrink);
 
 		let mut content =
 			column![art_row, space::vertical().height(12), title].align_x(Horizontal::Center);
@@ -515,6 +519,7 @@ impl MediaControls {
 					image(tn)
 						.width(Length::Fill)
 						.height(Length::Fill)
+						.content_fit(ContentFit::Cover)
 						.expand(true)
 						.into()
 				} else {
@@ -538,7 +543,7 @@ impl MediaControls {
 				.into()
 		};
 
-		neo_card(content).width(150).height(150).padding(0).into()
+		neo_card(content).width(150).height(150).padding(2).into()
 	}
 }
 
