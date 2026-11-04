@@ -1,4 +1,4 @@
-use std::{hash::Hash, pin::pin};
+use std::{hash::Hash, pin::pin, time::Duration};
 
 use bluer::{Adapter, AdapterEvent, AdapterProperty, Address, ErrorKind, Session};
 use futures::{Stream, StreamExt};
@@ -16,6 +16,7 @@ use neo_widgets::{
 };
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
+use utilities::Hashable;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -24,6 +25,7 @@ pub enum Message {
 	AdapterFound,
 	AdapterLost,
 	Power(bool),
+	Disconnected(String),
 }
 
 #[derive(Debug, Clone)]
@@ -36,6 +38,10 @@ pub struct Bluetooth {
 
 impl Bluetooth {
 	pub async fn new() -> Result<Self, String> {
+		let watcher = zbus::Connection::system()
+			.await
+			.map_err(|error| error.to_string())?;
+		let owner = bluez_owner(&watcher).await?;
 		let session = Session::new().await.map_err(|error| error.to_string())?;
 		let adapter = match session.default_adapter().await {
 			Ok(a) => Some(a),
@@ -62,6 +68,8 @@ impl Bluetooth {
 			has_adapter: adapter.is_some(),
 			devices,
 			data: BluetoothData {
+				watcher: Hashable::new(watcher),
+				owner,
 				session,
 				default_adapter: adapter,
 			},
@@ -70,6 +78,10 @@ impl Bluetooth {
 
 	pub fn subscription(&self) -> Subscription<Message> {
 		Subscription::run_with(self.data.clone(), |data| stream(data.clone()))
+	}
+
+	pub fn connection(&self) -> Hashable<zbus::Connection> {
+		self.data.watcher.clone()
 	}
 
 	pub fn update(&mut self, message: Message) {
@@ -88,6 +100,7 @@ impl Bluetooth {
 				println!("Power state changed {is_on}");
 				self.powered_on = is_on;
 			}
+			Message::Disconnected(_) => {} // Handled by the session owner.
 		}
 	}
 
@@ -138,10 +151,63 @@ impl Bluetooth {
 	}
 }
 
+async fn bluez_owner(connection: &zbus::Connection) -> Result<String, String> {
+	let proxy = zbus::fdo::DBusProxy::new(connection)
+		.await
+		.map_err(|error| error.to_string())?;
+	let name = zbus::names::BusName::try_from("org.bluez").map_err(|error| error.to_string())?;
+	proxy
+		.get_name_owner(name)
+		.await
+		.map(|owner| owner.to_string())
+		.map_err(|error| error.to_string())
+}
+
 fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'static {
+	async_stream::stream! {
+		let watcher = data.watcher.clone();
+		let proxy = match zbus::fdo::DBusProxy::new(&watcher).await {
+			Ok(proxy) => proxy,
+			Err(error) => { yield Message::Disconnected(error.to_string()); return; }
+		};
+		let mut owners = match tokio::time::timeout(Duration::from_secs(5), proxy.receive_name_owner_changed()).await {
+			Ok(Ok(owners)) => owners,
+			Ok(Err(error)) => { yield Message::Disconnected(error.to_string()); return; }
+			Err(_) => { yield Message::Disconnected("Bluetooth owner observation timed out".into()); return; }
+		};
+		// Subscribe before checking identity so replacement during setup is not lost.
+		match tokio::time::timeout(Duration::from_secs(5), bluez_owner(&watcher)).await {
+			Ok(Ok(owner)) if owner == data.owner => {}
+			_ => { yield Message::Disconnected("BlueZ owner changed during initialization".into()); return; }
+		}
+		let mut events = Box::pin(device_events(data));
+		loop {
+			tokio::select! {
+				() = watcher.closed() => { yield Message::Disconnected("Bluetooth bus disconnected".into()); return; }
+				owner = owners.next() => {
+					match owner {
+						Some(owner) if owner.args().is_ok_and(|args| args.name().as_str() != "org.bluez") => {}
+						_ => { yield Message::Disconnected("BlueZ owner observation ended or changed".into()); return; }
+					}
+				}
+				event = events.next() => match event {
+					Some(event) => {
+						let terminal = matches!(event, Message::Disconnected(_));
+						yield event;
+						if terminal { return; }
+					}
+					None => { yield Message::Disconnected("Bluetooth observation ended".into()); return; }
+				}
+			}
+		}
+	}
+}
+
+fn device_events(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'static {
 	let BluetoothData {
 		session,
 		default_adapter,
+		..
 	} = data;
 
 	let session_stream = async_stream::stream! {
@@ -184,8 +250,8 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 				Ok(events) => events,
 				Err(error) => {
 					log::warn!("Failed to subscribe to Bluetooth adapter events: {error}");
-					maybe_adapter = session_stream.next().await;
-					continue;
+					yield Message::Disconnected(error.to_string());
+					return;
 				}
 			};
 			let mut adapter_stream = pin!(adapter_events);
@@ -229,7 +295,7 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 							Some(AdapterEvent::DeviceRemoved(addr)) => yield Message::DeviceDisconnected(addr),
 							Some(AdapterEvent::PropertyChanged(AdapterProperty::Powered(powered))) => yield Message::Power(powered),
 							Some(_) => (),
-							None => break,
+							None => { yield Message::Disconnected("Bluetooth adapter observation ended".into()); return; },
 						}
 					}
 				}
@@ -254,24 +320,21 @@ async fn get_default_adapter(session: &Session) -> bluer::Result<Option<Adapter>
 
 #[derive(Clone, Debug)]
 struct BluetoothData {
+	watcher: Hashable<zbus::Connection>,
+	owner: String,
 	session: Session,
 	default_adapter: Option<Adapter>,
 }
 
 impl PartialEq for BluetoothData {
 	fn eq(&self, other: &Self) -> bool {
-		self.default_adapter
-			.as_ref()
-			.map(bluer::Adapter::name)
-			.eq(&other.default_adapter.as_ref().map(bluer::Adapter::name))
+		self.watcher.as_ptr() == other.watcher.as_ptr()
 	}
 }
 
 impl Hash for BluetoothData {
 	fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-		if let Some(adapter) = &self.default_adapter {
-			adapter.name().hash(state);
-		}
+		self.watcher.as_ptr().hash(state);
 	}
 }
 
@@ -279,4 +342,93 @@ impl Hash for BluetoothData {
 pub(crate) struct BtDevice {
 	addr: Address,
 	name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::modules::test_bus;
+	use std::time::Duration;
+
+	struct TestAdapter;
+	#[zbus::interface(name = "org.bluez.Adapter1")]
+	impl TestAdapter {
+		#[zbus(property)]
+		fn powered(&self) -> bool {
+			true
+		}
+	}
+
+	async fn bluez() -> Result<zbus::Connection, test_bus::Error> {
+		Ok(zbus::connection::Builder::session()?
+			.name("org.bluez")?
+			.serve_at("/", zbus::fdo::ObjectManager)?
+			.serve_at("/org/bluez/hci0", TestAdapter)?
+			.build()
+			.await?)
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn bluetooth_owner_loss_reaches_module() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::bluetooth::tests::owner_loss_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn owner_loss_child() -> Result<(), test_bus::Error> {
+		use crate::modules::{Module, ModuleMessage, ServiceState};
+		test_bus::require_child()?;
+		let daemon = bluez().await?;
+		let bluetooth = Bluetooth::new().await?;
+		let old_connection = bluetooth.connection();
+		let mut events = Box::pin(stream(bluetooth.data.clone()));
+		assert!(matches!(
+			tokio::time::timeout(Duration::from_secs(2), events.next()).await?,
+			Some(Message::AdapterFound)
+		));
+		assert!(
+			tokio::time::timeout(Duration::from_millis(100), events.next())
+				.await
+				.is_err()
+		);
+		daemon.close().await?;
+		let lost = tokio::time::timeout(Duration::from_secs(2), events.next()).await?;
+		assert!(
+			matches!(lost, Some(Message::Disconnected(_))),
+			"owner loss must reach the lifecycle owner"
+		);
+		drop(events);
+		let mut module = Module::Bluetooth(ServiceState::Ready(bluetooth));
+		let task = module.update(ModuleMessage::BluetoothEvent(
+			old_connection.clone(),
+			lost.ok_or("missing terminal event")?,
+		));
+		assert!(task.units() > 0);
+		assert_eq!(
+			module
+				.update(ModuleMessage::BluetoothEvent(
+					old_connection.clone(),
+					Message::Disconnected("duplicate".into())
+				))
+				.units(),
+			0
+		);
+		let _replacement = bluez().await?;
+		let message =
+			tokio::time::timeout(Duration::from_secs(3), test_bus::task_message(task)).await??;
+		let _ = module.update(message);
+		assert!(matches!(module, Module::Bluetooth(ServiceState::Ready(_))));
+		assert_eq!(
+			module
+				.update(ModuleMessage::BluetoothEvent(
+					old_connection,
+					Message::Disconnected("stale".into())
+				))
+				.units(),
+			0
+		);
+		assert!(matches!(module, Module::Bluetooth(ServiceState::Ready(_))));
+		Ok(())
+	}
 }

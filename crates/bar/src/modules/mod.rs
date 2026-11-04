@@ -56,6 +56,7 @@ pub enum ModuleMessage {
 
 	BluetoothInitialized(Result<bluetooth::Bluetooth, String>),
 	Bluetooth(bluetooth::Message),
+	BluetoothEvent(utilities::Hashable<zbus::Connection>, bluetooth::Message),
 
 	Volume(volume::Message),
 
@@ -177,6 +178,25 @@ impl Module {
 			) => {
 				bluetooth.update(message);
 			}
+			(Self::Bluetooth(state), ModuleMessage::BluetoothEvent(connection, message)) => {
+				let ServiceState::Ready(bluetooth) = state else {
+					return Task::none();
+				};
+				if bluetooth.connection().as_ptr() != connection.as_ptr() {
+					return Task::none();
+				}
+				if let bluetooth::Message::Disconnected(error) = message {
+					let delay = state.failed(error);
+					return Task::perform(
+						async move {
+							let _ = (*connection).clone().close().await;
+							initialize(delay, bluetooth::Bluetooth::new()).await
+						},
+						ModuleMessage::BluetoothInitialized,
+					);
+				}
+				bluetooth.update(message);
+			}
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
@@ -244,9 +264,10 @@ impl Module {
 
 	pub fn subscription(&self) -> Subscription<ModuleMessage> {
 		match self {
-			Self::Bluetooth(ServiceState::Ready(bluetooth)) => {
-				bluetooth.subscription().map(ModuleMessage::Bluetooth)
-			}
+			Self::Bluetooth(ServiceState::Ready(bluetooth)) => bluetooth
+				.subscription()
+				.with(bluetooth.connection())
+				.map(|(connection, message)| ModuleMessage::BluetoothEvent(connection, message)),
 			Self::Volume(Ok(volume)) => volume.subscription().map(ModuleMessage::Volume),
 			Self::Clock(clock) => clock.subscription().map(ModuleMessage::Clock),
 			Self::MediaControls(controls) => {
