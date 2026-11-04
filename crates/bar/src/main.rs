@@ -29,6 +29,7 @@ use wayland_client::Connection;
 use crate::modules::{Module, ModuleKind, ModuleMessage};
 
 mod modules;
+mod popups;
 mod widget_config;
 
 // mod clock;
@@ -95,8 +96,7 @@ struct Bar {
 	center: Vec<Module>,
 	right: Vec<Module>,
 
-	open_popup: Option<(Id, Section, usize)>,
-	context_popups: Vec<ContextPopup>,
+	popups: popups::Popups,
 	layer_heights: HashMap<Id, u32>,
 	window_scales: HashMap<Id, f32>,
 	window_output_names: HashMap<Id, String>,
@@ -104,14 +104,6 @@ struct Bar {
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
 	widget_config: widget_config::Writer,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct ContextPopup {
-	id: Id,
-	parent: Id,
-	section: Section,
-	index: usize,
 }
 
 impl Bar {
@@ -130,8 +122,7 @@ impl Bar {
 				Module::bluetooth(),
 				Module::clock(),
 			],
-			open_popup: None,
-			context_popups: Vec::new(),
+			popups: popups::Popups::default(),
 			layer_heights: HashMap::new(),
 			window_scales: HashMap::new(),
 			window_output_names: HashMap::new(),
@@ -203,7 +194,7 @@ impl Bar {
 				expected_child,
 			} => self.close_context_descendants(parent, expected_child),
 			BarMessage::Module(_, _, _, ModuleMessage::CloseContextMenus) => {
-				self.close_context_from(0)
+				self.popup_event(popups::Event::CloseContexts)
 			}
 			BarMessage::Module(
 				source_id,
@@ -211,14 +202,14 @@ impl Bar {
 				index,
 				ModuleMessage::OpenPopup(kind, bounds),
 			) => {
-				let is_already_open = self
-					.open_popup
-					.as_ref()
-					.is_some_and(|(_, sec, idx)| *sec == section && *idx == index);
+				let id = Id::unique();
+				let change = self
+					.popups
+					.update(popups::Event::Toggle { id, section, index });
+				let opening = change.opened.is_some();
+				let close_module_popup = self.apply_popup_change(change);
 
-				let close_module_popup = self.close_open_popup();
-
-				if is_already_open {
+				if !opening {
 					let change_kbd = if let Some(parent_id) = source_id {
 						Task::done(BarMessage::KeyboardInteractivityChange {
 							id: parent_id,
@@ -230,10 +221,8 @@ impl Bar {
 					return Task::batch([close_module_popup, change_kbd]);
 				}
 
-				let id = Id::unique();
 				let scale = source_id.map_or(1.0, |id| self.scale_factor(id));
 				self.window_scales.insert(id, scale);
-				self.open_popup = Some((id, section, index));
 
 				let anchor_x = bounds.x.round() as i32;
 				let anchor_y = bounds.y.round() as i32;
@@ -287,37 +276,22 @@ impl Bar {
 				let Some(source_id) = source_id else {
 					return Task::none();
 				};
-				let retained = if self
-					.open_popup
-					.is_some_and(|(id, popup_section, popup_index)| {
-						id == source_id && popup_section == section && popup_index == index
-					}) {
-					Some(0)
-				} else {
-					self.context_popups
-						.iter()
-						.position(|popup| {
-							popup.id == source_id
-								&& popup.section == section
-								&& popup.index == index
-						})
-						.map(|depth| depth + 1)
-				};
-				let Some(retained) = retained else {
-					log::debug!("Ignoring context popup request from stale parent {source_id:?}");
-					return Task::none();
-				};
-
 				let id = Id::unique();
-				let scale = self.scale_factor(source_id);
-				self.window_scales.insert(id, scale);
-				let close_descendants = self.close_context_from(retained);
-				self.context_popups.push(ContextPopup {
+				let change = self.popups.update(popups::Event::Context {
 					id,
 					parent: source_id,
 					section,
 					index,
 				});
+				let Some(route) = change.opened else {
+					log::debug!("Ignoring context popup request from stale parent {source_id:?}");
+					return Task::none();
+				};
+
+				let retained = route.depth.unwrap_or(0);
+				let scale = self.scale_factor(source_id);
+				self.window_scales.insert(id, scale);
+				let close_descendants = self.apply_popup_change(change);
 
 				let anchor_x = bounds.x.round() as i32;
 				let anchor_y = bounds.y.round() as i32;
@@ -434,104 +408,59 @@ impl Bar {
 		self.layer_heights.remove(&id);
 		self.window_scales.remove(&id);
 		self.window_output_names.remove(&id);
-		if let Some(depth) = self.context_popups.iter().position(|popup| popup.id == id) {
-			let close_descendants = self.close_context_from(depth + 1);
-			self.context_popups.remove(depth);
-			return close_descendants;
-		}
-
-		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
-			let Some((_, section, index)) = self.open_popup.take() else {
-				return Task::none();
-			};
-			let close_context_popups = self.close_context_from(0);
-			let notify_module = if let Some(module) = self.module_mut(section, index) {
-				module
-					.update(ModuleMessage::PopupClosed)
-					.map(move |message| BarMessage::Module(None, section, index, message))
-			} else {
-				Task::none()
-			};
-			return close_context_popups.chain(notify_module);
-		}
-		Task::none()
+		self.popup_event(popups::Event::Closed(id))
 	}
 
 	fn popup_unfocused(&mut self, id: Id) -> Task<BarMessage> {
-		if let Some(depth) = self.context_popups.iter().position(|popup| popup.id == id) {
-			return if depth + 1 < self.context_popups.len() {
-				Task::none()
-			} else {
-				self.close_context_from(depth)
-			};
-		}
-
-		if !self.context_popups.is_empty()
-			&& self.open_popup.as_ref().is_some_and(|popup| popup.0 == id)
-		{
-			// A parent popup loses focus when its nested context popup opens.
-			return Task::none();
-		}
-
-		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id) {
-			return self.close_open_popup();
-		}
-
-		Task::none()
+		self.popup_event(popups::Event::Unfocused(id))
 	}
 
 	fn close_context_descendants(&mut self, parent: Id, expected_child: Id) -> Task<BarMessage> {
-		let Some(depth) = self
-			.context_popups
-			.iter()
-			.position(|popup| popup.parent == parent)
-		else {
-			return Task::none();
-		};
-		if self.context_popups[depth].id != expected_child {
-			return Task::none();
-		}
-		self.close_context_from(depth)
-	}
-
-	fn close_context_from(&mut self, depth: usize) -> Task<BarMessage> {
-		let popups = self.context_popups.drain(depth..).rev().collect::<Vec<_>>();
-		popups.into_iter().fold(Task::none(), |task, popup| {
-			self.window_scales.remove(&popup.id);
-			self.layer_heights.remove(&popup.id);
-			self.window_output_names.remove(&popup.id);
-			task.chain(iced_runtime::task::effect(iced_runtime::Action::Window(
-				iced_runtime::window::Action::Close(popup.id),
-			)))
+		self.popup_event(popups::Event::CloseDescendants {
+			parent,
+			expected_child,
 		})
 	}
 
+	fn popup_event(&mut self, event: popups::Event) -> Task<BarMessage> {
+		let change = self.popups.update(event);
+		self.apply_popup_change(change)
+	}
+
 	fn close_open_popup(&mut self) -> Task<BarMessage> {
-		if let Some((open_popup_id, section, index)) = self.open_popup.take() {
-			self.window_scales.remove(&open_popup_id);
-			let close_context_popups = self.close_context_from(0);
-			let close_window = iced_runtime::task::effect(iced_runtime::Action::Window(
-				iced_runtime::window::Action::Close(open_popup_id),
-			));
-			let notify_module = if let Some(module) = self.module_mut(section, index) {
-				module
-					.update(ModuleMessage::PopupClosed)
-					.map(move |msg| BarMessage::Module(None, section, index, msg))
-			} else {
-				Task::none()
-			};
-			close_context_popups
-				.chain(close_window)
-				.chain(notify_module)
-		} else {
-			Task::none()
-		}
+		self.popup_event(popups::Event::CloseAll)
+	}
+
+	fn apply_popup_change(&mut self, change: popups::Change) -> Task<BarMessage> {
+		change
+			.effects
+			.into_iter()
+			.fold(Task::none(), |tasks, effect| {
+				let task = match effect {
+					popups::Effect::Close(id) => {
+						self.window_scales.remove(&id);
+						self.layer_heights.remove(&id);
+						self.window_output_names.remove(&id);
+						iced_runtime::task::effect(iced_runtime::Action::Window(
+							iced_runtime::window::Action::Close(id),
+						))
+					}
+					popups::Effect::NotifyClosed(section, index) => self
+						.module_mut(section, index)
+						.map_or_else(Task::none, |module| {
+							module
+								.update(ModuleMessage::PopupClosed)
+								.map(move |message| {
+									BarMessage::Module(None, section, index, message)
+								})
+						}),
+				};
+				tasks.chain(task)
+			})
 	}
 
 	fn sync_layer_scale(&mut self, id: Id) -> Task<BarMessage> {
-		if self.open_popup.as_ref().is_some_and(|oid| oid.0 == id)
-			|| self.context_popups.iter().any(|popup| popup.id == id)
-		{
+		if self.popups.route(id).is_some() {
 			return Task::none();
 		}
 
@@ -563,8 +492,8 @@ impl Bar {
 	}
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
-		if let Some(depth) = self.context_popups.iter().position(|popup| popup.id == id) {
-			let popup = self.context_popups[depth];
+		if let Some(popup) = self.popups.route(id).filter(|route| route.depth.is_some()) {
+			let depth = popup.depth.unwrap_or(0);
 			if let Some(module) = self.module(popup.section, popup.index) {
 				module.view_context_menu(depth).map(move |message| {
 					BarMessage::Module(Some(id), popup.section, popup.index, message)
@@ -575,19 +504,17 @@ impl Bar {
 					.background(COLORS.white)
 					.into()
 			}
-		} else if let Some((wid, section, index)) = &self.open_popup
-			&& *wid == id
-		{
-			let content: Element<'_, BarMessage> =
-				if let Some(module) = self.module(*section, *index) {
-					module
-						.view_popup()
-						.map(move |message| BarMessage::Module(Some(id), *section, *index, message))
-				} else {
-					neo_card(text("Something went wrong").color(COLORS.text))
-						.background(COLORS.feedback.danger90)
-						.into()
-				};
+		} else if let Some(popups::Route { section, index, .. }) = self.popups.route(id) {
+			let content: Element<'_, BarMessage> = if let Some(module) = self.module(section, index)
+			{
+				module
+					.view_popup()
+					.map(move |message| BarMessage::Module(Some(id), section, index, message))
+			} else {
+				neo_card(text("Something went wrong").color(COLORS.text))
+					.background(COLORS.feedback.danger90)
+					.into()
+			};
 
 			grow(
 				content,
@@ -714,17 +641,7 @@ impl Bar {
 			}
 			_ => None,
 		});
-		let mut context_children = Vec::new();
-		if let Some((root, _, _)) = self.open_popup
-			&& let Some(first) = self.context_popups.first()
-		{
-			context_children.push((root, first.id));
-		}
-		context_children.extend(
-			self.context_popups
-				.windows(2)
-				.map(|popups| (popups[0].id, popups[1].id)),
-		);
+		let context_children = self.popups.context_children();
 		let context_parent_clicks = iced::event::listen_with(|event, _status, window| {
 			matches!(
 				event,
@@ -998,6 +915,120 @@ mod tests {
 	use iced::Rectangle;
 
 	use super::tray_context_menu_point;
+	use super::*;
+
+	fn empty_bar() -> Bar {
+		Bar {
+			left: Vec::new(),
+			center: Vec::new(),
+			right: Vec::new(),
+			popups: popups::Popups::default(),
+			layer_heights: HashMap::new(),
+			window_scales: HashMap::new(),
+			window_output_names: HashMap::new(),
+			shell_events: iced_wayland_subscriber::shell::channel().1,
+			config_doc: kdl::KdlDocument::default(),
+			config_file: ConfigFile::default(),
+			widget_config: widget_config::Writer::default(),
+		}
+	}
+
+	async fn opened_id(task: Task<BarMessage>) -> Result<Id, Box<dyn std::error::Error>> {
+		let mut actions = iced_runtime::task::into_stream(task).ok_or("missing task")?;
+		while let Some(action) = actions.next().await {
+			if let iced_runtime::Action::Output(BarMessage::NewPopUp { id, .. }) = action {
+				return Ok(id);
+			}
+		}
+		Err("missing popup creation".into())
+	}
+
+	#[tokio::test]
+	async fn popup_adapter_preserves_close_before_create_order()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let mut bar = empty_bar();
+		let root = opened_id(bar.update(BarMessage::Module(
+			None,
+			Section::Left,
+			0,
+			ModuleMessage::OpenPopup(ModuleKind::SystemMenu, Rectangle::default()),
+		)))
+		.await?;
+		let child = opened_id(bar.update(BarMessage::Module(
+			Some(root),
+			Section::Left,
+			0,
+			ModuleMessage::OpenContextMenu(Rectangle::default()),
+		)))
+		.await?;
+		let task = bar.update(BarMessage::Module(
+			None,
+			Section::Right,
+			1,
+			ModuleMessage::OpenPopup(ModuleKind::Clock, Rectangle::default()),
+		));
+		let mut actions = iced_runtime::task::into_stream(task).ok_or("missing task")?;
+		let mut sequence = Vec::new();
+		while let Some(action) = actions.next().await {
+			match action {
+				iced_runtime::Action::Window(iced_runtime::window::Action::Close(id)) => {
+					sequence.push((0, id))
+				}
+				iced_runtime::Action::Output(BarMessage::NewPopUp { id, .. }) => {
+					sequence.push((1, id))
+				}
+				_ => {}
+			}
+		}
+		assert!(
+			matches!(sequence.as_slice(), [(0, first), (0, second), (1, _)] if *first == child && *second == root)
+		);
+		assert!(!bar.window_scales.contains_key(&root));
+		assert!(!bar.window_scales.contains_key(&child));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn popup_focus_and_stale_descendant_requests_preserve_current_chain()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let mut bar = empty_bar();
+		let parent = Id::unique();
+		bar.window_scales.insert(parent, 1.2);
+		let root = opened_id(bar.update(BarMessage::Module(
+			Some(parent),
+			Section::Left,
+			0,
+			ModuleMessage::OpenPopup(ModuleKind::SystemMenu, Rectangle::default()),
+		)))
+		.await?;
+		assert_eq!(bar.scale_factor(root), 1.2);
+		let child = opened_id(bar.update(BarMessage::Module(
+			Some(root),
+			Section::Left,
+			0,
+			ModuleMessage::OpenContextMenu(Rectangle::default()),
+		)))
+		.await?;
+		let _ = bar.popup_unfocused(root);
+		assert!(bar.popups.route(root).is_some());
+		let _ = bar.close_context_descendants(root, Id::unique());
+		assert!(bar.popups.route(child).is_some());
+		let _ = bar.update(BarMessage::Module(
+			Some(Id::unique()),
+			Section::Left,
+			0,
+			ModuleMessage::OpenContextMenu(Rectangle::default()),
+		));
+		assert!(bar.popups.route(child).is_some());
+		let _ = bar.popup_unfocused(child);
+		assert!(bar.popups.route(child).is_none());
+		assert!(bar.popups.route(root).is_some());
+		let _ = bar.popup_unfocused(root);
+		assert!(bar.popups.route(root).is_none());
+		assert!(!bar.window_scales.contains_key(&root));
+		assert_eq!(bar.window_closed(root).units(), 0);
+		Ok(())
+	}
 
 	#[test]
 	fn tray_context_menu_point_uses_icon_bottom_center_on_output() {
