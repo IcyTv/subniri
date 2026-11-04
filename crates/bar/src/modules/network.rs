@@ -23,6 +23,8 @@ use utilities::Hashable;
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 
+pub(super) mod integration;
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	SnapshotChanged(NetworkSnapshot),
@@ -577,18 +579,19 @@ mod tests {
 	#[tokio::test]
 	#[ignore = "private-bus subprocess helper"]
 	async fn connection_identity_child() -> Result<(), test_bus::Error> {
-		use crate::modules::{Module, ModuleMessage, ServiceState};
+		use crate::modules::{Module, ModuleMessage};
+		let session = |connection, event| {
+			ModuleMessage::Network(integration::Message::Session(connection, event))
+		};
+		let ready = |module: &Module| matches!(module, Module::Network(network) if network.ready().is_some());
 		test_bus::require_child()?;
 		let _service = snapshot_service().await?;
 		let network = tokio::time::timeout(Duration::from_secs(2), Network::new()).await??;
 		let old = network.connection();
-		let mut module = Module::Network(ServiceState::Ready(network));
-		let task = module.update(ModuleMessage::NetworkEvent(
-			old.clone(),
-			Message::Disconnected("lost".into()),
-		));
+		let mut module = Module::Network(integration::Integration::connected(network));
+		let task = module.update(session(old.clone(), Message::Disconnected("lost".into())));
 		assert!(task.units() > 0);
-		let duplicate = module.update(ModuleMessage::NetworkEvent(
+		let duplicate = module.update(session(
 			old.clone(),
 			Message::Disconnected("duplicate".into()),
 		));
@@ -600,16 +603,29 @@ mod tests {
 		let response =
 			tokio::time::timeout(Duration::from_secs(3), test_bus::task_message(task)).await??;
 		let _ = module.update(response);
-		assert!(matches!(module, Module::Network(ServiceState::Ready(_))));
-		let stale = module.update(ModuleMessage::NetworkEvent(
-			old,
-			Message::Disconnected("stale".into()),
-		));
+		assert!(ready(&module));
+		let stale = module.update(session(old.clone(), Message::Disconnected("stale".into())));
 		assert_eq!(stale.units(), 0);
 		assert!(
-			matches!(module, Module::Network(ServiceState::Ready(_))),
+			ready(&module),
 			"an old task must not tear down its replacement"
 		);
+		let snapshot = match &module {
+			Module::Network(network) => network
+				.ready()
+				.ok_or("replacement unavailable")?
+				.snapshot
+				.clone(),
+			_ => return Err("replacement did not become ready".into()),
+		};
+		for message in [
+			Message::StoppedScanningWifi,
+			Message::SnapshotChanged(snapshot),
+		] {
+			let stale = module.update(session(old.clone(), message));
+			assert_eq!(stale.units(), 0);
+			assert!(ready(&module));
+		}
 		Ok(())
 	}
 

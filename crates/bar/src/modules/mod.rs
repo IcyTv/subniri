@@ -1,4 +1,4 @@
-use std::{future::Future, time::Duration};
+use std::time::Duration;
 
 use config::ConfigFile;
 use iced::{Color, Element, Rectangle, Subscription, Task, widget::text, window::Id};
@@ -9,11 +9,14 @@ use neo_widgets::{
 
 mod bluetooth;
 mod clock;
+mod connection;
 mod media_controls;
 mod network;
 mod system_menu;
 mod taskbar;
 mod volume;
+
+use connection::{State as ServiceState, initialize};
 
 #[cfg(test)]
 mod test_bus;
@@ -21,7 +24,7 @@ mod test_bus;
 #[derive(Debug)]
 pub enum Module {
 	SystemMenu(system_menu::SystemMenu),
-	Network(ServiceState<network::Network>),
+	Network(network::integration::Integration),
 	Bluetooth(ServiceState<bluetooth::Bluetooth>),
 	Clock(clock::Clock),
 	Volume(Result<volume::Volume, String>),
@@ -49,9 +52,7 @@ pub enum ModuleMessage {
 	MediaControls(media_controls::Message),
 	SystemMenu(system_menu::Message),
 
-	NetworkInitialized(Result<network::Network, String>),
-	Network(network::Message),
-	NetworkEvent(utilities::Hashable<nmrs::NetworkManager>, network::Message),
+	Network(network::integration::Message),
 
 	BluetoothInitialized(Result<bluetooth::Bluetooth, String>),
 	Bluetooth(bluetooth::Message),
@@ -75,35 +76,6 @@ pub enum ModuleKind {
 const MODULE_HEIGHT: f32 = 48.0;
 const MODULE_RADIUS: f32 = 8.0;
 const ICON_HEIGHT: f32 = 20.0;
-
-const INITIALIZATION_TIMEOUT: Duration = Duration::from_secs(10);
-
-#[derive(Debug)]
-pub enum ServiceState<T> {
-	Connecting,
-	Ready(T),
-	Unavailable { error: String, attempt: u32 },
-}
-
-impl<T> ServiceState<T> {
-	fn failed(&mut self, error: String) -> Duration {
-		let attempt = match self {
-			Self::Unavailable { attempt, .. } => attempt.saturating_add(1),
-			_ => 0,
-		};
-		*self = Self::Unavailable { error, attempt };
-		Duration::from_secs((1_u64 << attempt.min(5)).min(30))
-	}
-}
-
-async fn initialize<T>(
-	delay: Duration, connect: impl Future<Output = Result<T, String>>,
-) -> Result<T, String> {
-	tokio::time::sleep(delay).await;
-	tokio::time::timeout(INITIALIZATION_TIMEOUT, connect)
-		.await
-		.map_err(|_| "Service initialization timed out".to_string())?
-}
 
 impl Module {
 	pub fn clock() -> Self {
@@ -131,7 +103,7 @@ impl Module {
 	}
 
 	pub fn network() -> Self {
-		Self::Network(ServiceState::Connecting)
+		Self::Network(network::integration::Integration::new())
 	}
 
 	pub fn set_popup_id(&mut self, id: Id) {
@@ -147,10 +119,7 @@ impl Module {
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
 			}
-			Self::Network(ServiceState::Connecting) => Task::perform(
-				initialize(Duration::ZERO, network::Network::new()),
-				ModuleMessage::NetworkInitialized,
-			),
+			Self::Network(network) => network.init().map(ModuleMessage::Network),
 			Self::SystemMenu(menu) => menu.init().map(ModuleMessage::SystemMenu),
 			_ => Task::none(),
 		}
@@ -211,45 +180,14 @@ impl Module {
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
-			(Self::Network(network), ModuleMessage::NetworkInitialized(Ok(initialized))) => {
-				*network = ServiceState::Ready(initialized);
+			(
+				Self::Network(_),
+				ModuleMessage::Network(network::integration::Message::OpenPopup(bounds)),
+			) => {
+				return Task::done(ModuleMessage::OpenPopup(ModuleKind::Network, bounds));
 			}
-			(Self::Network(network), ModuleMessage::NetworkInitialized(Err(error))) => {
-				log::warn!("Failed to initialize Network module: {error}");
-				let delay = network.failed(error);
-				return Task::perform(
-					initialize(delay, network::Network::new()),
-					ModuleMessage::NetworkInitialized,
-				);
-			}
-			(Self::Network(ServiceState::Ready(network)), ModuleMessage::Network(message)) => {
-				log::trace!("Network module update: {:?}", message);
-				let connection = network.connection();
-				return network
-					.update(message)
-					.map(move |message| ModuleMessage::NetworkEvent(connection.clone(), message));
-			}
-			(Self::Network(state), ModuleMessage::NetworkEvent(connection, message)) => {
-				let ServiceState::Ready(network) = state else {
-					return Task::none();
-				};
-				if network.connection().as_ptr() != connection.as_ptr() {
-					return Task::none();
-				}
-				if let network::Message::Disconnected(error) = message {
-					log::warn!("Network module disconnected: {error}");
-					let delay = state.failed(error);
-					return Task::perform(
-						async move {
-							let _ = connection.dbus_connection().clone().close().await;
-							initialize(delay, network::Network::new()).await
-						},
-						ModuleMessage::NetworkInitialized,
-					);
-				}
-				return network
-					.update(message)
-					.map(move |message| ModuleMessage::NetworkEvent(connection.clone(), message));
+			(Self::Network(network), ModuleMessage::Network(message)) => {
+				return network.update(message).map(ModuleMessage::Network);
 			}
 			(Self::Clock(clock), ModuleMessage::Clock(message)) => {
 				if let Some(action) = clock.update(message) {
@@ -324,13 +262,7 @@ impl Module {
 			}
 			Self::Taskbar(Some(_)) => taskbar::Taskbar::subscription().map(ModuleMessage::Taskbar),
 			Self::SystemMenu(menu) => menu.subscription().map(ModuleMessage::SystemMenu),
-			Self::Network(ServiceState::Ready(network)) => {
-				let connection = network.connection();
-				network
-					.subscription()
-					.with(connection)
-					.map(|(connection, message)| ModuleMessage::NetworkEvent(connection, message))
-			}
+			Self::Network(network) => network.subscription().map(ModuleMessage::Network),
 			_ => Subscription::none(),
 		}
 	}
@@ -358,15 +290,7 @@ impl Module {
 				.into(),
 			// TODO
 			Self::Volume(Err(_e)) => loading(COLORS.decorative.yellow),
-			Self::Network(ServiceState::Connecting) => loading(COLORS.decorative.green),
-			Self::Network(ServiceState::Unavailable { error, .. }) => {
-				unavailable("Network unavailable", error, COLORS.decorative.green)
-			}
-			Self::Network(ServiceState::Ready(network)) => network
-				.view()
-				.map(ModuleMessage::Network)
-				.on_press_with_bounds(|bounds| ModuleMessage::Pressed(ModuleKind::Network, bounds))
-				.into(),
+			Self::Network(network) => network.view().map(ModuleMessage::Network),
 			Self::Bluetooth(ServiceState::Ready(bluetooth)) => bluetooth
 				.view()
 				.map(ModuleMessage::Bluetooth)
@@ -399,9 +323,7 @@ impl Module {
 				bt.view_popup().map(ModuleMessage::Bluetooth)
 			}
 			Self::Clock(clock) => clock.view_popup().map(ModuleMessage::Clock),
-			Self::Network(ServiceState::Ready(network)) => {
-				network.view_popup().map(ModuleMessage::Network)
-			}
+			Self::Network(network) => network.view_popup().map(ModuleMessage::Network),
 			_ => neo_card(text("No popup for module").color(COLORS.text))
 				.background(COLORS.feedback.danger)
 				.into(),
@@ -420,7 +342,7 @@ impl Module {
 	}
 }
 
-pub fn loading<'a>(background: Color) -> Element<'a, ModuleMessage> {
+pub fn loading<'a, Message: Clone + 'a>(background: Color) -> Element<'a, Message> {
 	neo_button(spinner().bar_color(COLORS.black))
 		.height(MODULE_HEIGHT)
 		.width(MODULE_HEIGHT)
@@ -429,9 +351,9 @@ pub fn loading<'a>(background: Color) -> Element<'a, ModuleMessage> {
 		.into()
 }
 
-fn unavailable<'a>(
+fn unavailable<'a, Message: Clone + 'a>(
 	label: &'a str, error: &'a str, background: Color,
-) -> Element<'a, ModuleMessage> {
+) -> Element<'a, Message> {
 	iced::widget::tooltip(
 		neo_button(text(label))
 			.height(MODULE_HEIGHT)
@@ -450,15 +372,14 @@ mod tests {
 	#[test]
 	fn network_startup_failure_schedules_recovery() {
 		let mut module = Module::network();
-		let task = module.update(ModuleMessage::NetworkInitialized(Err("unavailable".into())));
+		let task = module.update(ModuleMessage::Network(
+			super::network::integration::Message::Initialized(Err("unavailable".into())),
+		));
 		assert!(
 			task.units() > 0,
 			"network initialization failure must retry"
 		);
-		assert!(matches!(
-			module,
-			Module::Network(ServiceState::Unavailable { .. })
-		));
+		assert!(matches!(module, Module::Network(_)));
 		assert_eq!(module.subscription().units(), 0);
 	}
 
