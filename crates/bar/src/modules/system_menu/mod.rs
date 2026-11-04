@@ -100,19 +100,8 @@ impl SystemMenu {
 		let uptime = uptime().unwrap_or_default();
 
 		let layout = layout::Layout::new(config);
-		let homeassistant = homeassistant::integration::Integration::new(
-			layout
-				.available()
-				.iter()
-				.filter_map(|widget| {
-					if let SystemMenuWidgets::Homeassistant(id) = widget {
-						Some(id.clone())
-					} else {
-						None
-					}
-				})
-				.collect(),
-		);
+		let homeassistant =
+			homeassistant::integration::Integration::new(layout.homeassistant_ids());
 
 		Self {
 			layout,
@@ -229,9 +218,14 @@ impl SystemMenu {
 		Task::none()
 	}
 
-	pub fn sync_config(&mut self, config: &ConfigFile) {
-		self.layout
-			.update(layout::Event::Reload(config.system_menu.widgets.clone()));
+	pub fn sync_config(&mut self, config: &ConfigFile) -> Task<Message> {
+		self.layout.update(layout::Event::Reload {
+			widgets: config.system_menu.widgets.clone(),
+			tracked_devices: config.homeassistant.tracked_devices.clone(),
+		});
+		self.homeassistant
+			.reconfigure(self.layout.homeassistant_ids())
+			.map(Message::Homeassistant)
 	}
 
 	pub fn popup_closed(&mut self) {
@@ -508,7 +502,31 @@ mod reliability_tests {
 	use crate::modules::test_bus;
 
 	#[test]
-	fn config_reload_preserves_edits_and_keeps_existing_available_widget_catalog() {
+	fn config_reload_updates_available_homeassistant_widgets() {
+		let mut config = config::ConfigFile::default();
+		config.homeassistant.tracked_devices = vec!["light.old".into()];
+		let mut menu = SystemMenu::new(&config);
+		config.homeassistant.tracked_devices = vec!["light.new".into()];
+		let _ = menu.sync_config(&config);
+		assert!(
+			menu.layout
+				.available()
+				.contains(&config::SystemMenuWidgets::Homeassistant(
+					"light.new".into()
+				))
+		);
+		assert!(
+			!menu
+				.layout
+				.available()
+				.contains(&config::SystemMenuWidgets::Homeassistant(
+					"light.old".into()
+				))
+		);
+	}
+
+	#[test]
+	fn config_reload_preserves_edits_and_refreshes_available_widget_catalog() {
 		use config::SystemMenuWidgets::{Bluetooth, Homeassistant, Wifi};
 		let mut config = config::ConfigFile::default();
 		config.system_menu.widgets = vec![Wifi, Homeassistant("light.untracked".into())];
@@ -518,21 +536,30 @@ mod reliability_tests {
 				.available()
 				.contains(&Homeassistant("light.untracked".into()))
 		);
-		let available = menu.layout.available().to_vec();
 		let _ = menu.update(super::Message::EditingChanged(true));
 		config.system_menu.widgets = vec![Bluetooth, Bluetooth];
 		config.homeassistant.tracked_devices = vec!["light.new".into()];
-		menu.sync_config(&config);
+		let _ = menu.sync_config(&config);
 		assert_eq!(
 			menu.layout.selected(),
 			&[Wifi, Homeassistant("light.untracked".into())]
 		);
 		menu.popup_closed();
-		menu.sync_config(&config);
+		let _ = menu.sync_config(&config);
 		assert_eq!(menu.layout.selected(), &[Bluetooth, Bluetooth]);
-		assert_eq!(menu.layout.available(), available);
+		assert!(
+			menu.layout
+				.available()
+				.contains(&Homeassistant("light.new".into()))
+		);
+		assert!(
+			!menu
+				.layout
+				.available()
+				.contains(&Homeassistant("light.untracked".into()))
+		);
 		config.system_menu.widgets.clear();
-		menu.sync_config(&config);
+		let _ = menu.sync_config(&config);
 		assert!(menu.layout.selected().is_empty());
 	}
 
@@ -629,6 +656,30 @@ mod reliability_tests {
 		)));
 		assert_eq!(stale.units(), 0);
 		assert_eq!(menu.homeassistant.len(), 2);
+
+		let previous_generation = menu.homeassistant.session().ok_or("missing replacement")?.0;
+		config.homeassistant.tracked_devices = vec!["light.new".into()];
+		let reconfigure = menu.sync_config(&config);
+		assert_eq!(menu.homeassistant.len(), 0);
+		let message = test_bus::task_message(reconfigure).await?;
+		let _ = menu.update(message);
+		assert!(menu.homeassistant.get("light.new").is_some());
+		assert!(menu.homeassistant.get("light.test").is_none());
+		assert!(menu.homeassistant.get("switch.test").is_none());
+		assert_eq!(menu.homeassistant.len(), 1);
+		assert_eq!(
+			menu.sync_config(&config).units(),
+			0,
+			"unchanged configuration must not reconnect"
+		);
+		assert_eq!(
+			menu.update(Message::Homeassistant(HaMessage::Disconnected(
+				previous_generation
+			)))
+			.units(),
+			0
+		);
+		assert!(menu.homeassistant.get("light.new").is_some());
 
 		Ok(())
 	}

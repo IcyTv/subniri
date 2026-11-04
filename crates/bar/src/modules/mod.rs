@@ -120,7 +120,7 @@ impl Module {
 	pub fn update(&mut self, message: ModuleMessage) -> Task<ModuleMessage> {
 		match (self, message) {
 			(Self::SystemMenu(menu), ModuleMessage::ConfigUpdated(config)) => {
-				menu.sync_config(&config);
+				return menu.sync_config(&config).map(ModuleMessage::SystemMenu);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::PopupClosed) => {
 				menu.popup_closed();

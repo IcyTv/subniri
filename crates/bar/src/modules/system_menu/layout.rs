@@ -11,26 +11,19 @@ pub(super) struct Layout {
 pub(super) enum Event {
 	Editing(bool),
 	Edited(Vec<SystemMenuWidgets>),
-	Reload(Vec<SystemMenuWidgets>),
+	Reload {
+		widgets: Vec<SystemMenuWidgets>,
+		tracked_devices: Vec<String>,
+	},
 	Closed,
 }
 
 impl Layout {
 	pub fn new(config: &ConfigFile) -> Self {
-		let mut available = SystemMenuWidgets::VARIANTS.to_vec();
-		available.extend(
-			config
-				.homeassistant
-				.tracked_devices
-				.iter()
-				.cloned()
-				.map(SystemMenuWidgets::Homeassistant),
+		let available = catalog(
+			&config.system_menu.widgets,
+			&config.homeassistant.tracked_devices,
 		);
-		for widget in &config.system_menu.widgets {
-			if !available.contains(widget) {
-				available.push(widget.clone());
-			}
-		}
 		Self {
 			selected: config.system_menu.widgets.clone(),
 			available,
@@ -46,6 +39,16 @@ impl Layout {
 	}
 	pub fn editing(&self) -> bool {
 		self.editing
+	}
+
+	pub fn homeassistant_ids(&self) -> Vec<String> {
+		self.available()
+			.iter()
+			.filter_map(|widget| match widget {
+				SystemMenuWidgets::Homeassistant(id) => Some(id.clone()),
+				_ => None,
+			})
+			.collect()
 	}
 
 	pub fn entries(&self) -> Vec<&SystemMenuWidgets> {
@@ -69,11 +72,42 @@ impl Layout {
 				self.selected = widgets;
 				return Some(self.selected.clone());
 			}
-			Event::Reload(widgets) if !self.editing => self.selected = widgets,
+			Event::Reload {
+				widgets,
+				tracked_devices,
+			} => {
+				self.available = catalog(&widgets, &tracked_devices);
+				if !self.editing {
+					self.selected = widgets;
+				}
+				// Keep in-progress cards usable even if an external config reload
+				// removes their entity from the configured catalog.
+				for widget in &self.selected {
+					if !self.available.contains(widget) {
+						self.available.push(widget.clone());
+					}
+				}
+			}
 			_ => {}
 		}
 		None
 	}
+}
+
+fn catalog(widgets: &[SystemMenuWidgets], tracked_devices: &[String]) -> Vec<SystemMenuWidgets> {
+	let mut available = SystemMenuWidgets::VARIANTS.to_vec();
+	available.extend(
+		tracked_devices
+			.iter()
+			.cloned()
+			.map(SystemMenuWidgets::Homeassistant),
+	);
+	for widget in widgets {
+		if !available.contains(widget) {
+			available.push(widget.clone());
+		}
+	}
+	available
 }
 
 /// Pointer geometry stays in the editor; this is the resulting layout intent.
@@ -118,7 +152,14 @@ mod tests {
 		assert!(layout.update(Event::Edited(vec![Bluetooth])).is_none());
 		layout.update(Event::Editing(true));
 		assert!(layout.entries().len() > layout.selected().len());
-		assert!(layout.update(Event::Reload(vec![])).is_none());
+		assert!(
+			layout
+				.update(Event::Reload {
+					widgets: vec![],
+					tracked_devices: vec![]
+				})
+				.is_none()
+		);
 		assert_eq!(layout.selected(), config.system_menu.widgets);
 		assert_eq!(
 			layout.update(Event::Edited(vec![Bluetooth])),
@@ -128,7 +169,10 @@ mod tests {
 		layout.update(Event::Closed);
 		assert!(!layout.editing());
 		assert!(layout.update(Event::Edited(vec![])).is_none());
-		layout.update(Event::Reload(vec![]));
+		layout.update(Event::Reload {
+			widgets: vec![],
+			tracked_devices: vec![],
+		});
 		assert!(layout.selected().is_empty());
 	}
 

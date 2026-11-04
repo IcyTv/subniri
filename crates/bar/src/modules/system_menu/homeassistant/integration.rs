@@ -27,7 +27,9 @@ pub enum Message {
 }
 
 impl Integration {
-	pub fn new(ids: Vec<String>) -> Self {
+	pub fn new(mut ids: Vec<String>) -> Self {
+		ids.sort();
+		ids.dedup();
 		Self {
 			ids,
 			entities: HashMap::new(),
@@ -38,12 +40,31 @@ impl Integration {
 	}
 
 	pub fn init(&self) -> Task<Message> {
-		self.connect(Duration::ZERO)
+		self.connect(Duration::ZERO, None)
 	}
 
-	fn connect(&self, delay: Duration) -> Task<Message> {
+	pub fn reconfigure(&mut self, mut ids: Vec<String>) -> Task<Message> {
+		ids.sort();
+		ids.dedup();
+		if self.ids == ids {
+			return Task::none();
+		}
+		self.ids = ids;
+		self.generation = self.generation.wrapping_add(1);
+		self.attempt = 0;
+		self.entities.clear();
+		let old = self.connection.take();
+		// A fresh sender identity prevents a cancelled old observation's
+		// unobserve from unregistering its replacement for the same entity.
+		self.connect(Duration::ZERO, old)
+	}
+
+	fn connect(&self, delay: Duration, previous: Option<Hashable<Connection>>) -> Task<Message> {
 		let generation = self.generation;
 		Task::future(async move {
+			if let Some(previous) = previous {
+				let _ = (*previous).clone().close().await;
+			}
 			let result = initialize(delay, async {
 				Connection::session()
 					.await
@@ -112,7 +133,7 @@ impl Integration {
 						let delay = Duration::from_secs((1_u64 << self.attempt.min(5)).min(30));
 						self.attempt = self.attempt.saturating_add(1);
 						self.generation = self.generation.wrapping_add(1);
-						return self.connect(delay);
+						return self.connect(delay, None);
 					}
 				}
 			}
@@ -122,7 +143,7 @@ impl Integration {
 				self.connection = None;
 				self.entities.clear();
 				self.generation = self.generation.wrapping_add(1);
-				return self.connect(Duration::from_secs(1));
+				return self.connect(Duration::from_secs(1), None);
 			}
 			Message::Observed(generation, id, message)
 				if generation == self.generation && self.connection.is_some() =>
