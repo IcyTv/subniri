@@ -7,7 +7,7 @@ pub(super) struct Interaction {
 	available: bool,
 	reported: bool,
 	enabled: bool,
-	pending: bool,
+	pending: Option<Command>,
 }
 
 pub(super) enum Event {
@@ -59,23 +59,23 @@ impl Interaction {
 				self.available = available;
 				self.capabilities = capabilities;
 				self.reported = state == "on";
-				if !self.pending {
+				if self.pending.is_none() {
 					change.animate = Some(self.reported);
 				}
 			}
 			Event::Disconnected => self.available = false,
-			Event::Activate if self.actionable() && !self.pending => {
+			Event::Activate if self.actionable() && self.pending.is_none() => {
 				let target = self.callable() || !self.enabled;
 				change.animate = Some(target);
-				self.pending = true;
 				change.command = Some(if self.callable() {
 					Command::Call
 				} else {
 					Command::SetEnabled(target)
 				});
+				self.pending = change.command;
 			}
 			Event::Finished { success } => {
-				self.pending = false;
+				self.pending = None;
 				if !success || self.callable() {
 					change.animate = Some(self.reported);
 				}

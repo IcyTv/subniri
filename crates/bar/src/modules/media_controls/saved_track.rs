@@ -31,7 +31,7 @@ pub(super) struct Mutation {
 	pub track_id: String,
 	pub path: OwnedObjectPath,
 	pub generation: u64,
-	pub mutation: u64,
+	pub sequence: u64,
 	pub saved: bool,
 }
 
@@ -71,7 +71,7 @@ impl SavedTrack {
 			track_id,
 			path,
 			generation: self.generation,
-			mutation: self.mutation,
+			sequence: self.mutation,
 			saved: !saved,
 		})
 	}
@@ -147,7 +147,7 @@ mod tests {
 		assert!(track.pending());
 		track.apply(observation(
 			first.1,
-			Source::Mutation(mutation.mutation + 1),
+			Source::Mutation(mutation.sequence + 1),
 			Ok(false),
 		))?;
 		assert_eq!(track.saved(), Some(true));
@@ -155,7 +155,7 @@ mod tests {
 			track
 				.apply(observation(
 					first.1,
-					Source::Mutation(mutation.mutation),
+					Source::Mutation(mutation.sequence),
 					Err("rejected".into())
 				))
 				.is_err()

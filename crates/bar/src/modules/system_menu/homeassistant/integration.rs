@@ -175,3 +175,21 @@ impl Integration {
 		self.entities.len()
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn reordered_or_repeated_ids_do_not_restart_the_session() {
+		let mut integration =
+			Integration::new(vec!["light.b".into(), "light.a".into(), "light.a".into()]);
+		assert_eq!(
+			integration
+				.reconfigure(vec!["light.a".into(), "light.b".into()])
+				.units(),
+			0
+		);
+		assert_eq!(integration.generation, 0);
+	}
+}

@@ -1010,10 +1010,10 @@ mod tests {
 		while let Some(action) = actions.next().await {
 			match action {
 				iced_runtime::Action::Window(iced_runtime::window::Action::Close(id)) => {
-					sequence.push((0, id))
+					sequence.push((0, id));
 				}
 				iced_runtime::Action::Output(BarMessage::NewPopUp { id, .. }) => {
-					sequence.push((1, id))
+					sequence.push((1, id));
 				}
 				_ => {}
 			}

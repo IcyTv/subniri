@@ -192,13 +192,15 @@ fn stream(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend + 'sta
 						_ => { yield Message::Disconnected("BlueZ owner observation ended or changed".into()); return; }
 					}
 				}
-				event = events.next() => match event {
-					Some(event) => {
+				event = events.next() => {
+					if let Some(event) = event {
 						let terminal = matches!(event, Message::Disconnected(_));
 						yield event;
 						if terminal { return; }
+					} else {
+						yield Message::Disconnected("Bluetooth observation ended".into());
+						return;
 					}
-					None => { yield Message::Disconnected("Bluetooth observation ended".into()); return; }
 				}
 			}
 		}

@@ -23,6 +23,7 @@ pub(super) struct Popups {
 	contexts: Vec<Popup>,
 }
 
+#[derive(Clone, Copy)]
 pub(super) enum Event {
 	Toggle {
 		id: Id,

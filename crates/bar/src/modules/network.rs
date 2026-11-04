@@ -610,7 +610,7 @@ mod tests {
 			ready(&module),
 			"an old task must not tear down its replacement"
 		);
-		let snapshot = match &module {
+		let mut snapshot = match &module {
 			Module::Network(network) => network
 				.ready()
 				.ok_or("replacement unavailable")?
@@ -618,6 +618,8 @@ mod tests {
 				.clone(),
 			_ => return Err("replacement did not become ready".into()),
 		};
+		let confirmed_wifi = snapshot.wifi.enabled;
+		snapshot.wifi.enabled = !confirmed_wifi;
 		for message in [
 			Message::StoppedScanningWifi,
 			Message::SnapshotChanged(snapshot),
@@ -625,6 +627,17 @@ mod tests {
 			let stale = module.update(session(old.clone(), message));
 			assert_eq!(stale.units(), 0);
 			assert!(ready(&module));
+			if let Module::Network(network) = &module {
+				let connected = network.ready().ok_or("replacement unavailable")?;
+				assert_eq!(
+					connected.snapshot.wifi.enabled, confirmed_wifi,
+					"stale snapshots must not change confirmed state"
+				);
+				assert!(
+					connected.stopping_rotation.is_none(),
+					"stale scan completion must not change animation state"
+				);
+			}
 		}
 		Ok(())
 	}

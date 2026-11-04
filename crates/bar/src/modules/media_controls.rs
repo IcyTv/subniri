@@ -994,7 +994,7 @@ fn spotify_saved_task(command: saved_track::Mutation) -> Task<Message> {
 		track_id,
 		path,
 		generation,
-		mutation,
+		sequence: mutation,
 		saved,
 	} = command;
 	Task::future(async move {

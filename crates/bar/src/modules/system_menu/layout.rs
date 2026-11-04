@@ -1,4 +1,4 @@
-//! SystemMenuWidgets selection, editing and reload rules; no widgets or I/O.
+//! `SystemMenuWidgets` selection, editing and reload rules; no widgets or I/O.
 use config::{ConfigFile, SystemMenuWidgets};
 
 #[derive(Debug, Clone)]
@@ -88,7 +88,7 @@ impl Layout {
 					}
 				}
 			}
-			_ => {}
+			Event::Edited(_) => {}
 		}
 		None
 	}
