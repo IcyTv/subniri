@@ -5,6 +5,9 @@ use iced::Task;
 
 use crate::BarMessage;
 
+#[cfg(test)]
+mod file_tests;
+
 #[derive(Default)]
 pub(crate) struct Writer {
 	running: bool,

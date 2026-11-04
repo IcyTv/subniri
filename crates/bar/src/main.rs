@@ -917,7 +917,7 @@ mod tests {
 	use super::tray_context_menu_point;
 	use super::*;
 
-	fn empty_bar() -> Bar {
+	pub(super) fn empty_bar() -> Bar {
 		Bar {
 			left: Vec::new(),
 			center: Vec::new(),
