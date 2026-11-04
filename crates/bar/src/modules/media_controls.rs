@@ -33,6 +33,9 @@ use zbus::zvariant::OwnedObjectPath;
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 
+mod saved_track;
+use saved_track::{Observation, SavedTrack, Source as SpotifySavedSource};
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	PlayerChanged(PlayerIdentity, PlayerSnapshot),
@@ -57,13 +60,6 @@ pub enum Message {
 	},
 	ClosePopup,
 	Noop,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum SpotifySavedSource {
-	Initial,
-	Signal,
-	Mutation(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -92,13 +88,7 @@ pub struct MediaControls {
 	active_player_position: f32,
 	thumbnail_cache: Rc<RefCell<lru::LruCache<ThumbnailCacheKey, Option<image::Handle>>>>,
 	is_playing: Animation<bool>,
-	spotify_track_id: Option<String>,
-	spotify_track_path: Option<OwnedObjectPath>,
-	spotify_saved: Option<bool>,
-	spotify_pending: bool,
-	spotify_generation: u64,
-	spotify_mutation: u64,
-	spotify_pending_mutation: Option<u64>,
+	saved_track: SavedTrack,
 	cmd_rx: Hashable<Receiver<PlayerCommand>>,
 	cmd_tx: Sender<PlayerCommand>,
 }
@@ -119,13 +109,7 @@ impl MediaControls {
 				NonZeroUsize::new(8).unwrap_or(NonZeroUsize::MIN),
 			))),
 			is_playing: Animation::new(false).quick(),
-			spotify_track_id: None,
-			spotify_track_path: None,
-			spotify_saved: None,
-			spotify_pending: false,
-			spotify_generation: 0,
-			spotify_mutation: 0,
-			spotify_pending_mutation: None,
+			saved_track: SavedTrack::default(),
 			cmd_rx: Hashable::new(cmd_rx),
 			cmd_tx,
 		}
@@ -135,11 +119,10 @@ impl MediaControls {
 		let mpris_sub = Subscription::run_with(self.cmd_rx.clone(), |cmd_rx| {
 			mpris_to_msg_stream((**cmd_rx).clone())
 		});
-		let spotify_sub = self.spotify_track_id.as_ref().map(|track_id| {
-			Subscription::run_with(
-				(track_id.clone(), self.spotify_generation),
-				|(track_id, generation)| spotify_track_stream(track_id.clone(), *generation),
-			)
+		let spotify_sub = self.saved_track.observation().map(|observation| {
+			Subscription::run_with(observation, |(track_id, generation)| {
+				spotify_track_stream(track_id.clone(), *generation)
+			})
 		});
 		let service_sub = match spotify_sub {
 			Some(spotify_sub) => Subscription::batch([mpris_sub, spotify_sub]),
@@ -272,28 +255,9 @@ impl MediaControls {
 				});
 			}
 			Message::ToggleSpotifySaved => {
-				let Some(track_id) = self.spotify_track_id.clone() else {
-					return Task::none();
-				};
-				let Some(saved) = self.spotify_saved else {
-					return Task::none();
-				};
-				if self.spotify_pending {
-					return Task::none();
+				if let Some(mutation) = self.saved_track.toggle() {
+					return spotify_saved_task(mutation);
 				}
-				let Some(path) = self.spotify_track_path.clone() else {
-					return Task::none();
-				};
-				self.spotify_pending = true;
-				self.spotify_mutation = self.spotify_mutation.wrapping_add(1);
-				self.spotify_pending_mutation = Some(self.spotify_mutation);
-				return spotify_saved_task(
-					track_id,
-					path,
-					self.spotify_generation,
-					self.spotify_mutation,
-					!saved,
-				);
 			}
 			Message::SpotifySavedChanged {
 				track_id,
@@ -302,45 +266,14 @@ impl MediaControls {
 				source,
 				result,
 			} => {
-				if generation != self.spotify_generation
-					|| self.spotify_track_id.as_deref() != Some(&track_id)
-				{
-					return Task::none();
-				}
-				match (&source, &result) {
-					(SpotifySavedSource::Initial, Err(_))
-						if self.spotify_pending_mutation.is_some() =>
-					{
-						return Task::none();
-					}
-					(SpotifySavedSource::Mutation(mutation), _)
-						if self.spotify_pending_mutation != Some(*mutation) =>
-					{
-						return Task::none();
-					}
-					_ => {}
-				}
-				if matches!(source, SpotifySavedSource::Mutation(_))
-					|| matches!(source, SpotifySavedSource::Initial)
-						&& self.spotify_pending_mutation.is_none()
-				{
-					self.spotify_pending = false;
-					self.spotify_pending_mutation = None;
-				}
-				match result {
-					Ok(saved) => {
-						if let Some(path) = path {
-							self.spotify_track_path = Some(path);
-						}
-						self.spotify_saved = Some(saved);
-					}
-					Err(error) => {
-						if matches!(source, SpotifySavedSource::Initial) {
-							self.spotify_track_path = None;
-							self.spotify_saved = None;
-						}
-						log::warn!("Failed to update Spotify saved state: {error}");
-					}
+				if let Err(error) = self.saved_track.apply(Observation {
+					track_id,
+					generation,
+					path,
+					source,
+					result,
+				}) {
+					log::warn!("Failed to update Spotify saved state: {error}");
 				}
 			}
 			Message::UpdateThumbnail(identity, thumbnail) => {
@@ -358,15 +291,7 @@ impl MediaControls {
 	}
 
 	fn set_spotify_track(&mut self, track_id: Option<String>) -> Task<Message> {
-		if self.spotify_track_id == track_id {
-			return Task::none();
-		}
-		self.spotify_generation = self.spotify_generation.wrapping_add(1);
-		self.spotify_pending = track_id.is_some();
-		self.spotify_pending_mutation = None;
-		self.spotify_track_id = track_id;
-		self.spotify_track_path = None;
-		self.spotify_saved = None;
+		self.saved_track.set_track(track_id);
 
 		Task::none()
 	}
@@ -444,8 +369,8 @@ impl MediaControls {
 		.align_x(Horizontal::Right)
 		.width(Length::Fill)
 		.spacing(8);
-		if self.spotify_track_id.is_some() {
-			let icon = if self.spotify_saved == Some(true) {
+		if self.saved_track.observation().is_some() {
+			let icon = if self.saved_track.saved() == Some(true) {
 				phosphor_icon!("heart", "fill")
 			} else {
 				phosphor_icon!("heart")
@@ -454,7 +379,7 @@ impl MediaControls {
 				neo_button(svg(icon))
 					.width(40)
 					.height(40)
-					.enabled(self.spotify_saved.is_some() && !self.spotify_pending)
+					.enabled(self.saved_track.saved().is_some() && !self.saved_track.pending())
 					.on_press(Message::ToggleSpotifySaved),
 			);
 		}
@@ -1064,9 +989,14 @@ fn spotify_track_stream(track_id: String, generation: u64) -> impl Stream<Item =
 	}
 }
 
-fn spotify_saved_task(
-	track_id: String, path: OwnedObjectPath, generation: u64, mutation: u64, saved: bool,
-) -> Task<Message> {
+fn spotify_saved_task(command: saved_track::Mutation) -> Task<Message> {
+	let saved_track::Mutation {
+		track_id,
+		path,
+		generation,
+		mutation,
+		saved,
+	} = command;
 	Task::future(async move {
 		let result = async {
 			let connection = zbus::Connection::session().await?;
@@ -1103,6 +1033,68 @@ fn spotify_saved_message(
 
 #[cfg(test)]
 mod tests {
+	use super::{MediaControls, Message, SpotifySavedSource};
+
+	#[test]
+	fn saved_track_reconciliation_rejects_stale_and_mismatched_results()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let mut controls = MediaControls::new();
+		let _ = controls.set_spotify_track(Some("A".into()));
+		let old = controls.saved_track.observation().ok_or("missing track")?.1;
+		let _ = controls.set_spotify_track(Some("B".into()));
+		let _ = controls.set_spotify_track(Some("A".into()));
+		let generation = controls.saved_track.observation().ok_or("missing track")?.1;
+		let path = zbus::zvariant::OwnedObjectPath::try_from("/track/A")?;
+		let changed = |generation, source, result| Message::SpotifySavedChanged {
+			track_id: "A".into(),
+			generation,
+			path: Some(path.clone()),
+			source,
+			result,
+		};
+		let _ = controls.update(changed(old, SpotifySavedSource::Initial, Ok(true)));
+		assert_eq!(controls.saved_track.saved(), None);
+		let _ = controls.update(changed(generation, SpotifySavedSource::Initial, Ok(false)));
+		assert_eq!(controls.saved_track.saved(), Some(false));
+		assert!(!controls.saved_track.pending());
+		let task = controls.update(Message::ToggleSpotifySaved);
+		assert!(task.units() > 0);
+		assert_eq!(controls.update(Message::ToggleSpotifySaved).units(), 0);
+		let mutation = 1; // First serialized mutation in this trace.
+		let _ = controls.update(changed(
+			generation,
+			SpotifySavedSource::Initial,
+			Err("late".into()),
+		));
+		assert_eq!(controls.saved_track.saved(), Some(false));
+		assert!(controls.saved_track.pending());
+		let _ = controls.update(changed(generation, SpotifySavedSource::Signal, Ok(true)));
+		assert!(controls.saved_track.pending());
+		let _ = controls.update(changed(
+			generation,
+			SpotifySavedSource::Mutation(mutation + 1),
+			Ok(false),
+		));
+		assert_eq!(controls.saved_track.saved(), Some(true));
+		assert!(controls.saved_track.pending());
+		let _ = controls.update(changed(
+			generation,
+			SpotifySavedSource::Mutation(mutation),
+			Err("write rejected".into()),
+		));
+		assert_eq!(controls.saved_track.saved(), Some(true));
+		assert!(!controls.saved_track.pending());
+		let _ = controls.set_spotify_track(Some("A".into()));
+		assert_eq!(
+			controls.saved_track.observation().ok_or("missing track")?.1,
+			generation
+		);
+		let _ = controls.update(Message::MprisDisconnected);
+		assert!(controls.saved_track.observation().is_none());
+		assert_eq!(controls.saved_track.saved(), None);
+		assert!(!controls.saved_track.pending());
+		Ok(())
+	}
 	use super::spotify_track_id;
 
 	struct ChildGuard(std::process::Child);
