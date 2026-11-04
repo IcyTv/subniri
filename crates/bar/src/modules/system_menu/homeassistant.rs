@@ -20,6 +20,10 @@ use neo_widgets::{
 };
 use utilities::Hashable;
 
+pub(super) mod integration;
+mod interaction;
+use interaction::{Command, Event, Interaction};
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	Snapshot {
@@ -40,10 +44,7 @@ pub struct HomeassistantEntity {
 	name: String,
 	enabled: Animation<bool>,
 	ty: HomeassistantEntityType,
-	capabilities: Vec<HomeassistantCapability>,
-	available: bool,
-	reported_enabled: bool,
-	pending: bool,
+	interaction: Interaction,
 }
 
 // TODO: Does this belong here? Not really, right?
@@ -115,10 +116,7 @@ impl HomeassistantEntity {
 			connection: Hashable::new(connection),
 			name: "Unknown".to_string(),
 			enabled: Animation::new(false).very_quick(),
-			capabilities: Vec::new(),
-			available: false,
-			reported_enabled: false,
-			pending: false,
+			interaction: Interaction::default(),
 		}
 	}
 
@@ -187,7 +185,7 @@ impl HomeassistantEntity {
 	}
 
 	pub fn update(&mut self, message: Message) -> Task<Message> {
-		match message {
+		let event = match message {
 			Message::Snapshot {
 				name,
 				state,
@@ -195,51 +193,37 @@ impl HomeassistantEntity {
 				capabilities,
 			} => {
 				self.name = name;
-				self.available = available;
-				self.capabilities = capabilities;
-				self.reported_enabled = state == "on";
-				if !self.pending {
-					self.enabled.go_mut(self.reported_enabled, Instant::now());
+				Event::Snapshot {
+					state,
+					available,
+					capabilities,
 				}
 			}
-			Message::Disconnected => self.available = false,
-			Message::Activate if self.available && !self.pending => {
-				let callable = self
-					.capabilities
-					.contains(&HomeassistantCapability::Callable);
-				if !callable
-					&& !self
-						.capabilities
-						.contains(&HomeassistantCapability::Togglable)
-				{
-					return Task::none();
-				}
-				let target = callable || !self.enabled.value();
-				self.enabled.go_mut(target, Instant::now());
-				self.pending = true;
-				let connection = self.connection.clone();
-				let id = self.id.clone();
-				return Task::future(async move {
-					Message::CommandFinished(
-						activate(&connection, &id, callable, target)
-							.await
-							.map_err(|error| error.to_string()),
-					)
-				});
-			}
+			Message::Disconnected => Event::Disconnected,
+			Message::Activate => Event::Activate,
 			Message::CommandFinished(result) => {
-				self.pending = false;
-				if let Err(error) = result {
+				if let Err(error) = &result {
 					log::warn!("Home Assistant command for '{}' failed: {error}", self.id);
-					self.enabled.go_mut(self.reported_enabled, Instant::now());
-				} else if self
-					.capabilities
-					.contains(&HomeassistantCapability::Callable)
-				{
-					self.enabled.go_mut(self.reported_enabled, Instant::now());
+				}
+				Event::Finished {
+					success: result.is_ok(),
 				}
 			}
-			Message::Activate => {}
+		};
+		let change = self.interaction.update(event);
+		if let Some(enabled) = change.animate {
+			self.enabled.go_mut(enabled, Instant::now());
+		}
+		if let Some(command) = change.command {
+			let connection = self.connection.clone();
+			let id = self.id.clone();
+			return Task::future(async move {
+				Message::CommandFinished(
+					activate(&connection, &id, command)
+						.await
+						.map_err(|error| error.to_string()),
+				)
+			});
 		}
 		Task::none()
 	}
@@ -252,9 +236,7 @@ impl HomeassistantEntity {
 			self.enabled
 				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
 
-		let callable = self
-			.capabilities
-			.contains(&HomeassistantCapability::Callable);
+		let callable = self.interaction.callable();
 		let button = if callable {
 			neo_button(
 				row![
@@ -301,13 +283,9 @@ impl HomeassistantEntity {
 		};
 		// Keep the optimistic colors visible while the command is in flight.
 		// update() serializes presses until its result arrives.
-		button.on_press(Message::Activate).enabled(
-			self.available
-				&& (callable
-					|| self
-						.capabilities
-						.contains(&HomeassistantCapability::Togglable)),
-		)
+		button
+			.on_press(Message::Activate)
+			.enabled(self.interaction.actionable())
 	}
 
 	// TODO: Allow for setting custom icons for entities. Maybe HA even provides some icons?
@@ -367,17 +345,15 @@ async fn read_entity(connection: &zbus::Connection, id: &str) -> zbus::Result<Me
 	})
 }
 
-async fn activate(
-	connection: &zbus::Connection, id: &str, callable: bool, target: bool,
-) -> zbus::Result<()> {
-	if callable {
+async fn activate(connection: &zbus::Connection, id: &str, command: Command) -> zbus::Result<()> {
+	if let Command::Call = command {
 		HomeassistantCallableProxy::builder(connection)
 			.path(entity_path(id))?
 			.build()
 			.await?
 			.call()
 			.await?;
-	} else {
+	} else if let Command::SetEnabled(target) = command {
 		HomeassistantTogglableProxy::builder(connection)
 			.path(entity_path(id))?
 			.build()
@@ -415,5 +391,132 @@ impl Drop for Observation {
 				let _ = proxy.unobserve().await;
 			}
 		});
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::modules::test_bus;
+
+	struct ObservedEntity(tokio::sync::mpsc::UnboundedSender<&'static str>);
+
+	#[zbus::interface(name = "de.icytv.subniri.Homeassistant.Entity")]
+	impl ObservedEntity {
+		fn observe(&self) -> bool {
+			let _ = self.0.send("observe");
+			true
+		}
+		fn unobserve(&self) {
+			let _ = self.0.send("unobserve");
+		}
+		#[zbus(property)]
+		fn friendly_name(&self) -> &str {
+			"Observed"
+		}
+		#[zbus(property)]
+		fn state(&self) -> &str {
+			let _ = self.0.send("read");
+			"off"
+		}
+		#[zbus(property)]
+		fn available(&self) -> bool {
+			true
+		}
+		#[zbus(property)]
+		fn capabilities(&self) -> Vec<HomeassistantCapability> {
+			vec![HomeassistantCapability::Togglable]
+		}
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn observation_cancellation_releases_daemon_interest() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::system_menu::homeassistant::tests::observation_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn observation_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+		let _daemon = zbus::connection::Builder::session()?
+			.name(daemon_common::DEFAULT_BUS_NAME.as_str())?
+			.serve_at(entity_path("light.test"), ObservedEntity(tx))?
+			.build()
+			.await?;
+		// Ignore GetAll reads made while registering the fixture itself.
+		while rx.try_recv().is_ok() {}
+		let card =
+			HomeassistantEntity::new(zbus::Connection::session().await?, "light.test".into());
+		let mut stream = futures::stream::select_all(
+			iced::advanced::subscription::into_recipes(card.subscription())
+				.into_iter()
+				.map(|recipe| recipe.stream(futures::stream::pending().boxed())),
+		);
+		let first = tokio::time::timeout(Duration::from_secs(2), stream.next()).await?;
+		assert!(matches!(
+			first,
+			Some(Message::Snapshot {
+				available: true,
+				..
+			})
+		));
+		assert_eq!(rx.recv().await, Some("observe"));
+		assert_eq!(rx.recv().await, Some("read"));
+		drop(stream);
+		assert_eq!(
+			tokio::time::timeout(Duration::from_secs(2), rx.recv()).await?,
+			Some("unobserve")
+		);
+		Ok(())
+	}
+
+	#[test]
+	#[ignore = "requires dbus-daemon; uses only a private bus"]
+	fn card_interaction_reconciles_snapshots_and_commands() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::system_menu::homeassistant::tests::interaction_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn interaction_child() -> Result<(), test_bus::Error> {
+		test_bus::require_child()?;
+		let connection = zbus::Connection::session().await?;
+		let mut card = HomeassistantEntity::new(connection, "light.test".into());
+		let snapshot = |capabilities| Message::Snapshot {
+			name: "Test".into(),
+			state: "off".into(),
+			available: true,
+			capabilities,
+		};
+		assert_eq!(card.update(Message::Activate).units(), 0);
+		let _ = card.update(snapshot(vec![]));
+		assert_eq!(card.update(Message::Activate).units(), 0);
+		let _ = card.update(snapshot(vec![HomeassistantCapability::Togglable]));
+		assert!(card.update(Message::Activate).units() > 0);
+		assert!(card.enabled.value());
+		assert_eq!(card.update(Message::Activate).units(), 0);
+		let _ = card.update(snapshot(vec![HomeassistantCapability::Togglable]));
+		assert!(
+			card.enabled.value(),
+			"pending optimistic state wins until completion"
+		);
+		let _ = card.update(Message::CommandFinished(Err("rejected".into())));
+		assert!(!card.enabled.value());
+		let _ = card.update(snapshot(vec![
+			HomeassistantCapability::Callable,
+			HomeassistantCapability::Togglable,
+		]));
+		assert!(card.update(Message::Activate).units() > 0);
+		assert!(card.enabled.value());
+		let _ = card.update(Message::CommandFinished(Ok(())));
+		assert!(
+			!card.enabled.value(),
+			"callable completion reconciles to reported state"
+		);
+		let _ = card.update(Message::Disconnected);
+		assert_eq!(card.update(Message::Activate).units(), 0);
+		Ok(())
 	}
 }
