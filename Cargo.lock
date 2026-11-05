@@ -2452,7 +2452,7 @@ dependencies = [
 [[package]]
 name = "exwlshellev"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "calloop 0.14.5",
  "calloop-wayland-source 0.4.1",
@@ -3391,7 +3391,7 @@ dependencies = [
 [[package]]
 name = "iced"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_core",
  "iced_debug",
@@ -3407,7 +3407,7 @@ dependencies = [
 [[package]]
 name = "iced_core"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "bitflags 2.13.2",
  "bytes",
@@ -3426,7 +3426,7 @@ dependencies = [
 [[package]]
 name = "iced_debug"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_core",
  "iced_futures",
@@ -3436,7 +3436,7 @@ dependencies = [
 [[package]]
 name = "iced_devtools"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_debug",
  "iced_program",
@@ -3447,7 +3447,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -3460,7 +3460,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "enumflags2",
  "exwlshellev",
@@ -3486,7 +3486,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell_macros"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "darling 0.24.1",
  "manyhow",
@@ -3498,7 +3498,7 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "futures",
  "iced_core",
@@ -3512,7 +3512,7 @@ dependencies = [
 [[package]]
 name = "iced_graphics"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -3532,7 +3532,7 @@ dependencies = [
 [[package]]
 name = "iced_program"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_graphics",
  "iced_runtime",
@@ -3541,7 +3541,7 @@ dependencies = [
 [[package]]
 name = "iced_renderer"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_graphics",
  "iced_tiny_skia",
@@ -3553,7 +3553,7 @@ dependencies = [
 [[package]]
 name = "iced_runtime"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "bytes",
  "iced_core",
@@ -3564,7 +3564,7 @@ dependencies = [
 [[package]]
 name = "iced_tiny_skia"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "bytemuck",
  "cosmic-text",
@@ -3581,7 +3581,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "futures",
  "iced_core",
@@ -3595,7 +3595,7 @@ dependencies = [
 [[package]]
 name = "iced_wgpu"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "bitflags 2.13.2",
  "bytemuck",
@@ -3615,7 +3615,7 @@ dependencies = [
 [[package]]
 name = "iced_widget"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "iced_renderer",
  "iced_runtime",
@@ -3629,7 +3629,7 @@ dependencies = [
 [[package]]
 name = "iced_winit"
 version = "0.15.0-dev"
-source = "git+https://github.com/IcyTv/iced?branch=master#18560b674c24213f09b0908f2e59003f5b002ec7"
+source = "git+https://github.com/IcyTv/iced?branch=master#d76c5e1ebcc43a5164c4ab6dc4f80915aacf8055"
 dependencies = [
  "arboard",
  "iced_debug",
@@ -4179,9 +4179,9 @@ dependencies = [
 
 [[package]]
 name = "kamadak-exif"
-version = "0.6.1"
+version = "0.6.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1130d80c7374efad55a117d715a3af9368f0fa7a2c54573afc15a188cd984837"
+checksum = "8772c92c0f41c4a672cbdee6728253e5ae8fcc1c5eb5c6c676579565684bbf68"
 dependencies = [
  "mutate_once",
 ]
@@ -4922,9 +4922,9 @@ dependencies = [
 
 [[package]]
 name = "mime"
-version = "0.3.17"
+version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+checksum = "d5848f5a9e8117cf94f2f90faac24a87ff81600ff8628c1e3deaab572e76bfa1"
 
 [[package]]
 name = "minimal-lexical"
@@ -5106,6 +5106,7 @@ dependencies = [
 name = "neo-widgets"
 version = "0.0.1"
 dependencies = [
+ "async-channel",
  "freedesktop-desktop-entry",
  "iced",
  "icon",
@@ -8992,7 +8993,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.2+spec-1.1.0",
  "toml_parser",
- "winnow 1.0.4",
+ "winnow 1.0.5",
 ]
 
 [[package]]
@@ -9001,7 +9002,7 @@ version = "1.1.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
- "winnow 1.0.4",
+ "winnow 1.0.5",
 ]
 
 [[package]]
@@ -9546,7 +9547,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
 dependencies = [
  "calloop 0.14.5",
  "log 0.4.35",
@@ -10370,9 +10371,9 @@ dependencies = [
 
 [[package]]
 name = "winnow"
-version = "1.0.4"
+version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b97319f7b8343df12cc98938e5c3eb436064524c8d2b4e30a1d3a36eecdf81"
+checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 dependencies = [
  "memchr",
 ]
@@ -10564,7 +10565,7 @@ dependencies = [
  "uds_windows",
  "uuid",
  "windows-sys 0.61.2",
- "winnow 1.0.4",
+ "winnow 1.0.5",
  "zbus_macros",
  "zbus_names",
  "zvariant",
@@ -10590,7 +10591,7 @@ version = "4.3.4"
 source = "git+https://github.com/IcyTv/zbus?rev=f8e7b0c9#f8e7b0c92532aa6061e94ea3e8a123a9a635f3ae"
 dependencies = [
  "serde",
- "winnow 1.0.4",
+ "winnow 1.0.5",
  "zvariant",
 ]
 
@@ -10600,7 +10601,7 @@ version = "5.2.1"
 source = "git+https://github.com/IcyTv/zbus?rev=f8e7b0c9#f8e7b0c92532aa6061e94ea3e8a123a9a635f3ae"
 dependencies = [
  "serde",
- "winnow 1.0.4",
+ "winnow 1.0.5",
  "zbus_names",
  "zvariant",
 ]
@@ -10790,7 +10791,7 @@ dependencies = [
  "enumflags2",
  "serde",
  "uuid",
- "winnow 1.0.4",
+ "winnow 1.0.5",
  "zcheapstr",
  "zvariant_derive",
  "zvariant_utils",
@@ -10817,5 +10818,5 @@ dependencies = [
  "quote",
  "serde",
  "syn 3.0.9",
- "winnow 1.0.4",
+ "winnow 1.0.5",
 ]

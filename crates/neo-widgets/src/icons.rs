@@ -35,6 +35,8 @@ use iced::{
 };
 use icon::{FileType, IconFile, IconSearch, Icons};
 
+pub mod background;
+
 static ICON_RESOLVER: OnceLock<Arc<Mutex<ApplicationIconResolver>>> = OnceLock::new();
 
 fn icon_resolver() -> &'static Arc<Mutex<ApplicationIconResolver>> {
@@ -92,11 +94,11 @@ pub fn try_resolve_icon_name(
 	icon_name: impl AsRef<str>, size: u32, scale: u32,
 ) -> Option<ResolvedIcon> {
 	let resolver = icon_resolver();
-	let Ok(resolver) = resolver.lock() else {
+	let Ok(mut resolver) = resolver.lock() else {
 		return None;
 	};
 	resolver
-		.find_icon(icon_name.as_ref(), size, scale)
+		.get_icon_by_name(icon_name.as_ref(), size, scale)
 		.map(ResolvedIcon::from_icon_file)
 }
 
@@ -109,7 +111,7 @@ pub fn try_resolve_icon_name_in_path(
 	};
 	resolver.add_icon_dir(icon_path);
 	resolver
-		.find_icon(icon_name.as_ref(), size, scale)
+		.get_icon_by_name(icon_name.as_ref(), size, scale)
 		.map(ResolvedIcon::from_icon_file)
 }
 
@@ -149,6 +151,24 @@ struct ApplicationIconResolver {
 }
 
 impl ApplicationIconResolver {
+	fn get_icon_by_name(&mut self, name: &str, size: u32, scale: u32) -> Option<IconFile> {
+		let lookup = IconLookupKey {
+			kind: IconLookupKind::Name,
+			name: name.to_string(),
+			generation: self.generation,
+			size,
+			scale,
+		};
+		if let Some(icon) = self.cache.get(&lookup) {
+			return icon.clone().into_opt();
+		}
+		// Missing tray names otherwise scan theme paths on every view rebuild.
+		// Keep misses as well as hits until the search-path generation changes.
+		let icon = self.find_icon(name, size, scale);
+		self.cache.insert(lookup, icon.clone().into());
+		icon
+	}
+
 	pub fn new() -> Self {
 		let application_dirs = default_paths().collect::<Vec<_>>();
 		let desktop_entries = Iter::new(application_dirs.clone().into_iter())
@@ -234,11 +254,17 @@ impl ApplicationIconResolver {
 		&mut self, window: &niri_ipc::Window, size: u32, scale: u32,
 	) -> Option<IconFile> {
 		let app_id = window.app_id.as_ref()?;
+		self.get_icon_by_window_identity(app_id, window.pid, size, scale)
+	}
+
+	fn get_icon_by_window_identity(
+		&mut self, app_id: &str, pid: Option<i32>, size: u32, scale: u32,
+	) -> Option<IconFile> {
 		if let Some(icon) = self.get_icon_by_app_id(app_id, size, scale) {
 			return Some(icon);
 		}
 
-		let pid = window.pid?;
+		let pid = pid?;
 
 		let exe_path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
 		let root = nix_output_root_for_path(&exe_path)?;
@@ -329,6 +355,7 @@ struct IconLookupKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum IconLookupKind {
+	Name,
 	AppId,
 	DesktopEntry,
 }
@@ -387,4 +414,85 @@ fn nix_output_root_for_path(path: &Path) -> Option<PathBuf> {
 	let output_name = components.next()?.as_os_str();
 
 	Some(store.join(output_name))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::{
+		fs,
+		time::{SystemTime, UNIX_EPOCH},
+	};
+
+	fn fixture() -> (ApplicationIconResolver, PathBuf) {
+		let root = PathBuf::from("/tmp/opencode").join(format!(
+			"tray-icon-cache-{}-{}",
+			std::process::id(),
+			SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.unwrap()
+				.as_nanos()
+		));
+		fs::create_dir_all(root.join("hicolor/24x24/apps")).unwrap();
+		fs::write(root.join("hicolor/index.theme"),
+			"[Icon Theme]\nName=Fixture\nDirectories=24x24/apps\n\n[24x24/apps]\nSize=24\nType=Fixed\nContext=Applications\n").unwrap();
+		let resolver = ApplicationIconResolver {
+			additional_icon_dirs: vec![root.clone()],
+			application_dirs: vec![],
+			desktop_entries: vec![],
+			icons: IconSearch::new_from(vec![root.clone()]).search().icons(),
+			cache: HashMap::new(),
+			generation: 0,
+			known_roots: HashSet::new(),
+		};
+		(resolver, root)
+	}
+
+	#[test]
+	fn named_icon_misses_are_cached_until_theme_invalidation() {
+		let (mut resolver, root) = fixture();
+		assert!(resolver.get_icon_by_name("sonarr-missing", 24, 1).is_none());
+		assert_eq!(
+			resolver.cache.len(),
+			1,
+			"missing tray names must be cached too"
+		);
+		fs::write(root.join("hicolor/24x24/apps/sonarr-missing.svg"), "<svg/>").unwrap();
+		assert!(
+			resolver.get_icon_by_name("sonarr-missing", 24, 1).is_none(),
+			"a repeated miss must not search the filesystem again"
+		);
+		let extra = root.join("extra");
+		fs::create_dir(&extra).unwrap();
+		resolver.add_icon_dir(&extra);
+		assert!(
+			resolver.get_icon_by_name("sonarr-missing", 24, 1).is_some(),
+			"theme generation changes must invalidate negative entries"
+		);
+	}
+
+	#[test]
+	fn named_icon_hits_are_cached_per_size_and_scale() {
+		let (mut resolver, root) = fixture();
+		let path = root.join("hicolor/24x24/apps/spotify.svg");
+		fs::write(&path, "<svg/>").unwrap();
+		assert!(resolver.get_icon_by_name("spotify", 24, 1).is_some());
+		fs::remove_file(&path).unwrap();
+		assert!(
+			resolver.get_icon_by_name("spotify", 24, 1).is_some(),
+			"a cached hit must not search the filesystem again"
+		);
+		assert!(resolver.get_icon_by_name("spotify", 32, 1).is_none());
+		assert!(resolver.get_icon_by_name("spotify", 24, 2).is_none());
+		assert_eq!(resolver.cache.len(), 3);
+		let extra = root.join("extra");
+		fs::create_dir(&extra).unwrap();
+		resolver.add_icon_dir(&extra);
+		assert!(resolver.get_icon_by_name("spotify", 24, 1).is_none());
+		assert_eq!(
+			resolver.cache.len(),
+			1,
+			"obsolete generations must be swept"
+		);
+	}
 }

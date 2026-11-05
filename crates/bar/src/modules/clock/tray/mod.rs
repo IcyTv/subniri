@@ -6,7 +6,7 @@ use iced::{Alignment, Color, Element, Length, Padding, Rectangle, Subscription};
 use neo_widgets::phosphor_icon;
 use neo_widgets::widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_card};
 use neo_widgets::{
-	icons::{ResolvedIcon, try_resolve_icon_name},
+	icons::{ResolvedIcon, background::try_resolve_icon_name},
 	style::COLORS,
 	widgets::neo_button,
 };
@@ -23,6 +23,55 @@ mod watcher;
 
 const ICON_SIZE: i32 = 24;
 const MENU_ICON_SIZE: f32 = 18.0;
+
+#[cfg(test)]
+mod lookup_tests {
+	use super::*;
+	use std::{hint::black_box, time::Instant};
+
+	fn item(name: &str) -> TrayItem {
+		TrayItem {
+			address: item::ItemAddress::parse("org.example.TrayFixture").unwrap(),
+			id: name.into(),
+			title: name.into(),
+			icon: icon::TrayIcon::from_parts(name.into(), vec![], None),
+			tooltip: None,
+			status: item::TrayItemStatus::Active,
+			window_id: None,
+			overlay_icon: Default::default(),
+			attention_icon: Default::default(),
+			attention_movie_name: None,
+			advertised_item_is_menu: None,
+			activation: Activation::Activate,
+			menu: None,
+		}
+	}
+
+	#[test]
+	#[ignore = "manual host-theme timing fixture; no compositor or D-Bus services"]
+	fn missing_sonarr_and_spotify_view_cost() {
+		let mut clock = crate::modules::clock::Clock::new();
+		for name in ["subniri-missing-sonarr-fixture", "spotify"] {
+			clock
+				.tray
+				.update(Message::Registered(name.into(), item(name)));
+		}
+		let first = Instant::now();
+		black_box(clock.view_popup());
+		eprintln!("TRAY_VIEW first_us={}", first.elapsed().as_micros());
+		let mut samples = Vec::new();
+		for _ in 0..100 {
+			let start = Instant::now();
+			black_box(clock.view_popup());
+			samples.push(start.elapsed().as_micros());
+		}
+		samples.sort_unstable();
+		eprintln!(
+			"TRAY_VIEW repeated_us median={} p95={} max={}",
+			samples[50], samples[95], samples[99]
+		);
+	}
+}
 
 #[derive(Debug, Clone)]
 pub enum PopupAction {

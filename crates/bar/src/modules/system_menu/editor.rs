@@ -57,6 +57,10 @@ struct Tiles<'a, Renderer: iced::advanced::Renderer = iced::Renderer> {
 	enabled: Vec<bool>,
 }
 
+// NOTE: Gesture anchors use popup-local coordinates and assume the visible popup
+// origin stays fixed during editing, as in the current left-edge system menu.
+// If movable module placement is introduced, revisit anchors across popup moves;
+// supporting that is out of scope for the current setup.
 struct Press {
 	source: usize,
 	start: Point,

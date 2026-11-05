@@ -1,5 +1,10 @@
 # Subniri Iced
 
+## System menu quick tiles
+
+See [quick-tile configuration and editing](docs/design/quick-tiles.md) for row-based
+layouts, responsive widgets, resizing, and animation behavior.
+
 ## `iceout` Launcher
 
 `polarbar` launches the logout/power menu through the `iceout` binary.

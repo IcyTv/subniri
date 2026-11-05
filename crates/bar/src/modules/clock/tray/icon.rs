@@ -1,6 +1,8 @@
 use iced::widget::image;
 use neo_widgets::icons::{
-	ResolvedIcon, default_icon, try_resolve_icon_name, try_resolve_icon_name_in_path,
+	ResolvedIcon,
+	background::{try_resolve_icon_name, try_resolve_icon_name_in_path},
+	default_icon,
 };
 use zbus::Proxy;
 

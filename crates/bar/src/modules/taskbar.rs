@@ -9,7 +9,7 @@ use iced::{
 	widget::{column, container, image, row, space, svg},
 };
 use neo_widgets::{
-	icons::{ResolvedIcon, resolve_from_window},
+	icons::{ResolvedIcon, background::resolve_from_window},
 	style::COLORS,
 	widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_button, neo_card},
 };

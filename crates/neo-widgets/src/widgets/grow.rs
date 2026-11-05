@@ -16,12 +16,14 @@ pub enum GrowFrom {
 pub fn popup_grow<'a, Message, Theme, Renderer>(
 	content: impl Into<Element<'a, Message, Theme, Renderer>>,
 ) -> Grow<'a, Message, Theme, Renderer> {
-	grow(
+	let mut widget = grow(
 		content,
 		Duration::from_millis(50),
 		animation::Easing::EaseOutQuart,
 		GrowFrom::TopCenter,
-	)
+	);
+	widget.popup = true;
+	widget
 }
 
 /// Read-only snapshot exposed to widget operations for rendering verification.
@@ -40,6 +42,7 @@ pub fn grow<'a, Message, Theme, Renderer>(
 
 #[must_use]
 pub struct Grow<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer> {
+	popup: bool,
 	content: Element<'a, Message, Theme, Renderer>,
 	duration: Duration,
 	easing: animation::Easing,
@@ -52,6 +55,7 @@ impl<'a, Message, Theme, Renderer> Grow<'a, Message, Theme, Renderer> {
 		easing: animation::Easing, from: GrowFrom,
 	) -> Self {
 		Self {
+			popup: false,
 			content: content.into(),
 			duration,
 			easing,
@@ -73,6 +77,7 @@ impl<'a, Message, Theme, Renderer> Grow<'a, Message, Theme, Renderer> {
 
 #[derive(Debug, Default)]
 struct State {
+	backend: bool,
 	started_at: Option<Instant>,
 	progress: f32,
 }
@@ -114,7 +119,9 @@ where
 	) {
 		let progress = {
 			let state = tree.state.downcast_mut::<State>();
-			if let Event::Window(window::Event::RedrawRequested(now)) = event {
+			if state.backend {
+				state.progress = 1.0;
+			} else if let Event::Window(window::Event::RedrawRequested(now)) = event {
 				let started_at = state.started_at.get_or_insert(*now);
 				state.progress = if self.duration.is_zero() {
 					1.0
@@ -187,6 +194,17 @@ where
 		&mut self, tree: &mut widget::Tree, layout: Layout<'_>, renderer: &Renderer,
 		operation: &mut dyn widget::Operation,
 	) {
+		let state = tree.state.downcast_mut::<State>();
+		if self.popup {
+			operation.custom(
+				Some(&widget::Id::new("exwlshell.popup.grow")),
+				layout.bounds(),
+				&mut state.backend,
+			);
+			if state.backend {
+				state.progress = 1.0;
+			}
+		}
 		let mut frame = GrowFrame {
 			bounds: layout.bounds(),
 			transformation: self

@@ -22,7 +22,7 @@ use mprizzle::{
 	PlayerIdentity,
 };
 use neo_widgets::{
-	icons::{ResolvedIcon, resolve_icon},
+	icons::{ResolvedIcon, background::resolve_icon},
 	phosphor_icon,
 	style::COLORS,
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, spinner},
@@ -301,9 +301,9 @@ impl MediaControls {
 		const ICON_SIZE: u32 = 32;
 		let icon: Element<'_, ()> = if let Some(active_player) = &self.active_player {
 			match resolve_icon(&active_player.1.desktop_entry, 32, 2) {
-				ResolvedIcon::Svg(img) => svg(img).width(Length::Shrink).height(ICON_SIZE).into(),
+				ResolvedIcon::Svg(img) => svg(img).width(ICON_SIZE).height(ICON_SIZE).into(),
 				ResolvedIcon::Image(img) => iced::widget::image(img)
-					.width(Length::Shrink)
+					.width(ICON_SIZE)
 					.height(ICON_SIZE)
 					.into(),
 			}

@@ -65,6 +65,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		with_connection: Some(connection.into()),
 		default_text_size: 18.into(),
 		shell_broadcast,
+		popup_transitions: Some(iced_exwlshell::popup_animation::Profile::default()),
 		..Default::default()
 	})
 	.layer_settings(LayerShellSettings {
@@ -198,6 +199,20 @@ impl Bar {
 				}
 				iced::window::Event::Rescaled(_) => self.sync_layer_scale(id),
 				iced::window::Event::Closed => self.window_closed(id),
+				iced::window::Event::CloseRequested if self.popups.route(id).is_some() => {
+					iced_runtime::task::effect(iced_runtime::Action::Window(
+						iced_runtime::window::Action::Close(id),
+					))
+				}
+				iced::window::Event::CloseRequested if self.layer_heights.contains_key(&id) => {
+					// Layer-shell compositors may keep keyboard focus on the bar
+					// while an owned popup holds the grab.
+					self.popups.topmost().map_or_else(Task::none, |popup| {
+						iced_runtime::task::effect(iced_runtime::Action::Window(
+							iced_runtime::window::Action::Close(popup),
+						))
+					})
+				}
 				iced::window::Event::Unfocused => self.popup_unfocused(id),
 				_ => Task::none(),
 			},
@@ -689,11 +704,18 @@ impl Bar {
 			)
 		});
 
-		let window_events = iced::event::listen_with(|event, _status, window| match event {
+		let window_events = iced::event::listen_with(|event, status, window| match event {
 			iced::Event::Window(iced::window::Event::RedrawRequested(_)) => None,
 			iced::Event::Window(window_event) => {
 				Some(BarMessage::WindowEvent(window, window_event))
 			}
+			iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+				key: iced::keyboard::Key::Named(iced::keyboard::key::Named::Escape),
+				..
+			}) if status == iced::event::Status::Ignored => Some(BarMessage::WindowEvent(
+				window,
+				iced::window::Event::CloseRequested,
+			)),
 			_ => None,
 		});
 		let context_children = self.popups.context_children();
@@ -720,6 +742,7 @@ impl Bar {
 		});
 
 		let mut subscriptions = vec![
+			neo_widgets::icons::background::updates().map(|()| BarMessage::Noop),
 			self.shell_events.listen().filter_map(|event| {
 				if matches!(event, ShellEvent::Presented { .. }) {
 					None

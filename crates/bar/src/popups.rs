@@ -59,6 +59,13 @@ pub(super) struct Change {
 }
 
 impl Popups {
+	pub fn topmost(&self) -> Option<Id> {
+		self.contexts
+			.last()
+			.or(self.root.as_ref())
+			.map(|popup| popup.id)
+	}
+
 	pub fn context_children(&self) -> Vec<(Id, Id)> {
 		self.contexts
 			.iter()
@@ -196,6 +203,21 @@ mod tests {
 			section: Section::Left,
 			index: 0,
 		})
+	}
+
+	#[test]
+	fn escape_target_tracks_the_topmost_live_popup() {
+		let mut popups = Popups::default();
+		let (root, child) = (Id::unique(), Id::unique());
+		assert_eq!(popups.topmost(), None);
+		open(&mut popups, root);
+		assert_eq!(popups.topmost(), Some(root));
+		context(&mut popups, child, root);
+		assert_eq!(popups.topmost(), Some(child));
+		popups.update(Event::Closed(child));
+		assert_eq!(popups.topmost(), Some(root));
+		popups.update(Event::Closed(root));
+		assert_eq!(popups.topmost(), None);
 	}
 
 	#[test]
