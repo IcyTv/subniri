@@ -8,16 +8,8 @@ use daemon_common::{
 	HomeassistantTogglableProxy,
 };
 use futures::StreamExt;
-use iced::{
-	Animation, Border, Length, Subscription, Task,
-	alignment::{Horizontal, Vertical},
-	widget::{column, container, row, svg, text},
-};
-use neo_widgets::{
-	phosphor_icon,
-	style::COLORS,
-	widgets::{NeoButton, neo_button, neo_toggle_button},
-};
+use iced::{Animation, Subscription, Task, widget::svg};
+use neo_widgets::{phosphor_icon, style::COLORS, widgets::NeoButton};
 use utilities::Hashable;
 
 pub(super) mod integration;
@@ -232,64 +224,37 @@ impl HomeassistantEntity {
 		Task::none()
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
-		let icon_color =
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
-		let background =
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
+	pub fn title(&self) -> &str {
+		&self.name
+	}
 
-		let callable = self.interaction.callable();
-		let button = if callable {
-			neo_button(
-				row![
-					container(svg(self.icon()).height(Length::Fill))
-						.width(42)
-						.height(42)
-						.style(move |_| {
-							container::Style {
-								background: Some(icon_color.into()),
-								border: Border {
-									color: COLORS.black,
-									width: 2.0,
-									radius: 3.0.into(),
-								},
-								..Default::default()
-							}
-						})
-						.padding(12),
-					column![
-						text(&self.name).color(COLORS.text).font(iced::Font {
-							weight: iced::font::Weight::Bold,
-							..Default::default()
-						}),
-						text(&self.id).color(COLORS.text).size(12)
-					]
-					.spacing(4)
-					.align_x(Horizontal::Left)
-					.width(Length::Fill),
-				]
-				.align_y(Vertical::Center)
-				.width(Length::Fill)
-				.spacing(12),
-			)
-			.background(background)
-		} else {
-			neo_toggle_button(
-				self.icon(),
-				&self.name,
-				&self.id,
-				self.enabled.value(),
-				Some(icon_color),
-			)
-			.background(background)
-		};
-		// Keep the optimistic colors visible while the command is in flight.
-		// update() serializes presses until its result arrives.
-		button
-			.on_press(Message::Activate)
-			.enabled(self.interaction.actionable())
+	pub fn is_animating(&self, now: Instant) -> bool {
+		self.enabled.is_animating(now)
+	}
+
+	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
+		let now = Instant::now();
+		neo_widgets::widgets::neo_tile(
+			self.icon(),
+			self.name.as_str(),
+			self.id.as_str(),
+			if self.interaction.callable() {
+				None
+			} else {
+				Some(self.enabled.value())
+			},
+			Some(
+				self.enabled
+					.interpolate(COLORS.white, COLORS.decorative.green, now),
+			),
+			size,
+		)
+		.background(
+			self.enabled
+				.interpolate(COLORS.white, COLORS.decorative.green90, now),
+		)
+		.on_press(Message::Activate)
+		.enabled(self.interaction.actionable())
 	}
 
 	// TODO: Allow for setting custom icons for entities. Maybe HA even provides some icons?

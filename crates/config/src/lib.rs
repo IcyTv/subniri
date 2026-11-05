@@ -300,13 +300,26 @@ impl ConfigFile {
 			|value| value.to_string(),
 		);
 
-		nix_assignment(
-			&mut out,
-			"services.subniri.settings.systemMenu.widgets",
-			&self.system_menu.widgets,
-			&declarative.system_menu.widgets,
-			|widgets| nix_list(widgets.iter().map(system_menu_widget_name)),
-		);
+		if self.system_menu.effective_rows() != declarative.system_menu.effective_rows() {
+			out.push_str("services.subniri.settings.systemMenu.widgets = [];\n");
+			out.push_str("services.subniri.settings.systemMenu.rows = [\n");
+			for row in self.system_menu.effective_rows() {
+				out.push_str("  [ ");
+				for entry in row.0 {
+					match entry {
+						MenuEntry::Gap(width) => out.push_str(&format!("{{ gap = {width}; }} ")),
+						MenuEntry::Widget(tile) => out.push_str(&format!(
+							"{{ widget = {}; width = {}; height = {}; }} ",
+							nix_string(system_menu_widget_name(&tile.widget)),
+							tile.width,
+							tile.height
+						)),
+					}
+				}
+				out.push_str("]\n");
+			}
+			out.push_str("];\n");
+		}
 		nix_assignment(
 			&mut out,
 			"services.subniri.settings.launcher.providers",
@@ -790,16 +803,23 @@ impl SystemMenuWidgets {
 	];
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
+mod system_menu;
+pub use system_menu::{
+	MenuEntry, MenuRow, MenuTile, PlacedTile, ResolvedMenu, resolve_rows, rows_from_tiles,
+};
+
+#[derive(Debug, Default, Clone, Eq, Validate)]
 #[garde(allow_unvalidated)]
 pub struct SystemMenu {
-	/// Widgets to be displayed in the system menu. These put into 2 columns by the order they
-	/// appear in this list.
-	/// So: `a b c d`
-	/// Turns into:
-	///     `a b`
-	///     `c d`
+	/// Legacy ordered list. Migrated into rows of two medium tiles when edited.
 	pub widgets: Vec<SystemMenuWidgets>,
+	pub rows: Vec<MenuRow>,
+}
+
+impl PartialEq for SystemMenu {
+	fn eq(&self, other: &Self) -> bool {
+		self.effective_rows() == other.effective_rows()
+	}
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Config)]

@@ -107,3 +107,5 @@ mod tests {
 		hasher.finish()
 	}
 }
+mod latest_write;
+pub use latest_write::LatestWrite;

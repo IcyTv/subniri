@@ -1,411 +1,751 @@
-//! Edit-only input and layout around the normal widget visuals.
-//!
-//! Children receive redraws, but never input or focus operations. The dragged
-//! child is drawn once, above its siblings; its destination is an empty slot.
-
-use config::SystemMenuWidgets;
+//! Shared retained tile scene for normal/edit modes, including reversible resize previews.
+use super::{Message, spatial};
+use config::{MenuRow, PlacedTile, SystemMenuWidgets};
 use iced::{
-	Border, Element, Event, Length, Point, Rectangle, Size, Vector,
+	Border, Element, Event, Length, Point, Rectangle, Size, Transformation, Vector,
 	advanced::{
-		Layout, Shell, Widget, layout, mouse, renderer,
+		Layout, Shell, Widget, layout, mouse, overlay, renderer,
 		widget::{Tree, tree},
 	},
 	keyboard::{self, key::Named},
 	window,
 };
-use neo_widgets::style::COLORS;
+use neo_widgets::{animation::geometry::RectangleMotion, style::COLORS};
+use std::time::Instant;
 
-use super::Message;
-
-const COLUMNS: usize = 2;
-const SPACING: f32 = 8.0;
-const CELL_HEIGHT: f32 = 64.0;
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Key(SystemMenuWidgets, usize);
 
 pub(super) fn grid<'a>(
-	active: usize, entries: Vec<(SystemMenuWidgets, Element<'a, Message>)>,
+	editing: bool, rows: &[MenuRow], baseline: &[PlacedTile], enabled: &[bool],
+	entries: Vec<(SystemMenuWidgets, Option<PlacedTile>, Element<'a, Message>)>, size: Size,
+	maximum: Size, ready: bool,
 ) -> Element<'a, Message> {
-	let (keys, children) = entries.into_iter().unzip();
-	Element::new(Editor {
-		active,
+	let mut keys = Vec::new();
+	let mut targets = Vec::new();
+	let mut children = Vec::new();
+	for (widget, tile, child) in entries {
+		let occurrence = keys.iter().filter(|key: &&Key| key.0 == widget).count();
+		keys.push(Key(widget, occurrence));
+		targets.push(tile);
+		children.push(child);
+	}
+	Element::new(Tiles {
+		editing,
+		rows: rows.to_vec(),
+		baseline: baseline.to_vec(),
 		keys,
+		targets,
 		children,
+		size,
+		maximum,
+		ready,
+		enabled: enabled.to_vec(),
 	})
 }
 
-struct Editor<'a, Renderer: iced::advanced::Renderer = iced::Renderer> {
-	active: usize,
-	keys: Vec<SystemMenuWidgets>,
+struct Tiles<'a, Renderer: iced::advanced::Renderer = iced::Renderer> {
+	editing: bool,
+	rows: Vec<MenuRow>,
+	baseline: Vec<PlacedTile>,
+	keys: Vec<Key>,
+	targets: Vec<Option<PlacedTile>>,
 	children: Vec<Element<'a, Message, iced::Theme, Renderer>>,
-}
-
-#[derive(Default)]
-struct State {
-	keys: Vec<SystemMenuWidgets>,
-	press: Option<Press>,
-	viewport: Option<Rectangle>,
+	size: Size,
+	maximum: Size,
+	ready: bool,
+	enabled: Vec<bool>,
 }
 
 struct Press {
 	source: usize,
 	start: Point,
 	cursor: Point,
-	target: usize,
+	resize: bool,
 	moved: bool,
+	baseline: Vec<PlacedTile>,
+	desired: PlacedTile,
+	grid_origin: Point,
+	insert_row: Option<u32>,
 }
 
 impl Press {
-	fn dragging(&self, active: usize) -> bool {
-		self.source < active && self.moved
+	fn dragged_bounds(&self) -> Option<Rectangle> {
+		if self.resize || !self.moved {
+			return None;
+		}
+		self.baseline
+			.get(self.source)
+			.map(|tile| spatial::bounds(tile) + (self.cursor - self.start))
 	}
+}
 
-	fn move_to(&mut self, position: Point, bounds: Rectangle, active: usize) {
-		self.cursor = position;
-		self.moved |= position != self.start;
-		if self.source < active {
-			let center = slot_bounds(bounds, self.source).center() + (position - self.start);
-			self.target = (0..active)
-				.min_by(|left, right| {
-					center
-						.distance(slot_bounds(bounds, *left).center())
-						.total_cmp(&center.distance(slot_bounds(bounds, *right).center()))
-				})
-				.unwrap_or(self.source);
+struct State {
+	initialized: bool,
+	keys: Vec<Key>,
+	targets: Vec<Option<PlacedTile>>,
+	baseline: Vec<PlacedTile>,
+	motion: Vec<RectangleMotion>,
+	press: Option<Press>,
+	now: Instant,
+	paused: bool,
+}
+impl Default for State {
+	fn default() -> Self {
+		Self {
+			initialized: false,
+			keys: Vec::new(),
+			targets: Vec::new(),
+			baseline: Vec::new(),
+			motion: Vec::new(),
+			press: None,
+			now: Instant::now(),
+			paused: false,
 		}
 	}
 }
 
-// Remove the source, then make room for it at the insertion slot.
-fn display_slot(index: usize, source: usize, target: usize) -> usize {
-	if index == source {
-		return source;
+impl State {
+	fn handoff_drag(&mut self, press: &Press) {
+		if let Some(bounds) = press.dragged_bounds()
+			&& let Some(motion) = self.motion.get_mut(press.source)
+		{
+			// draw() follows the pointer independently of snapped reflow. On
+			// release/cancel that exact rectangle becomes the next motion's origin.
+			self.now = Instant::now();
+			*motion = RectangleMotion::new(bounds, self.now);
+		}
 	}
-	let compacted = if index > source { index - 1 } else { index };
-	if compacted >= target {
-		compacted + 1
+}
+
+fn handle(bounds: Rectangle) -> Rectangle {
+	Rectangle::new(
+		Point::new(
+			bounds.x + bounds.width - 20.0,
+			bounds.y + bounds.height - 20.0,
+		),
+		Size::new(20.0, 20.0),
+	)
+}
+
+fn snap(pixels: f32, previous: u32) -> u32 {
+	let cells = ((pixels + spatial::SPACING) / spatial::PITCH).max(1.0);
+	if (cells - previous as f32).abs() < 0.62 {
+		previous
 	} else {
-		compacted
+		cells.round().max(1.0) as u32
 	}
 }
 
-fn slot_bounds(bounds: Rectangle, index: usize) -> Rectangle {
-	let width = ((bounds.width - SPACING) / COLUMNS as f32).max(0.0);
-	Rectangle {
-		x: bounds.x + (index % COLUMNS) as f32 * (width + SPACING),
-		y: bounds.y + (index / COLUMNS) as f32 * (CELL_HEIGHT + SPACING),
-		width,
-		height: CELL_HEIGHT,
-	}
-}
-
-impl<Renderer: iced::advanced::Renderer> Editor<'_, Renderer> {
-	fn changed_widgets(&self, press: &Press) -> Vec<SystemMenuWidgets> {
-		super::layout::changed_widgets(
-			&self.keys,
-			self.active,
-			press.source,
-			press.dragging(self.active).then_some(press.target),
-		)
+impl<Renderer: iced::advanced::Renderer> Tiles<'_, Renderer> {
+	fn move_press(&self, press: &mut Press, position: Point) -> Vec<PlacedTile> {
+		press.cursor = position;
+		press.moved |= position.distance(press.start) > 2.0;
+		let delta = position - press.start;
+		let Some(original) = press.baseline.get(press.source) else {
+			return press.baseline.clone();
+		};
+		let mut desired = original.clone();
+		if press.resize {
+			desired.tile.width = snap(
+				spatial::span(original.tile.width) + delta.x,
+				press.desired.tile.width,
+			);
+			desired.tile.height = snap(
+				spatial::span(original.tile.height) + delta.y,
+				press.desired.tile.height,
+			);
+			let columns = ((self.maximum.width + spatial::SPACING) / spatial::PITCH)
+				.floor()
+				.max(1.0) as u32;
+			let rows = ((self.maximum.height + spatial::SPACING) / spatial::PITCH)
+				.floor()
+				.max(1.0) as u32;
+			desired.tile.width = desired
+				.tile
+				.width
+				.min(columns.saturating_sub(original.column).max(1));
+			desired.tile.height = desired
+				.tile
+				.height
+				.min(rows.saturating_sub(original.row).max(1));
+		} else {
+			desired.column = (original.column as f32 + delta.x / spatial::PITCH)
+				.round()
+				.max(0.0) as u32;
+			desired.row = (original.row as f32 + delta.y / spatial::PITCH)
+				.round()
+				.max(0.0) as u32;
+		}
+		let local_y = position.y - press.grid_origin.y;
+		let boundary = ((local_y + spatial::SPACING / 2.0) / spatial::PITCH)
+			.round()
+			.max(0.0) as u32;
+		let row_count = ((spatial::extent(&press.baseline, &self.rows).height + spatial::SPACING)
+			/ spatial::PITCH)
+			.round() as u32;
+		let insertion = (!press.resize
+			&& press.moved
+			&& boundary > 0
+			&& boundary <= row_count
+			&& (local_y - (boundary as f32 * spatial::PITCH - spatial::SPACING / 2.0)).abs()
+				<= spatial::SPACING / 2.0)
+			.then_some(boundary);
+		loop {
+			let result = if let Some(row) = insertion {
+				spatial::insert_row_preview(&press.baseline, press.source, desired.clone(), row)
+			} else {
+				spatial::preview(&press.baseline, press.source, desired.clone())
+			};
+			let extent = spatial::extent(&result, &[]);
+			if extent.width <= self.maximum.width && extent.height <= self.maximum.height {
+				press.desired = desired;
+				press.insert_row = insertion;
+				return result;
+			}
+			// Fast pointer moves can skip several valid spans. Stop at the largest
+			// reachable footprint instead of refusing the entire pointer jump.
+			if press.resize
+				&& extent.width > self.maximum.width
+				&& desired.tile.width > press.desired.tile.width
+			{
+				desired.tile.width -= 1;
+			} else if press.resize && desired.tile.height > press.desired.tile.height {
+				desired.tile.height -= 1;
+			} else {
+				return if let Some(row) = press.insert_row {
+					spatial::insert_row_preview(
+						&press.baseline,
+						press.source,
+						press.desired.clone(),
+						row,
+					)
+				} else {
+					spatial::preview(&press.baseline, press.source, press.desired.clone())
+				};
+			}
+		}
 	}
 }
 
 impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
-	for Editor<'_, Renderer>
+	for Tiles<'_, Renderer>
 {
 	fn tag(&self) -> tree::Tag {
 		tree::Tag::of::<State>()
 	}
-
 	fn state(&self) -> tree::State {
 		tree::State::new(State::default())
 	}
-
 	fn diff(&mut self, tree: &mut Tree) {
 		let state = tree.state.downcast_mut::<State>();
-		if state.keys != self.keys {
-			// Retained animations belong to the card, not its former grid slot.
-			// Move entire subtrees before diffing so nested toggles keep their state.
+		let committed_order = self
+			.baseline
+			.iter()
+			.zip(&self.targets)
+			.all(|(tile, target)| target.as_ref() == Some(tile));
+		if state.keys != self.keys
+			|| state.baseline != self.baseline
+			|| (committed_order && state.targets != self.targets)
+		{
 			let mut previous = state
 				.keys
 				.iter()
+				.cloned()
 				.zip(std::mem::take(&mut tree.children))
-				.map(|(key, tree)| (key, Some(tree)))
+				.zip(std::mem::take(&mut state.motion))
+				.zip(std::mem::take(&mut state.targets))
+				.map(|(((key, tree), motion), target)| (key, target, Some((tree, motion))))
 				.collect::<Vec<_>>();
+			let mut motions = Vec::new();
 			tree.children = self
 				.keys
 				.iter()
-				.map(|key| {
-					previous
-						.iter_mut()
-						.find(|(old_key, tree)| *old_key == key && tree.is_some())
-						.and_then(|(_, tree)| tree.take())
-						.unwrap_or_else(Tree::empty)
+				.zip(&self.targets)
+				.map(|(key, tile)| {
+					// A committed row sort may reorder identical widget occurrences.
+					// Match the resolved preview footprint before occurrence order, so
+					// duplicates keep their own subtrees through a move/resize commit.
+					let exact = committed_order
+						.then(|| {
+							previous.iter().position(|(old, target, item)| {
+								old.0 == key.0 && tile.is_some() && target == tile && item.is_some()
+							})
+						})
+						.flatten();
+					let matched = exact.or_else(|| {
+						previous
+							.iter()
+							.position(|(old, _, item)| old == key && item.is_some())
+					});
+					if let Some((old, motion)) = matched
+						.and_then(|index| previous.get_mut(index))
+						.and_then(|(_, _, item)| item.take())
+					{
+						motions.push(motion);
+						old
+					} else {
+						let bounds = tile.as_ref().map(spatial::bounds).unwrap_or_default();
+						motions.push(RectangleMotion::new(
+							if state.initialized {
+								Rectangle::new(bounds.center(), Size::ZERO)
+							} else {
+								bounds
+							},
+							state.now,
+						));
+						Tree::empty()
+					}
 				})
 				.collect();
+			state.motion = motions;
 			state.keys.clone_from(&self.keys);
-			state.press = None;
 		}
+		state.targets.clone_from(&self.targets);
+		state.baseline.clone_from(&self.baseline);
+		// Opening motion belongs to the popup. Only changes to an existing
+		// scene (including catalog entries revealed during editing) animate tiles.
+		state.initialized = true;
 		tree.diff_children(&mut self.children);
 	}
-
 	fn size(&self) -> Size<Length> {
-		Size::new(Length::Fill, Length::Shrink)
+		Size::new(
+			Length::Fixed(self.size.width),
+			Length::Fixed(self.size.height),
+		)
 	}
-
 	fn layout(
-		&mut self, tree: &mut Tree, renderer: &Renderer, limits: &layout::Limits,
+		&mut self, tree: &mut Tree, renderer: &Renderer, _limits: &layout::Limits,
 	) -> layout::Node {
-		let width = limits.max().width;
-		let rows = self.children.len().div_ceil(COLUMNS);
-		let height = rows as f32 * (CELL_HEIGHT + SPACING) - if rows > 0 { SPACING } else { 0.0 };
-		let bounds = Rectangle::new(Point::ORIGIN, Size::new(width, height));
-		let press = tree
-			.state
-			.downcast_ref::<State>()
-			.press
-			.as_ref()
-			.filter(|press| press.dragging(self.active));
+		let state = tree.state.downcast_mut::<State>();
+		if !self.ready && !state.paused {
+			for motion in &mut state.motion {
+				motion.freeze(state.now);
+			}
+			state.paused = true;
+		} else if self.ready && state.paused {
+			state.now = Instant::now();
+			state.paused = false;
+		}
 		let nodes = self
 			.children
 			.iter_mut()
 			.zip(&mut tree.children)
-			.enumerate()
-			.map(|(index, (child, tree))| {
-				let slot = match press {
-					Some(press) if index < self.active => {
-						display_slot(index, press.source, press.target)
-					}
-					_ => index,
-				};
-				let cell = slot_bounds(bounds, slot);
+			.zip(&self.targets)
+			.zip(&mut state.motion)
+			.map(|(((child, tree), tile), motion)| {
+				let target = tile
+					.as_ref()
+					.map(spatial::bounds)
+					.unwrap_or_else(|| Rectangle::new(motion.target().center(), Size::ZERO));
+				if self.ready {
+					motion.retarget(target, state.now);
+				}
+				let bounds = motion.value(state.now);
+				let size = Size::new(bounds.width.max(1.0), bounds.height.max(1.0));
 				child
 					.as_widget_mut()
-					.layout(
-						tree,
-						renderer,
-						&layout::Limits::new(cell.size(), cell.size()),
-					)
-					.move_to(cell.position())
+					.layout(tree, renderer, &layout::Limits::new(size, size))
+					.move_to(bounds.position())
 			})
 			.collect();
-		layout::Node::with_children(bounds.size(), nodes)
+		layout::Node::with_children(self.size, nodes)
 	}
-
 	fn update(
 		&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
 		renderer: &Renderer, shell: &mut Shell<'_, Message>, viewport: &Rectangle,
 	) {
 		let state = tree.state.downcast_mut::<State>();
-		state.viewport = Some(*viewport);
-		// Keep animated visuals alive, but do not forward clicks, keyboard input,
-		// wheel events, or context-menu requests to the normal controls.
-		if matches!(event, Event::Window(window::Event::RedrawRequested(_))) {
-			// Scrolling changes content-space coordinates even with a stationary
-			// pointer. Keep the dragged card under that pointer during scrolling.
-			if let Some(press) = &mut state.press
-				&& press.dragging(self.active)
-				&& let Some(position) = cursor
-					.position()
-					.filter(|position| *position != press.cursor)
-			{
-				press.move_to(position, layout.bounds(), self.active);
+		let redraw = matches!(event, Event::Window(window::Event::RedrawRequested(_)));
+		if let Event::Window(window::Event::RedrawRequested(now)) = event {
+			let was_active = state.motion.iter().any(|motion| motion.active(state.now));
+			if self.ready {
+				state.now = *now;
+			}
+			let active = state.motion.iter().any(|motion| motion.active(*now));
+			if self.ready && (was_active || active) {
 				shell.invalidate_layout();
+			}
+			if self.ready && active {
 				shell.request_redraw();
 			}
-			for ((child, tree), layout) in self
-				.children
-				.iter_mut()
-				.zip(&mut tree.children)
-				.zip(layout.children())
+		}
+		if self.editing && !redraw {
+			let point = cursor.position();
+			let inside = point
+				.is_some_and(|point| viewport.contains(point) && layout.bounds().contains(point));
+			match event {
+				Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
+					if inside && !shell.is_event_captured() =>
+				{
+					if let Some(point) = point {
+						let local = point - Vector::new(layout.bounds().x, layout.bounds().y);
+						if let Some((source, target)) = self
+							.targets
+							.iter()
+							.enumerate()
+							.filter_map(|(index, tile)| tile.as_ref().map(|tile| (index, tile)))
+							.find(|(_, tile)| spatial::bounds(tile).contains(local))
+						{
+							if source < self.baseline.len() {
+								state.press = Some(Press {
+									source,
+									start: point,
+									cursor: point,
+									resize: handle(spatial::bounds(target)).contains(local),
+									moved: false,
+									baseline: self.baseline.to_vec(),
+									desired: target.clone(),
+									grid_origin: layout.position(),
+									insert_row: None,
+								});
+							}
+							shell.capture_event();
+						}
+					}
+				}
+				Event::Mouse(mouse::Event::CursorMoved { position }) if state.press.is_some() => {
+					if let Some(press) = &mut state.press {
+						let preview = self.move_press(press, point.unwrap_or(*position));
+						shell.publish(Message::PreviewTiles(Some(preview)));
+					}
+					shell.capture_event();
+					shell.request_redraw();
+				}
+				Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+					if state.press.is_some() =>
+				{
+					if let Some(mut press) = state.press.take() {
+						let position = point.unwrap_or(press.cursor);
+						let preview = self.move_press(&mut press, position);
+						state.handoff_drag(&press);
+						if press.moved {
+							let rows = press.insert_row.map_or_else(
+								|| self.rows.clone(),
+								|row| spatial::insert_authored_row(&self.rows, row),
+							);
+							shell.publish(Message::TilesEdited(preview, rows));
+						} else if !press.resize {
+							shell.publish(Message::ToggleWidget(press.source));
+						}
+					}
+					shell.publish(Message::PreviewTiles(None));
+					shell.capture_event();
+					shell.request_redraw();
+				}
+				Event::Keyboard(keyboard::Event::KeyPressed {
+					key: keyboard::Key::Named(Named::Escape),
+					..
+				}) if state.press.is_some() => {
+					if let Some(press) = state.press.take() {
+						state.handoff_drag(&press);
+					}
+					shell.publish(Message::PreviewTiles(None));
+					shell.capture_event();
+					shell.request_redraw();
+				}
+				Event::Window(window::Event::Unfocused) if state.press.is_some() => {
+					if let Some(press) = state.press.take() {
+						state.handoff_drag(&press);
+					}
+					shell.publish(Message::PreviewTiles(None));
+					shell.request_redraw();
+				}
+				Event::Mouse(mouse::Event::CursorLeft) if state.press.is_some() => {
+					if let Some(press) = state.press.take() {
+						state.handoff_drag(&press);
+					}
+					shell.publish(Message::PreviewTiles(None));
+					shell.request_redraw();
+				}
+				_ => {}
+			}
+			return;
+		}
+		for (index, ((child, tree), child_layout)) in self
+			.children
+			.iter_mut()
+			.zip(&mut tree.children)
+			.zip(layout.children())
+			.enumerate()
+		{
+			let shown = self.targets.get(index).is_some_and(Option::is_some);
+			if redraw
+				|| (shown
+					&& !self.editing
+					&& self.ready && !state
+					.motion
+					.get(index)
+					.is_some_and(|motion| motion.active(state.now)))
 			{
 				child.as_widget_mut().update(
 					tree,
 					event,
-					layout,
-					mouse::Cursor::Unavailable,
+					child_layout,
+					if self.editing {
+						mouse::Cursor::Unavailable
+					} else {
+						cursor
+					},
 					renderer,
 					shell,
 					viewport,
 				);
 			}
-			return;
-		}
-
-		let inside = cursor.position().is_some_and(|position| {
-			layout.bounds().contains(position) && viewport.contains(position)
-		});
-		match event {
-			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
-				if inside && !shell.is_event_captured() =>
-			{
-				if let Some(position) = cursor.position()
-					&& let Some(source) = layout
-						.children()
-						.position(|cell| cell.bounds().contains(position))
-				{
-					state.press = Some(Press {
-						source,
-						start: position,
-						cursor: position,
-						target: source,
-						moved: false,
-					});
-					shell.capture_event();
-				}
-			}
-			Event::Mouse(mouse::Event::CursorMoved { position }) if state.press.is_some() => {
-				if let Some(press) = &mut state.press {
-					// The cursor (unlike the raw event) includes parent scroll offsets.
-					press.move_to(
-						cursor.position().unwrap_or(*position),
-						layout.bounds(),
-						self.active,
-					);
-				}
-				shell.invalidate_layout();
-				shell.request_redraw();
-				shell.capture_event();
-			}
-			Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
-				if state.press.is_some() =>
-			{
-				if let Some(mut press) = state.press.take() {
-					if press.dragging(self.active)
-						&& let Some(position) = cursor.position()
-					{
-						press.move_to(position, layout.bounds(), self.active);
-					}
-					let over_source = cursor.position().is_some_and(|position| {
-						slot_bounds(layout.bounds(), press.source).contains(position)
-					});
-					if inside && (press.dragging(self.active) || over_source) {
-						shell.publish(Message::WidgetsEdited(self.changed_widgets(&press)));
-					}
-				}
-				shell.invalidate_layout();
-				shell.request_redraw();
-				shell.capture_event();
-			}
-			Event::Keyboard(keyboard::Event::KeyPressed {
-				key: keyboard::Key::Named(Named::Escape),
-				..
-			}) if state.press.is_some() => {
-				state.press = None;
-				shell.invalidate_layout();
-				shell.request_redraw();
-				shell.capture_event();
-			}
-			Event::Mouse(mouse::Event::CursorLeft) | Event::Window(window::Event::Unfocused) => {
-				if state.press.take().is_some() {
-					shell.invalidate_layout();
-					shell.request_redraw();
-				}
-			}
-			Event::Mouse(mouse::Event::ButtonPressed(_) | mouse::Event::ButtonReleased(_))
-				if inside =>
-			{
-				shell.capture_event()
-			}
-			_ => {}
 		}
 	}
-
-	fn mouse_interaction(
-		&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
-		_renderer: &Renderer,
-	) -> mouse::Interaction {
-		let state = tree.state.downcast_ref::<State>();
-		if state
-			.press
-			.as_ref()
-			.is_some_and(|press| press.dragging(self.active))
-		{
-			return mouse::Interaction::Grabbing;
-		}
-		if let Some(position) = cursor
-			.position()
-			.filter(|position| state.viewport.unwrap_or(*viewport).contains(*position))
-			&& let Some(index) = layout
-				.children()
-				.position(|cell| cell.bounds().contains(position))
-		{
-			return if index < self.active {
-				mouse::Interaction::Grab
-			} else {
-				mouse::Interaction::Pointer
-			};
-		}
-		mouse::Interaction::None
-	}
-
 	fn draw(
 		&self, tree: &Tree, renderer: &mut Renderer, theme: &iced::Theme, style: &renderer::Style,
-		layout: Layout<'_>, _cursor: mouse::Cursor, viewport: &Rectangle,
+		layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
 	) {
-		let dragging = tree
-			.state
-			.downcast_ref::<State>()
+		let state = tree.state.downcast_ref::<State>();
+		let source = state
 			.press
 			.as_ref()
-			.filter(|press| press.dragging(self.active));
-		if let Some(press) = dragging {
-			renderer.fill_quad(
-				renderer::Quad {
-					bounds: slot_bounds(layout.bounds(), press.target),
-					border: Border {
-						color: COLORS.decorative.blue,
-						width: 2.0,
-						radius: 4.0.into(),
-					},
-					..Default::default()
-				},
-				COLORS.decorative.blue90,
-			);
-		}
-
-		// Draw the same children as normal mode, with only an inactive wash and
-		// a translation for the dragged child. Never construct a second card.
-		let source = dragging.map(|press| press.source);
-		let indices = (0..self.children.len())
+			.filter(|press| press.moved && !press.resize)
+			.map(|press| press.source);
+		let origin = Vector::new(layout.bounds().x, layout.bounds().y);
+		for index in (0..self.children.len())
 			.filter(|index| Some(*index) != source)
-			.chain(source);
-		for index in indices {
-			let (Some(child), Some(tree), Some(cell)) = (
+			.chain(source)
+		{
+			let (Some(child), Some(child_tree), Some(child_layout), Some(motion)) = (
 				self.children.get(index),
 				tree.children.get(index),
 				layout.children().nth(index),
+				state.motion.get(index),
 			) else {
 				continue;
 			};
-			let translation = dragging
+			let mut visual = motion.value(state.now) + origin;
+			if let Some(dragged) = state
+				.press
+				.as_ref()
 				.filter(|press| press.source == index)
-				.map_or(Vector::ZERO, |press| press.cursor - press.start);
-			renderer.with_layer(*viewport, |renderer| {
-				renderer.with_translation(translation, |renderer| {
+				.and_then(Press::dragged_bounds)
+			{
+				visual = dragged + origin;
+			}
+			if visual.width < 0.5 || visual.height < 0.5 {
+				continue;
+			}
+			let scale = (visual.width / child_layout.bounds().width)
+				.min(visual.height / child_layout.bounds().height)
+				.max(0.001);
+			let offset = visual.center()
+				- Point::new(
+					child_layout.bounds().width * scale / 2.0,
+					child_layout.bounds().height * scale / 2.0,
+				);
+			let transform = Transformation::translate(offset.x, offset.y)
+				* Transformation::scale(scale)
+				* Transformation::translate(-child_layout.bounds().x, -child_layout.bounds().y);
+			let inverse = transform.inverse();
+			// The target grid may already be smaller than an exiting tile. The
+			// popup's animated visual clip, not target geometry, bounds this frame.
+			let clip = *viewport;
+			renderer.with_layer(clip, |renderer| {
+				renderer.with_transformation(transform, |renderer| {
 					child.as_widget().draw(
-						tree,
+						child_tree,
 						renderer,
 						theme,
 						style,
-						cell,
-						mouse::Cursor::Unavailable,
-						&(*viewport - translation),
-					);
-					if index >= self.active {
-						renderer.fill_quad(
-							renderer::Quad {
-								bounds: cell.bounds(),
-								border: Border {
-									radius: 4.0.into(),
-									..Default::default()
-								},
-								..Default::default()
-							},
-							COLORS.disabled_background.scale_alpha(0.4),
-						);
-					}
+						child_layout,
+						if self.editing {
+							mouse::Cursor::Unavailable
+						} else {
+							cursor * inverse
+						},
+						&(clip * inverse),
+					)
 				})
 			});
+			if self.editing && index < self.baseline.len() {
+				renderer.with_layer(clip, |renderer| {
+					let action = Rectangle::new(
+						Point::new(visual.x + visual.width - 17.0, visual.y + 4.0),
+						Size::new(12.0, 12.0),
+					);
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: action,
+							border: Border {
+								color: COLORS.black,
+								width: 1.0,
+								..Default::default()
+							},
+							..Default::default()
+						},
+						COLORS.white,
+					);
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle::new(
+								Point::new(action.x + 3.0, action.y + 5.0),
+								Size::new(6.0, 2.0),
+							),
+							..Default::default()
+						},
+						COLORS.black,
+					);
+					if self.enabled.get(index) == Some(&false) {
+						renderer.fill_quad(
+							renderer::Quad {
+								bounds: Rectangle::new(
+									Point::new(action.x + 5.0, action.y + 3.0),
+									Size::new(2.0, 6.0),
+								),
+								..Default::default()
+							},
+							COLORS.black,
+						);
+					}
+					let h = handle(visual);
+					// Connected diagonal strokes, like a browser's textarea grip.
+					for length in [4, 8, 12] {
+						for step in 0..length {
+							renderer.fill_quad(
+								renderer::Quad {
+									bounds: Rectangle::new(
+										Point::new(
+											h.x + 13.0 - length as f32 + step as f32,
+											h.y + 13.0 - step as f32,
+										),
+										Size::new(1.5, 1.5),
+									),
+									border: Border::default(),
+									..Default::default()
+								},
+								COLORS.black,
+							);
+						}
+					}
+				});
+			}
 		}
+		if let Some(row) = state.press.as_ref().and_then(|press| press.insert_row) {
+			renderer.with_layer(*viewport, |renderer| {
+				let y = layout.bounds().y + row as f32 * spatial::PITCH - spatial::SPACING;
+				renderer.fill_quad(
+					renderer::Quad {
+						bounds: Rectangle::new(
+							Point::new(layout.bounds().x, y),
+							Size::new(layout.bounds().width, spatial::SPACING),
+						),
+						border: Border {
+							color: COLORS.decorative.purple,
+							width: 1.0,
+							..Default::default()
+						},
+						..Default::default()
+					},
+					COLORS.decorative.purple90,
+				);
+				let x = layout.bounds().center_x();
+				for bounds in [
+					Rectangle::new(Point::new(x - 3.0, y + 3.0), Size::new(6.0, 2.0)),
+					Rectangle::new(Point::new(x - 1.0, y + 1.0), Size::new(2.0, 6.0)),
+				] {
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds,
+							..Default::default()
+						},
+						COLORS.black,
+					);
+				}
+			});
+		}
+	}
+	fn mouse_interaction(
+		&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
+		renderer: &Renderer,
+	) -> mouse::Interaction {
+		let state = tree.state.downcast_ref::<State>();
+		if self.editing {
+			if let Some(press) = &state.press {
+				return if press.resize {
+					mouse::Interaction::ResizingDiagonallyDown
+				} else {
+					mouse::Interaction::Grabbing
+				};
+			}
+			if let Some(point) = cursor.position().filter(|point| viewport.contains(*point)) {
+				let local = point - Vector::new(layout.bounds().x, layout.bounds().y);
+				if let Some((index, tile)) = self
+					.targets
+					.iter()
+					.enumerate()
+					.filter_map(|(index, tile)| tile.as_ref().map(|tile| (index, tile)))
+					.find(|(_, tile)| spatial::bounds(tile).contains(local))
+				{
+					if index >= self.baseline.len() {
+						return mouse::Interaction::Pointer;
+					}
+					return if handle(spatial::bounds(tile)).contains(local) {
+						mouse::Interaction::ResizingDiagonallyDown
+					} else {
+						mouse::Interaction::Grab
+					};
+				}
+			}
+			return mouse::Interaction::None;
+		}
+		self.children
+			.iter()
+			.zip(&tree.children)
+			.zip(layout.children())
+			.enumerate()
+			.filter(|(index, _)| self.targets.get(*index).is_some_and(Option::is_some))
+			.map(|(_, ((child, tree), layout))| {
+				child
+					.as_widget()
+					.mouse_interaction(tree, layout, cursor, viewport, renderer)
+			})
+			.max()
+			.unwrap_or_default()
+	}
+	fn operate(
+		&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer,
+		operation: &mut dyn iced::advanced::widget::Operation,
+	) {
+		if self.editing {
+			return;
+		}
+		for (index, ((child, tree), layout)) in self
+			.children
+			.iter_mut()
+			.zip(&mut tree.children)
+			.zip(layout.children())
+			.enumerate()
+		{
+			if self.targets.get(index).is_some_and(Option::is_some) {
+				child
+					.as_widget_mut()
+					.operate(tree, layout, renderer, operation);
+			}
+		}
+	}
+	fn overlay<'a>(
+		&'a mut self, tree: &'a mut Tree, layout: Layout<'a>, renderer: &Renderer,
+		viewport: &Rectangle, offset: Vector,
+	) -> Vec<overlay::Element<'a, Message, iced::Theme, Renderer>> {
+		if self.editing {
+			return Vec::new();
+		}
+		self.children
+			.iter_mut()
+			.zip(&mut tree.children)
+			.zip(layout.children())
+			.enumerate()
+			.filter(|(index, _)| self.targets.get(*index).is_some_and(Option::is_some))
+			.flat_map(|(_, ((child, tree), layout))| {
+				child
+					.as_widget_mut()
+					.overlay(tree, layout, renderer, viewport, offset)
+			})
+			.collect()
 	}
 }
 
@@ -415,130 +755,10 @@ mod interaction_tests;
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use iced::Animation;
-	use std::time::Instant;
-
-	// Expose the same retained animation/reconciliation used by NeoToggle, with
-	// a fixed clock so a brief off frame cannot disappear before we measure it.
-	struct ToggleProbe {
-		enabled: bool,
-		at: Instant,
-	}
-
-	impl Widget<Message, iced::Theme, iced::Renderer> for ToggleProbe {
-		fn size(&self) -> Size<Length> {
-			Size::new(Length::Shrink, Length::Shrink)
-		}
-
-		fn tag(&self) -> tree::Tag {
-			tree::Tag::of::<Animation<bool>>()
-		}
-
-		fn state(&self) -> tree::State {
-			tree::State::new(Animation::new(self.enabled).very_quick())
-		}
-
-		fn diff(&mut self, tree: &mut Tree) {
-			let animation = tree.state.downcast_mut::<Animation<bool>>();
-			if animation.value() != self.enabled {
-				animation.go_mut(self.enabled, self.at);
-			}
-		}
-
-		fn layout(
-			&mut self, _tree: &mut Tree, _renderer: &iced::Renderer, _limits: &layout::Limits,
-		) -> layout::Node {
-			layout::Node::new(Size::ZERO)
-		}
-
-		fn draw(
-			&self, _tree: &Tree, _renderer: &mut iced::Renderer, _theme: &iced::Theme,
-			_style: &renderer::Style, _layout: Layout<'_>, _cursor: mouse::Cursor,
-			_viewport: &Rectangle,
-		) {
-		}
-	}
-
 	#[test]
-	fn reordering_preserves_toggle_animation_state() {
-		use SystemMenuWidgets::{Homeassistant, Wifi};
-		let at = Instant::now();
-		let light = Homeassistant("light.office".to_string());
-		let card = |enabled| Element::new(ToggleProbe { enabled, at });
-		let mut before = grid(2, vec![(Wifi, card(false)), (light.clone(), card(true))]);
-		let mut tree = Tree::new(before.as_widget());
-		tree.diff(before.as_widget_mut());
-
-		let mut after = grid(2, vec![(light, card(true)), (Wifi, card(false))]);
-		tree.diff(after.as_widget_mut());
-
-		let visuals = tree
-			.children
-			.iter()
-			.map(|child| {
-				child
-					.state
-					.downcast_ref::<Animation<bool>>()
-					.interpolate(0.0_f32, 1.0_f32, at)
-			})
-			.collect::<Vec<_>>();
-		assert_eq!(
-			visuals,
-			vec![1.0, 0.0],
-			"moving cards must not restart their toggle animations"
-		);
-	}
-
-	#[test]
-	fn preview_slots_match_committed_order_in_both_directions() {
-		for source in 0..6 {
-			for target in 0..6 {
-				let mut order = (0..6).collect::<Vec<_>>();
-				order.remove(source);
-				order.insert(target, source);
-				for (slot, index) in order
-					.into_iter()
-					.enumerate()
-					.filter(|(_, index)| *index != source)
-				{
-					assert_eq!(display_slot(index, source, target), slot);
-				}
-			}
-		}
-		let editor: Editor<'_> = Editor {
-			active: 2,
-			keys: vec![
-				SystemMenuWidgets::Wifi,
-				SystemMenuWidgets::Bluetooth,
-				SystemMenuWidgets::Nightlight,
-			],
-			children: Vec::new(),
-		};
-		let mut press = Press {
-			source: 0,
-			start: Point::ORIGIN,
-			cursor: Point::ORIGIN,
-			target: 0,
-			moved: false,
-		};
-		assert_eq!(
-			editor.changed_widgets(&press),
-			vec![SystemMenuWidgets::Bluetooth]
-		);
-		// Even the smallest movement starts a drag instead of removing the card.
-		press.move_to(
-			Point::new(0.01, 0.0),
-			Rectangle::new(Point::ORIGIN, Size::new(400.0, 300.0)),
-			editor.active,
-		);
-		assert!(press.dragging(editor.active));
-		assert_eq!(
-			editor.changed_widgets(&press),
-			vec![SystemMenuWidgets::Wifi, SystemMenuWidgets::Bluetooth]
-		);
-		// Moving on an inactive card never turns it into a draggable card.
-		press.source = 2;
-		assert!(!press.dragging(editor.active));
-		assert_eq!(editor.changed_widgets(&press), editor.keys);
+	fn snap_hysteresis_keeps_threshold_stable() {
+		assert_eq!(snap(spatial::span(2) + spatial::PITCH * 0.55, 2), 2);
+		assert_eq!(snap(spatial::span(2) + spatial::PITCH * 0.7, 2), 3);
+		assert_eq!(snap(-100.0, 1), 1);
 	}
 }

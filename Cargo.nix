@@ -42,7 +42,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "044f877bfcd72708977f2cad7766e00bcacdf515929d99fa497b466bebab24b7";
+  nixifiedLockHash = "3d82bc11e0a2e936bf2a190fb44758a393984b5d61bcdcfefa19a6be6f308685";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -3365,7 +3365,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "exwlshellev";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     dependencies = {
       calloop = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".calloop."0.14.5" { inherit profileName; }).out;
@@ -4811,7 +4811,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exdevtools";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     dependencies = {
       iced_debug = (rustPackages."git+https://github.com/IcyTv/iced".iced_debug."0.15.0-dev" { inherit profileName; }).out;
@@ -4831,7 +4831,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exwlshell";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     features = builtins.concatLists [
       [ "default" ]
@@ -4869,7 +4869,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exwlshell_macros";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     features = builtins.concatLists [
       [ "default" ]
@@ -5049,7 +5049,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_wayland_subscriber";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     features = builtins.concatLists [
       [ "default" ]
@@ -14214,7 +14214,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "waycrate_xkbkeycode";
       version = "0.20.1";
-      rev = "be4e00e8bdd429eb512a171c8535005543da4e0b";
+      rev = "78ae66532deef5b7b6ec4bfd170bdd9a34cf1375";
       ref = "master";};
     dependencies = {
       calloop = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".calloop."0.14.5" { inherit profileName; }).out;

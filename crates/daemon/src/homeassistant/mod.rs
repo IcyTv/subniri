@@ -67,6 +67,7 @@ struct HomeassistantState {
 }
 
 struct EntityRegistry {
+	metadata: catalog::RegistryMetadata,
 	observed: Observed<HomeassistantResource>,
 	entities: HashMap<String, HomeassistantEntityService>,
 }
@@ -94,6 +95,7 @@ impl HomeassistantService {
 					csrf_tokens: HashMap::new(),
 				}),
 				registry: Mutex::new(EntityRegistry {
+					metadata: catalog::RegistryMetadata::default(),
 					observed: Observed::with_limits(
 						MAX_OBSERVERS,
 						MAX_ENTITIES_PER_CLIENT,

@@ -10,7 +10,7 @@ mod clock;
 mod connection;
 mod media_controls;
 mod network;
-mod system_menu;
+pub(crate) mod system_menu;
 mod taskbar;
 mod volume;
 
@@ -31,7 +31,7 @@ pub enum Module {
 #[derive(Debug, Clone)]
 pub enum ModuleMessage {
 	ConfigUpdated(ConfigFile),
-	SaveSystemMenuWidgets(Vec<config::SystemMenuWidgets>),
+	SaveSystemMenuLayout(config::SystemMenu),
 	PopupClosed,
 	Pressed(ModuleKind, Rectangle),
 	OpenPopup(ModuleKind, Rectangle),
@@ -102,7 +102,43 @@ impl Module {
 	}
 
 	pub fn set_popup_id(&mut self, id: Id) {
-		let _ = (self, id);
+		if let Self::SystemMenu(menu) = self {
+			menu.popup_opened(id, iced::Size::new(1920.0, 1080.0));
+		}
+	}
+
+	pub fn popup_opened(&mut self, id: Id, maximum: iced::Size) {
+		if let Self::SystemMenu(menu) = self {
+			menu.popup_opened(id, maximum);
+		} else {
+			self.set_popup_id(id);
+		}
+	}
+
+	pub fn popup_configured(&mut self, id: Id, size: iced::Size) {
+		if let Self::SystemMenu(menu) = self {
+			menu.popup_configured(id, size);
+		}
+	}
+
+	pub fn popup_presented(&mut self, id: Id, content_updated_at: std::time::Instant) {
+		if let Self::SystemMenu(menu) = self {
+			menu.popup_presented(id, content_updated_at);
+		}
+	}
+
+	pub fn presentation_window(&self) -> Option<Id> {
+		if let Self::SystemMenu(menu) = self {
+			menu.presentation_window()
+		} else {
+			None
+		}
+	}
+
+	pub fn popup_bounds(&mut self, maximum: iced::Size) {
+		if let Self::SystemMenu(menu) = self {
+			menu.popup_bounds(maximum);
+		}
 	}
 
 	pub fn init_task(&self) -> Task<ModuleMessage> {
@@ -123,7 +159,15 @@ impl Module {
 				return menu.sync_config(&config).map(ModuleMessage::SystemMenu);
 			}
 			(Self::SystemMenu(menu), ModuleMessage::PopupClosed) => {
-				menu.popup_closed();
+				return menu.popup_closed().map(|message| match message {
+					system_menu::Message::SaveLayout(layout) => {
+						ModuleMessage::SaveSystemMenuLayout(layout)
+					}
+					message => ModuleMessage::SystemMenu(message),
+				});
+			}
+			(Self::SystemMenu(_), ModuleMessage::SystemMenu(system_menu::Message::Dismiss)) => {
+				return Task::done(ModuleMessage::ClosePopup);
 			}
 			(
 				Self::SystemMenu(_),
@@ -204,8 +248,8 @@ impl Module {
 					menu.close_context_menus();
 				}
 				let update = menu.update(message).map(|message| match message {
-					system_menu::Message::SaveWidgets(widgets) => {
-						ModuleMessage::SaveSystemMenuWidgets(widgets)
+					system_menu::Message::SaveLayout(layout) => {
+						ModuleMessage::SaveSystemMenuLayout(layout)
 					}
 					message => ModuleMessage::SystemMenu(message),
 				});
@@ -338,21 +382,20 @@ mod tests {
 		let mut config = config::ConfigFile::default();
 		config.system_menu.widgets = vec![Wifi, Bluetooth];
 		let mut module = Module::system_menu(&config);
-		let edit = || ModuleMessage::SystemMenu(Message::WidgetsEdited(vec![Bluetooth]));
+		let rows = |widget| config::SystemMenu::from_widgets(vec![widget]).effective_rows();
+		let edit = || ModuleMessage::SystemMenu(Message::RowsEdited(rows(Bluetooth)));
 		assert_eq!(module.update(edit()).units(), 0);
 		let _ = module.update(ModuleMessage::SystemMenu(Message::EditingChanged(true)));
 		let task = module.update(edit());
 		let message = super::test_bus::task_message(task).await?;
 		assert!(
-			matches!(message, ModuleMessage::SaveSystemMenuWidgets(widgets) if widgets == vec![Bluetooth])
+			matches!(message, ModuleMessage::SaveSystemMenuLayout(layout) if layout.effective_rows() == rows(Bluetooth))
 		);
 		assert_eq!(module.update(edit()).units(), 0);
 		let _ = module.update(ModuleMessage::PopupClosed);
 		assert_eq!(
 			module
-				.update(ModuleMessage::SystemMenu(Message::WidgetsEdited(vec![
-					Wifi
-				])))
+				.update(ModuleMessage::SystemMenu(Message::RowsEdited(rows(Wifi))))
 				.units(),
 			0
 		);

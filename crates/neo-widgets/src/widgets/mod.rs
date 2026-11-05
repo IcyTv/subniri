@@ -1,7 +1,7 @@
 #![allow(dead_code, unused_imports)]
 
 mod grow;
-pub use grow::{Grow, GrowFrom, grow};
+pub use grow::{Grow, GrowFrame, GrowFrom, grow, popup_grow};
 
 mod neo_button;
 pub use neo_button::{NeoButton, NeoButtonStyle, neo_button};
@@ -32,3 +32,11 @@ pub use spinner::{Spinner, spinner};
 
 pub mod gif;
 pub use gif::{Gif, gif};
+mod popup_surface;
+pub use popup_surface::{popup_gutter, popup_surface};
+mod neo_tile;
+pub use neo_tile::neo_tile;
+mod scale_to_fit;
+pub use scale_to_fit::scale_to_fit;
+mod intrinsic_size;
+pub use intrinsic_size::intrinsic_size;

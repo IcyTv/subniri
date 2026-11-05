@@ -1,5 +1,5 @@
 use config::ConfigFile;
-use iced::{alignment::Vertical, animation::Easing};
+use iced::alignment::Vertical;
 use std::{collections::HashMap, env, fs, path::PathBuf, process::Command, time::Duration};
 
 use futures::StreamExt;
@@ -17,7 +17,7 @@ use iced_exwlshell::{Settings, daemon, to_layer_message};
 use iced_wayland_subscriber::shell::{ShellEvent, ShellReceiver};
 use neo_widgets::{
 	style::{COLORS, neo_theme},
-	widgets::{GrowFrom, grow, neo_card},
+	widgets::{neo_card, popup_grow},
 };
 use niri_ipc::{Reply, Request, Response, socket::SOCKET_PATH_ENV};
 use tokio::{
@@ -100,6 +100,7 @@ struct Bar {
 	layer_heights: HashMap<Id, u32>,
 	window_scales: HashMap<Id, f32>,
 	window_output_names: HashMap<Id, String>,
+	output_sizes: HashMap<Id, iced::Size>,
 	shell_events: ShellReceiver,
 	config_doc: kdl::KdlDocument,
 	config_file: ConfigFile,
@@ -126,6 +127,7 @@ impl Bar {
 			layer_heights: HashMap::new(),
 			window_scales: HashMap::new(),
 			window_output_names: HashMap::new(),
+			output_sizes: HashMap::new(),
 			shell_events,
 			config_doc,
 			config_file,
@@ -157,17 +159,17 @@ impl Bar {
 					}
 				};
 
-				if let Some(widgets) = self.widget_config.latest() {
-					config.system_menu.widgets = widgets.to_vec();
+				if let Some(layout) = self.widget_config.latest_layout() {
+					config.system_menu = layout.clone();
 				}
 				self.config_doc = doc;
 				self.config_file = config.clone();
 
 				self.broadcast_module_message(ModuleMessage::ConfigUpdated(config))
 			}
-			BarMessage::Module(_, _, _, ModuleMessage::SaveSystemMenuWidgets(widgets)) => {
-				self.config_file.system_menu.widgets = widgets.clone();
-				self.widget_config.queue(widgets)
+			BarMessage::Module(_, _, _, ModuleMessage::SaveSystemMenuLayout(layout)) => {
+				self.config_file.system_menu = layout.clone();
+				self.widget_config.queue_layout(layout)
 			}
 			BarMessage::SystemMenuWidgetsSaved(result) => {
 				if let Err(error) = result {
@@ -181,9 +183,20 @@ impl Bar {
 			}),
 			BarMessage::RestartAfterResume => restart_bar_process(),
 			BarMessage::WindowEvent(id, event) => match event {
-				iced::window::Event::Opened { .. }
-				| iced::window::Event::Resized(_)
-				| iced::window::Event::Rescaled(_) => self.sync_layer_scale(id),
+				iced::window::Event::Opened { size, .. } | iced::window::Event::Resized(size) => {
+					let scale = self.scale_factor(id);
+					if let Some(route) = self.popups.route(id).filter(|route| route.depth.is_none())
+					{
+						if let Some(module) = self.module_mut(route.section, route.index) {
+							module.popup_configured(
+								id,
+								iced::Size::new(size.width / scale, size.height / scale),
+							);
+						}
+					}
+					self.sync_layer_scale(id)
+				}
+				iced::window::Event::Rescaled(_) => self.sync_layer_scale(id),
 				iced::window::Event::Closed => self.window_closed(id),
 				iced::window::Event::Unfocused => self.popup_unfocused(id),
 				_ => Task::none(),
@@ -223,6 +236,9 @@ impl Bar {
 
 				let scale = source_id.map_or(1.0, |id| self.scale_factor(id));
 				self.window_scales.insert(id, scale);
+				if let Some(size) = source_id.and_then(|id| self.output_sizes.get(&id)).copied() {
+					self.output_sizes.insert(id, size);
+				}
 
 				let anchor_x = bounds.x.round() as i32;
 				let anchor_y = bounds.y.round() as i32;
@@ -261,11 +277,11 @@ impl Bar {
 				};
 
 				Task::batch([close_module_popup, change_kbd])
+					.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 					.chain(Task::done(BarMessage::NewPopUp {
 						settings: popup_settings,
 						id,
 					}))
-					.chain(Task::done(BarMessage::SetPopupId(section, index, kind, id)))
 			}
 			BarMessage::Module(
 				source_id,
@@ -370,22 +386,65 @@ impl Bar {
 				}
 			}
 			BarMessage::Module(_, _, _, ModuleMessage::ClosePopup) => self.close_open_popup(),
+			BarMessage::ShellEvent(ShellEvent::Presented {
+				window,
+				content_updated_at,
+			}) => {
+				if let Some(route) = self
+					.popups
+					.route(window)
+					.filter(|route| route.depth.is_none())
+				{
+					if let Some(module) = self.module_mut(route.section, route.index) {
+						module.popup_presented(window, content_updated_at);
+					}
+				}
+				Task::none()
+			}
 			BarMessage::ShellEvent(ShellEvent::WindowOutputChanged { window, output }) => {
 				if let Some(info) = output {
 					if let Some(name) = info.name {
 						self.window_output_names.insert(window, name);
 					}
-					if let Some((_, height)) = info.logical_size {
+					if let Some((width, height)) = info.logical_size {
+						self.output_sizes.insert(
+							window,
+							iced::Size::new(width.max(1) as f32, height.max(1) as f32),
+						);
 						let scale = scale_for_screen(height.max(0).cast_unsigned());
 						self.window_scales.insert(window, scale);
+						if let Some(route) = self
+							.popups
+							.route(window)
+							.filter(|route| route.depth.is_none())
+						{
+							let maximum = iced::Size::new(
+								width.max(1) as f32 / scale,
+								(height.max(1) as f32 - BASE_BAR_HEIGHT as f32 * scale).max(1.0)
+									/ scale,
+							);
+							if let Some(module) = self.module_mut(route.section, route.index) {
+								module.popup_bounds(maximum);
+							}
+						}
 						return self.sync_layer_scale(window);
 					}
 				}
 				Task::none()
 			}
 			BarMessage::SetPopupId(section, index, _kind, id) => {
+				let scale = self.scale_factor(id);
+				let output = self
+					.output_sizes
+					.get(&id)
+					.copied()
+					.unwrap_or(iced::Size::new(1920.0, 1080.0));
+				let maximum = iced::Size::new(
+					output.width / scale,
+					(output.height - BASE_BAR_HEIGHT as f32 * scale).max(1.0) / scale,
+				);
 				if let Some(module) = self.module_mut(section, index) {
-					module.set_popup_id(id);
+					module.popup_opened(id, maximum);
 					Task::none()
 				} else {
 					Task::done(BarMessage::RemoveWindow(id))
@@ -408,6 +467,7 @@ impl Bar {
 		self.layer_heights.remove(&id);
 		self.window_scales.remove(&id);
 		self.window_output_names.remove(&id);
+		self.output_sizes.remove(&id);
 		self.popup_event(popups::Event::Closed(id))
 	}
 
@@ -441,6 +501,7 @@ impl Bar {
 						self.window_scales.remove(&id);
 						self.layer_heights.remove(&id);
 						self.window_output_names.remove(&id);
+						self.output_sizes.remove(&id);
 						iced_runtime::task::effect(iced_runtime::Action::Window(
 							iced_runtime::window::Action::Close(id),
 						))
@@ -516,13 +577,7 @@ impl Bar {
 					.into()
 			};
 
-			grow(
-				content,
-				Duration::from_millis(50),
-				Easing::EaseOutQuart,
-				GrowFrom::TopCenter,
-			)
-			.into()
+			popup_grow(content).into()
 		} else {
 			let output_name = self.window_output_names.get(&id).map(String::as_str);
 
@@ -665,12 +720,42 @@ impl Bar {
 		});
 
 		let mut subscriptions = vec![
-			self.shell_events.listen().map(BarMessage::ShellEvent),
+			self.shell_events.listen().filter_map(|event| {
+				if matches!(event, ShellEvent::Presented { .. }) {
+					None
+				} else {
+					Some(BarMessage::ShellEvent(event))
+				}
+			}),
 			resume_events(),
 			config_watch,
 			window_events,
 			context_parent_clicks,
 		];
+		// Only presentation waiters should turn feedback into model updates;
+		// forwarding every presented frame would create a perpetual redraw loop.
+		let presentation_windows = self
+			.left
+			.iter()
+			.chain(&self.center)
+			.chain(&self.right)
+			.filter_map(Module::presentation_window)
+			.collect::<Vec<_>>();
+		if !presentation_windows.is_empty() {
+			subscriptions.push(
+				self.shell_events
+					.listen()
+					.with(presentation_windows)
+					.filter_map(|(windows, event)| {
+						if matches!(&event, ShellEvent::Presented { window, .. } if windows.contains(window))
+						{
+							Some(BarMessage::ShellEvent(event))
+						} else {
+							None
+						}
+					}),
+			);
+		}
 
 		subscriptions.extend(Self::module_subscriptions(Section::Left, &self.left));
 		subscriptions.extend(Self::module_subscriptions(Section::Center, &self.center));
@@ -926,10 +1011,32 @@ mod tests {
 			layer_heights: HashMap::new(),
 			window_scales: HashMap::new(),
 			window_output_names: HashMap::new(),
+			output_sizes: HashMap::new(),
 			shell_events: iced_wayland_subscriber::shell::channel().1,
 			config_doc: kdl::KdlDocument::default(),
 			config_file: ConfigFile::default(),
 			widget_config: widget_config::Writer::default(),
+		}
+	}
+
+	#[test]
+	fn system_menu_and_clock_use_the_standard_whole_popup_grow_path() {
+		let standard: Element<'_, BarMessage> = popup_grow(text("popup")).into();
+		let tag = standard.as_widget().tag();
+		for module in [Module::system_menu(&ConfigFile::default()), Module::clock()] {
+			let mut bar = empty_bar();
+			bar.left.push(module);
+			let id = Id::unique();
+			bar.popups.update(popups::Event::Toggle {
+				id,
+				section: Section::Left,
+				index: 0,
+			});
+			assert_eq!(
+				bar.view(id).as_widget().tag(),
+				tag,
+				"root popup must not bypass the common grow wrapper"
+			);
 		}
 	}
 
@@ -943,21 +1050,27 @@ mod tests {
 			None,
 			Section::Left,
 			0,
-			ModuleMessage::SaveSystemMenuWidgets(vec![Wifi]),
+			ModuleMessage::SaveSystemMenuLayout(config::SystemMenu::from_widgets(vec![Wifi])),
 		));
 		let _ = bar.update(BarMessage::Module(
 			None,
 			Section::Left,
 			0,
-			ModuleMessage::SaveSystemMenuWidgets(vec![Bluetooth]),
+			ModuleMessage::SaveSystemMenuLayout(config::SystemMenu::from_widgets(vec![Bluetooth])),
 		));
-		assert_eq!(bar.widget_config.latest(), Some([Bluetooth].as_slice()));
+		assert_eq!(
+			bar.widget_config.latest_layout(),
+			Some(&config::SystemMenu::from_widgets(vec![Bluetooth]))
+		);
 		let next = bar.update(BarMessage::SystemMenuWidgetsSaved(Err(
 			"first write failed".into(),
 		)));
 		assert!(next.units() > 0);
 		drop(next);
-		assert_eq!(bar.widget_config.latest(), Some([Bluetooth].as_slice()));
+		assert_eq!(
+			bar.widget_config.latest_layout(),
+			Some(&config::SystemMenu::from_widgets(vec![Bluetooth]))
+		);
 		let final_task = bar.update(BarMessage::SystemMenuWidgetsSaved(Err(
 			"second write failed".into(),
 		)));
@@ -966,7 +1079,7 @@ mod tests {
 			actions.next().await,
 			Some(iced_runtime::Action::Output(BarMessage::ConfigUpdated))
 		));
-		assert!(bar.widget_config.latest().is_none());
+		assert!(bar.widget_config.latest_layout().is_none());
 		assert_eq!(bar.config_file.system_menu.widgets, vec![Bluetooth]);
 		Ok(())
 	}

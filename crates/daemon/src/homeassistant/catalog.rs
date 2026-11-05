@@ -22,6 +22,49 @@ const RECONNECT_INITIAL_DELAY: Duration = Duration::from_secs(1);
 const RECONNECT_MAX_DELAY: Duration = Duration::from_mins(1);
 const FORWARDED_EVENT_CAPACITY: usize = 1_024;
 
+#[derive(Default)]
+pub(super) struct RegistryMetadata {
+	entities: HashMap<String, hass_rs::HassRegistryEntity>,
+	decode_failed: bool,
+}
+
+impl RegistryMetadata {
+	fn snapshots(
+		&mut self, states: Vec<hass_rs::HassEntity>,
+		registry: hass_rs::HassResult<Vec<hass_rs::HassRegistryEntity>>,
+	) -> Result<HashMap<String, EntitySnapshot>, String> {
+		match registry {
+			Ok(entities) => {
+				self.entities = entities
+					.into_iter()
+					.map(|entity| (entity.entity_id.clone(), entity))
+					.collect();
+				if self.decode_failed {
+					log::info!("Home Assistant registry metadata synchronization recovered");
+				}
+				self.decode_failed = false;
+			}
+			Err(hass_rs::HassError::UnableToDeserialize(error)) => {
+				if !self.decode_failed {
+					log::warn!(
+						"Unable to decode Home Assistant registry metadata; continuing with live states and cached metadata, and retrying on refresh: {error}"
+					);
+				}
+				self.decode_failed = true;
+			}
+			Err(error) => return Err(error.to_string()),
+		}
+		Ok(states
+			.into_iter()
+			.map(|state| {
+				let registry = self.entities.get(&state.entity_id);
+				let snapshot = EntitySnapshot::new(state, registry);
+				(snapshot.entity_id.clone(), snapshot)
+			})
+			.collect())
+	}
+}
+
 struct AbortTask(JoinHandle<()>);
 
 impl Drop for AbortTask {
@@ -29,6 +72,9 @@ impl Drop for AbortTask {
 		self.0.abort();
 	}
 }
+
+#[cfg(test)]
+mod tests;
 
 impl HomeassistantService {
 	pub(super) async fn start_catalog_task(
@@ -231,7 +277,10 @@ impl HomeassistantService {
 		}
 
 		let (states, registry_entities) = tokio::time::timeout(CATALOG_REQUEST_TIMEOUT, async {
-			tokio::try_join!(client.get_states(), client.get_entity_registry_list())
+			// State failures remain fatal; registry decode failures are handled below.
+			tokio::try_join!(client.get_states(), async {
+				Ok::<_, hass_rs::HassError>(client.get_entity_registry_list().await)
+			})
 		})
 		.await
 		.map_err(|_| "Home Assistant catalog request timed out".to_string())?
@@ -241,19 +290,13 @@ impl HomeassistantService {
 			return Ok(false);
 		}
 
-		let registry_entities = registry_entities
-			.into_iter()
-			.map(|entity| (entity.entity_id.clone(), entity))
-			.collect::<HashMap<_, _>>();
-
-		let snapshots = states
-			.into_iter()
-			.map(|state| {
-				let registry = registry_entities.get(&state.entity_id);
-				let snapshot = EntitySnapshot::new(state, registry);
-				(snapshot.entity_id.clone(), snapshot)
-			})
-			.collect::<HashMap<_, _>>();
+		let snapshots = self
+			.inner
+			.registry
+			.lock()
+			.await
+			.metadata
+			.snapshots(states, registry_entities)?;
 
 		let (updates, removals) = {
 			let registry = self.inner.registry.lock().await;
@@ -465,6 +508,8 @@ impl HomeassistantService {
 
 	pub(super) async fn clear_entities(&self) {
 		let _reconcile = self.inner.reconcile.lock().await;
+		// Never reuse metadata from a previous server/configuration.
+		self.inner.registry.lock().await.metadata = RegistryMetadata::default();
 
 		let entities = self
 			.inner

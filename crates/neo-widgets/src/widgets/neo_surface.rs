@@ -20,6 +20,17 @@ pub struct NeoContentSurfaceStyle {
 	pub padding: Padding,
 }
 
+impl NeoContentSurfaceStyle {
+	/// Space reserved around content, including the offset hard shadow.
+	#[must_use]
+	pub fn inset(self) -> Size {
+		Size::new(
+			self.padding.left + self.padding.right + self.surface.shadow_width,
+			self.padding.top + self.padding.bottom + self.surface.shadow_width,
+		)
+	}
+}
+
 impl Default for NeoSurfaceStyle {
 	fn default() -> Self {
 		Self {

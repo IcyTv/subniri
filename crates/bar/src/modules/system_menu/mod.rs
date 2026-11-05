@@ -1,13 +1,13 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
 use config::{ConfigFile, SystemMenuWidgets};
 use daemon_common::NightlightProxy;
 use iced::{
-	Element, Font, Length, Rectangle, Subscription, Task,
+	Element, Font, Length, Rectangle, Size, Subscription, Task,
 	alignment::Vertical,
 	font,
-	widget::{column, grid, image, row, svg, text},
+	widget::{column, image, row, svg, text},
 };
 use jiff::{
 	SpanRound, Unit,
@@ -16,7 +16,7 @@ use jiff::{
 use neo_widgets::{
 	phosphor_icon,
 	style::COLORS,
-	widgets::{NeoButton, gif, gif::Frames, neo_button, neo_card, neo_slider, neo_toggle_button},
+	widgets::{NeoButton, gif, gif::Frames, neo_button, neo_card},
 };
 use nix::unistd::{Uid, User};
 use zbus::Connection;
@@ -26,10 +26,14 @@ mod editor;
 mod homeassistant;
 mod layout;
 mod nightlight;
+mod spatial;
 mod wifi;
+
+const GUTTER_SIZE: f32 = 128.0;
 
 #[derive(Debug, Clone)]
 pub enum Message {
+	HeaderMeasured(Size),
 	UptimeUpdated(jiff::Span),
 
 	Wifi(wifi::Message),
@@ -40,16 +44,19 @@ pub enum Message {
 	OpenPowerMenu,
 	OpenSettings,
 
-	BrightnessChanged(f64),
-	TemperatureChanged(u32),
-
 	ChangeBrightness(f64),
 	ChangeTemperature(u32),
 
 	EditingChanged(bool),
 	OpenContextMenu(ContextMenu, usize, Rectangle),
-	WidgetsEdited(Vec<SystemMenuWidgets>),
-	SaveWidgets(Vec<SystemMenuWidgets>),
+	SaveLayout(config::SystemMenu),
+	#[cfg(test)]
+	RowsEdited(Vec<config::MenuRow>),
+	TilesEdited(Vec<config::PlacedTile>, Vec<config::MenuRow>),
+	ToggleWidget(usize),
+	Dismiss,
+	PreviewTiles(Option<Vec<config::PlacedTile>>),
+	Frame(Instant),
 
 	Noop,
 }
@@ -63,6 +70,8 @@ impl Message {
 					nightlight::Message::Toggle
 						| nightlight::Message::Suspend(_)
 						| nightlight::Message::SetPreset(_)
+						| nightlight::Message::SetBrightness(_)
+						| nightlight::Message::SetTemperature(_)
 				)
 		)
 	}
@@ -82,6 +91,7 @@ enum Avatar {
 
 #[derive(Debug, Clone)]
 pub struct SystemMenu {
+	header_size: Size,
 	layout: layout::Layout,
 	username: String,
 	avatar: Avatar,
@@ -93,6 +103,13 @@ pub struct SystemMenu {
 	homeassistant: homeassistant::integration::Integration,
 
 	context_menus: Vec<ContextMenu>,
+	preview: Option<Vec<config::PlacedTile>>,
+	popup_id: Option<iced::window::Id>,
+	maximum: Size,
+	resize: neo_widgets::animation::geometry::PopupResize,
+	edit_envelope: Option<Size>,
+	edit_origin: iced::Vector,
+	now: Instant,
 }
 
 impl SystemMenu {
@@ -112,8 +129,15 @@ impl SystemMenu {
 		let layout = layout::Layout::new(config);
 		let homeassistant =
 			homeassistant::integration::Integration::new(layout.homeassistant_ids());
+		for index in config.system_menu.resolve().displaced {
+			log::warn!(
+				"System menu tile {index} was pushed right by a tall tile; add an explicit gap to represent the reserved cells"
+			);
+		}
+		let now = Instant::now();
 
 		Self {
+			header_size: Size::new(400.0, 78.0),
 			layout,
 			username,
 			avatar,
@@ -125,6 +149,13 @@ impl SystemMenu {
 			homeassistant,
 
 			context_menus: Vec::new(),
+			preview: None,
+			popup_id: None,
+			maximum: Size::new(1920.0, 1080.0),
+			resize: neo_widgets::animation::geometry::PopupResize::new(Size::ZERO, now),
+			edit_envelope: None,
+			edit_origin: iced::Vector::ZERO,
+			now,
 		}
 	}
 
@@ -133,7 +164,7 @@ impl SystemMenu {
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
-		let subs = vec![
+		let mut subs = vec![
 			iced::time::repeat(
 				|| async move {
 					if let Ok(uptime) = uptime() {
@@ -151,19 +182,63 @@ impl SystemMenu {
 				.subscription()
 				.map(Message::Homeassistant),
 		];
+		let now = Instant::now();
+		let controls_animating = self.nightlight.enabled.is_animating(now)
+			|| self.wifi.is_animating(now)
+			|| self.bluetooth.is_animating(now)
+			|| self
+				.layout
+				.selected()
+				.iter()
+				.filter_map(|widget| {
+					if let SystemMenuWidgets::Homeassistant(id) = widget {
+						self.homeassistant.get(id)
+					} else {
+						None
+					}
+				})
+				.any(|entity| entity.is_animating(now));
+		if self.popup_id.is_some() && (self.resize.needs_frame() || controls_animating) {
+			subs.push(iced::window::frames().map(Message::Frame));
+		}
 
 		Subscription::batch(subs)
 	}
 
 	pub fn update(&mut self, message: Message) -> Task<Message> {
-		if matches!(
-			message,
-			Message::TemperatureChanged(_) | Message::BrightnessChanged(_)
-		) {
-			log::trace!("{message:?}");
-		}
-
 		match message {
+			Message::HeaderMeasured(size) => self.header_size = size,
+			Message::TilesEdited(tiles, rows) => {
+				self.preview = None;
+				if self.layout.edit_tiles(tiles, rows) {
+					self.retarget();
+					return Task::done(Message::SaveLayout(self.layout.configuration()));
+				}
+			}
+			Message::ToggleWidget(index) => {
+				if self.layout.toggle(index) {
+					self.retarget();
+					return Task::done(Message::SaveLayout(self.layout.configuration()));
+				}
+			}
+			Message::Frame(now) => {
+				self.now = now;
+				self.resize.tick(now);
+			}
+			Message::PreviewTiles(tiles) => {
+				if self.layout.editing() {
+					self.preview = tiles;
+				}
+			}
+			#[cfg(test)]
+			Message::RowsEdited(rows) => {
+				self.preview = None;
+				if self.layout.edit_rows(rows) {
+					self.retarget();
+					return Task::done(Message::SaveLayout(self.layout.configuration()));
+				}
+			}
+			Message::SaveLayout(_) => {}
 			Message::Homeassistant(message) => {
 				return self
 					.homeassistant
@@ -179,68 +254,169 @@ impl SystemMenu {
 				return self.nightlight.update(message).map(Message::Nightlight);
 			}
 
-			Message::TemperatureChanged(temp) => self.nightlight.temperature = temp,
-			Message::BrightnessChanged(brightness) => self.nightlight.brightness = brightness,
-
 			Message::ChangeBrightness(brightness) => {
-				// Optimistic Update
-				let old_brightness = self.nightlight.brightness;
-				self.nightlight.brightness = brightness;
-				return Task::future(async move {
-					match set_brightness(brightness).await {
-						Ok(brightness) => Message::BrightnessChanged(brightness),
-						Err(error) => {
-							log::warn!("Failed to set nightlight brightness: {error}");
-							Message::BrightnessChanged(old_brightness)
-						}
-					}
-				});
+				return self
+					.nightlight
+					.update(nightlight::Message::SetBrightness(brightness))
+					.map(Message::Nightlight);
 			}
 			Message::ChangeTemperature(temp) => {
-				let old_temp = self.nightlight.temperature;
-				self.nightlight.temperature = temp;
-				return Task::future(async move {
-					match set_temperature(temp).await {
-						Ok(temp) => Message::TemperatureChanged(temp),
-						Err(error) => {
-							log::warn!("Failed to set nightlight temperature: {error}");
-							Message::TemperatureChanged(old_temp)
-						}
-					}
-				});
+				return self
+					.nightlight
+					.update(nightlight::Message::SetTemperature(temp))
+					.map(Message::Nightlight);
 			}
 
 			Message::EditingChanged(editing) => {
-				self.layout.update(layout::Event::Editing(editing));
-			}
-			Message::WidgetsEdited(widgets) => {
-				if let Some(widgets) = self.layout.update(layout::Event::Edited(widgets)) {
-					return Task::done(Message::SaveWidgets(widgets));
+				self.preview = None;
+				if editing {
+					self.layout.begin_edit(self.minimum_columns());
+				} else if self.layout.finish_edit() {
+					self.retarget();
+					return Task::done(Message::SaveLayout(self.layout.configuration()));
 				}
 			}
-			Message::SaveWidgets(_) => {}
-			Message::Noop
+			Message::Dismiss
+			| Message::Noop
 			| Message::OpenSettings
 			| Message::OpenPowerMenu
 			| Message::OpenContextMenu(_, _, _) => (),
 		}
+		self.retarget();
 
 		Task::none()
 	}
 
 	pub fn sync_config(&mut self, config: &ConfigFile) -> Task<Message> {
-		self.layout.update(layout::Event::Reload {
-			widgets: config.system_menu.widgets.clone(),
-			tracked_devices: config.homeassistant.tracked_devices.clone(),
-		});
+		self.layout.reload(config);
+		for index in config.system_menu.resolve().displaced {
+			log::warn!(
+				"System menu tile {index} needs an explicit gap to avoid implicit rightward displacement"
+			);
+		}
+		self.retarget();
 		self.homeassistant
 			.reconfigure(self.layout.homeassistant_ids())
 			.map(Message::Homeassistant)
 	}
 
-	pub fn popup_closed(&mut self) {
-		self.layout.update(layout::Event::Closed);
+	pub fn popup_closed(&mut self) -> Task<Message> {
+		let changed = self.layout.finish_edit();
 		self.close_context_menus();
+		self.preview = None;
+		self.popup_id = None;
+		self.edit_envelope = None;
+		if changed {
+			Task::done(Message::SaveLayout(self.layout.configuration()))
+		} else {
+			Task::none()
+		}
+	}
+
+	pub fn popup_opened(&mut self, id: iced::window::Id, maximum: Size) {
+		self.maximum = maximum;
+		self.popup_id = Some(id);
+		self.now = Instant::now();
+		self.resize =
+			neo_widgets::animation::geometry::PopupResize::new(self.target_size(), self.now);
+	}
+
+	pub fn popup_configured(&mut self, id: iced::window::Id, size: Size) {
+		if self.popup_id == Some(id) {
+			self.now = Instant::now();
+			self.resize.configured(size, self.now);
+		}
+	}
+
+	pub fn popup_presented(&mut self, id: iced::window::Id, content_updated_at: Instant) {
+		if self.popup_id == Some(id) {
+			self.resize.presented(content_updated_at);
+		}
+	}
+
+	pub fn presentation_window(&self) -> Option<iced::window::Id> {
+		self.popup_id
+			.filter(|_| self.resize.awaiting_presentation())
+	}
+
+	pub fn popup_bounds(&mut self, maximum: Size) {
+		self.maximum = maximum;
+		self.retarget();
+	}
+
+	fn visible_tiles(&self) -> Vec<config::PlacedTile> {
+		self.preview.clone().unwrap_or_else(|| self.layout.tiles())
+	}
+
+	fn grid_size(&self) -> Size {
+		let rows = self.layout.edit_baseline_rows();
+		let tiles = self.visible_tiles();
+		let size = spatial::extent(&tiles, &rows);
+		Size::new(
+			size.width.max(spatial::span(self.minimum_columns())),
+			size.height,
+		)
+	}
+
+	fn target_size(&self) -> Size {
+		let grid = self.grid_size();
+		let inset = neo_widgets::widgets::NeoContentSurfaceStyle::default().inset();
+		Size::new(
+			(grid.width.max(spatial::span(self.minimum_columns())) + inset.width)
+				.min(self.maximum.width),
+			(grid.height + self.header_size.height + spatial::SPACING + inset.height)
+				.min(self.maximum.height),
+		)
+	}
+
+	fn minimum_columns(&self) -> u32 {
+		let inset = neo_widgets::widgets::NeoContentSurfaceStyle::default().inset();
+		((self.header_size.width - inset.width + spatial::SPACING) / spatial::PITCH)
+			.ceil()
+			.max(1.0) as u32
+	}
+
+	fn retarget(&mut self) {
+		if self.popup_id.is_some() {
+			self.now = Instant::now();
+			let target = self.target_size();
+			if self.layout.editing() {
+				if self.edit_envelope.is_none() {
+					self.edit_origin = iced::Vector::new(GUTTER_SIZE, GUTTER_SIZE);
+				}
+				let origin = self.gutter_origin();
+				let requested = if self.preview.is_none() {
+					Size::new(
+						target.width + origin.x + GUTTER_SIZE,
+						target.height + origin.y + GUTTER_SIZE,
+					)
+				} else {
+					self.edit_envelope.unwrap_or(target)
+				};
+				let reserved = Size::new(
+					requested.width.max(target.width + origin.x),
+					requested.height.max(target.height + origin.y),
+				);
+				self.edit_envelope = Some(reserved);
+				self.resize.request_reserved(target, reserved, self.now);
+			} else {
+				self.edit_envelope = None;
+				self.resize.request(target, self.now);
+			}
+		}
+	}
+
+	fn gutter_origin(&self) -> iced::Vector {
+		self.edit_origin
+	}
+
+	fn editor_maximum(&self) -> Size {
+		let inset = neo_widgets::widgets::NeoContentSurfaceStyle::default().inset();
+		let capacity = self.maximum;
+		Size::new(
+			(capacity.width - inset.width).max(1.0),
+			(capacity.height - self.header_size.height - spatial::SPACING - inset.height).max(1.0),
+		)
 	}
 
 	pub fn close_context_menus(&mut self) {
@@ -258,25 +434,101 @@ impl SystemMenu {
 
 	#[allow(clippy::too_many_lines)]
 	pub fn view_popup(&self) -> Element<'_, Message> {
-		let mut content = column![].spacing(8);
+		let mut content = column![]
+			.spacing(spatial::SPACING)
+			.width(Length::Fill)
+			.height(Length::Fill);
 
+		content = content.push(neo_widgets::widgets::intrinsic_size(
+			self.header(false),
+			self.header(true),
+			Message::HeaderMeasured,
+		));
+
+		let rows = self.layout.edit_baseline_rows();
+		let baseline = self.layout.tiles();
+		let enabled = self.layout.enabled();
+		let visible = self.visible_tiles();
+		let entries = visible
+			.iter()
+			.enumerate()
+			.map(|(index, tile)| {
+				let size = spatial::bounds(tile).size();
+				(
+					tile.tile.widget.clone(),
+					Some(tile.clone()),
+					if enabled.get(index) == Some(&false) {
+						self.view_catalog_tile(&tile.tile.widget, size)
+					} else {
+						self.view_widget(&tile.tile.widget, size)
+					},
+				)
+			})
+			.collect::<Vec<_>>();
+		let maximum = self.editor_maximum();
+		let widgets = editor::grid(
+			self.layout.editing(),
+			&rows,
+			&baseline,
+			&enabled,
+			entries,
+			self.grid_size(),
+			maximum,
+			!self.resize.waiting(),
+		);
+		content = content.push(widgets);
+		let card = neo_card(content)
+			.width(Length::Fill)
+			.height(Length::Fill)
+			.background(COLORS.decorative.blue)
+			.radius(MODULE_RADIUS);
+		let target = self.target_size();
+		let envelope = if self.popup_id.is_some() {
+			self.resize.envelope
+		} else {
+			target
+		};
+		let visual = if self.popup_id.is_some() {
+			self.resize.frame_visual(self.now)
+		} else {
+			target
+		};
+		let origin = if self.layout.editing() {
+			self.gutter_origin()
+		} else {
+			iced::Vector::ZERO
+		};
+		if self.popup_id.is_some() {
+			neo_widgets::widgets::popup_gutter(card, envelope, visual, origin, || Message::Dismiss)
+		} else {
+			neo_widgets::widgets::popup_surface(card, envelope, visual)
+		}
+	}
+
+	fn header(&self, fill: bool) -> Element<'_, Message> {
+		let width = if fill { Length::Fill } else { Length::Shrink };
 		let user_card = row![
 			neo_card(self.avatar())
 				.padding(2)
 				.background(COLORS.decorative.pink),
 			column![
-				text(&self.username).color(COLORS.text).font(Font {
-					weight: font::Weight::Bold,
-					..Default::default()
-				}),
+				text(&self.username)
+					.size(16)
+					.wrapping(iced::widget::text::Wrapping::None)
+					.color(COLORS.text)
+					.font(Font {
+						weight: font::Weight::Bold,
+						..Default::default()
+					}),
 				text(format!(
 					"up {}",
 					UPTIME_PRINTER.span_to_string(&self.uptime)
 				))
 				.color(COLORS.text)
+				.wrapping(iced::widget::text::Wrapping::None)
 				.size(12)
 			]
-			.width(Length::Fill),
+			.width(width),
 			neo_button(svg(phosphor_icon!("power")))
 				.width(32)
 				.height(32)
@@ -298,65 +550,13 @@ impl SystemMenu {
 				})
 				.on_press(Message::EditingChanged(!self.layout.editing())),
 		]
-		.width(Length::Fill)
+		.width(width)
 		.spacing(8)
 		.align_y(Vertical::Center);
 
-		content = content.push(
-			neo_card(user_card)
-				.background(COLORS.decorative.pink)
-				.width(Length::Fill),
-		);
-
-		let mut grid = grid![].spacing(8).columns(2).height(Length::Shrink);
-
-		// Transient device controls are not part of the editable widget layout.
-		if !self.layout.editing() && self.nightlight.enabled.value() {
-			let temp = row![
-				svg(phosphor_icon!("sun")).width(16),
-				neo_slider(1000..=6500, self.nightlight.temperature)
-					.on_change(Message::ChangeTemperature)
-			]
-			.align_y(Vertical::Center)
-			.spacing(4);
-
-			grid = grid.push(temp);
-
-			let brightness = row![
-				svg(phosphor_icon!("lightbulb")).width(16),
-				neo_slider(0.2..=1.0, self.nightlight.brightness)
-					.step(0.01)
-					.on_change(Message::ChangeBrightness)
-			]
-			.align_y(Vertical::Center)
-			.spacing(4);
-
-			grid = grid.push(brightness);
-		}
-
-		// The normal and edit layouts share precisely the same card visuals.
-		let entries = self
-			.layout
-			.entries()
-			.into_iter()
-			.map(|widget| (widget.clone(), self.view_widget(widget)))
-			.collect::<Vec<_>>();
-		let widgets: Element<'_, Message> = if self.layout.editing() {
-			editor::grid(self.layout.selected().len(), entries)
-		} else {
-			for (_, view) in entries {
-				grid = grid.push(view);
-			}
-			grid.into()
-		};
-
-		content = content.push(widgets);
-
-		neo_card(content)
-			.width(480)
-			.height(Length::Shrink)
-			.background(COLORS.decorative.blue)
-			.radius(MODULE_RADIUS)
+		neo_card(user_card)
+			.background(COLORS.decorative.pink)
+			.width(width)
 			.into()
 	}
 
@@ -365,6 +565,36 @@ impl SystemMenu {
 			Avatar::Gif(frames) => gif(&frames).width(50.0).height(50.0).into(),
 			Avatar::Image(handle) => image(handle.clone()).width(50.0).height(50.0).into(),
 		}
+	}
+
+	fn view_catalog_tile(&self, widget: &SystemMenuWidgets, size: Size) -> Element<'_, Message> {
+		let (icon, label) = match widget {
+			SystemMenuWidgets::Wifi => (phosphor_icon!("wifi-high"), "Wi-Fi".to_owned()),
+			SystemMenuWidgets::Bluetooth => (phosphor_icon!("bluetooth"), "Bluetooth".to_owned()),
+			SystemMenuWidgets::Nightlight => (phosphor_icon!("moon"), "Nightlight".to_owned()),
+			SystemMenuWidgets::Speaker => (phosphor_icon!("speaker-high"), "Speaker".to_owned()),
+			SystemMenuWidgets::Microphone => {
+				(phosphor_icon!("microphone"), "Microphone".to_owned())
+			}
+			SystemMenuWidgets::Vpn => (phosphor_icon!("shield-slash"), "VPN".to_owned()),
+			SystemMenuWidgets::Homeassistant(id) => (
+				phosphor_icon!("house"),
+				self.homeassistant
+					.get(id)
+					.map_or_else(|| id.clone(), |entity| entity.title().to_owned()),
+			),
+		};
+		neo_widgets::widgets::neo_tile::<Message>(
+			icon,
+			label,
+			"",
+			None,
+			Some(COLORS.disabled_background),
+			size,
+		)
+		.background(COLORS.disabled_background)
+		.enabled(false)
+		.into()
 	}
 
 	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {
@@ -398,34 +628,39 @@ impl SystemMenu {
 		self.context_menus.push(menu);
 	}
 
-	fn view_widget<'a>(&'a self, widget: &'a SystemMenuWidgets) -> Element<'a, Message> {
-		match widget {
-			SystemMenuWidgets::Wifi => self.wifi.view().map(Message::Wifi),
-			SystemMenuWidgets::Bluetooth => self.bluetooth.view().map(Message::Bluetooth),
-			SystemMenuWidgets::Speaker => neo_toggle_button(
+	pub(crate) fn view_widget<'a>(
+		&'a self, widget: &SystemMenuWidgets, size: Size,
+	) -> Element<'a, Message> {
+		let button = match widget {
+			SystemMenuWidgets::Wifi => self.wifi.view_tile(size).map(Message::Wifi),
+			SystemMenuWidgets::Bluetooth => self.bluetooth.view_tile(size).map(Message::Bluetooth),
+			SystemMenuWidgets::Speaker => neo_widgets::widgets::neo_tile(
 				phosphor_icon!("speaker-high"),
 				"Default Sink",
 				"-- %",
-				true,
+				Some(true),
 				Some(COLORS.white),
+				size,
 			),
-			SystemMenuWidgets::Microphone => neo_toggle_button(
+			SystemMenuWidgets::Microphone => neo_widgets::widgets::neo_tile(
 				phosphor_icon!("microphone"),
 				"Default Source",
 				"-- %",
-				false,
+				Some(false),
 				Some(COLORS.white),
+				size,
 			),
-			SystemMenuWidgets::Vpn => neo_toggle_button(
+			SystemMenuWidgets::Vpn => neo_widgets::widgets::neo_tile(
 				phosphor_icon!("shield-slash"),
 				"VPN",
 				"Disconnected",
-				false,
+				Some(false),
 				Some(COLORS.white),
+				size,
 			),
 			SystemMenuWidgets::Nightlight => self
 				.nightlight
-				.view()
+				.view_tile(size)
 				.map(Message::Nightlight)
 				.on_context_menu_with_mouse_position(|position| {
 					Message::OpenContextMenu(
@@ -436,11 +671,19 @@ impl SystemMenu {
 				}),
 			SystemMenuWidgets::Homeassistant(id) => self.homeassistant.get(id).map_or_else(
 				|| {
-					neo_toggle_button(phosphor_icon!("house"), "Unknown Entity", id, false, None)
-						.enabled(false)
+					neo_widgets::widgets::neo_tile(
+						phosphor_icon!("house"),
+						"Unknown Entity",
+						id.clone(),
+						Some(false),
+						None,
+						size,
+					)
+					.enabled(false)
 				},
 				|e| {
-					e.view().map(|msg| {
+					let id = id.clone();
+					e.view_tile(size).map(move |msg| {
 						Message::Homeassistant(homeassistant::integration::Message::Entity(
 							id.clone(),
 							msg,
@@ -448,10 +691,51 @@ impl SystemMenu {
 					})
 				},
 			),
-		}
-		.width(Length::Fill)
-		.height(64)
-		.into()
+		};
+		let view: Element<'_, Message> = if matches!(widget, SystemMenuWidgets::Nightlight)
+			&& size.width >= spatial::span(4)
+			&& size.height >= spatial::span(2)
+		{
+			// A separate header owns toggling; dragging sliders cannot trigger it.
+			use neo_widgets::widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle};
+			let surface = NeoSurfaceStyle {
+				background: iced::Color::TRANSPARENT,
+				border_width: 0.0,
+				shadow_width: 0.0,
+				..Default::default()
+			};
+			let content_surface = NeoContentSurfaceStyle {
+				surface,
+				padding: 0.0.into(),
+			};
+			neo_button(self.nightlight.view_expanded(size))
+				.width(Length::Fill)
+				.height(Length::Fill)
+				.style(NeoButtonStyle {
+					surface: content_surface,
+					hovered: surface,
+					focused: content_surface,
+					disabled_background: iced::Color::TRANSPARENT,
+				})
+				.on_context_menu_with_mouse_position(|position| {
+					Message::OpenContextMenu(
+						ContextMenu::Nightlight(nightlight::ContextMenu::Root),
+						0,
+						Rectangle::new(position, Size::new(1.0, 1.0)),
+					)
+				})
+				.into()
+		} else {
+			button.width(Length::Fill).height(Length::Fill).into()
+		};
+		let label = match widget {
+			SystemMenuWidgets::Homeassistant(id) => self
+				.homeassistant
+				.get(id)
+				.map_or_else(|| id.clone(), |entity| entity.title().to_owned()),
+			_ => format!("{widget:?}"),
+		};
+		iced::widget::tooltip(view, text(label), iced::widget::tooltip::Position::Bottom).into()
 	}
 }
 
@@ -518,6 +802,103 @@ mod reliability_tests {
 	use super::SystemMenu;
 	use crate::modules::test_bus;
 
+	#[tokio::test]
+	async fn dismissal_persists_row_compaction_once_and_preserves_authored_gap()
+	-> Result<(), test_bus::Error> {
+		use config::{
+			MenuEntry, MenuRow, MenuTile,
+			SystemMenuWidgets::{Bluetooth, Wifi},
+		};
+		let mut config = config::ConfigFile::default();
+		config.system_menu = config::SystemMenu::from_rows(vec![
+			MenuRow(vec![
+				MenuEntry::Widget(MenuTile::new(Wifi)),
+				MenuEntry::Gap(1),
+				MenuEntry::Widget(MenuTile::new(Bluetooth)),
+			]),
+			MenuRow::default(),
+		]);
+		let mut menu = SystemMenu::new(&config);
+		let _ = menu.update(super::Message::EditingChanged(true));
+		let _ = menu.update(super::Message::ToggleWidget(0));
+		assert_eq!(menu.layout.configuration().resolve().tiles[0].column, 3);
+		let message = test_bus::task_message(menu.popup_closed()).await?;
+		let saved = menu.layout.configuration();
+		assert!(matches!(message,super::Message::SaveLayout(layout) if layout == saved));
+		assert_eq!(saved.resolve().tiles[0].column, 1);
+		assert_eq!(saved.effective_rows().len(), 1);
+		assert!(iced_runtime::task::into_stream(menu.popup_closed()).is_none());
+		assert!(!menu.layout.editing());
+		Ok(())
+	}
+
+	#[test]
+	fn empty_menu_catalog_starts_at_first_row_and_fits_its_grid() {
+		let mut menu = SystemMenu::new(&config::ConfigFile::default());
+		let _ = menu.update(super::Message::EditingChanged(true));
+		assert_eq!(menu.grid_size().height, super::spatial::span(2));
+		assert_eq!(
+			menu.grid_size().width,
+			super::spatial::span(menu.minimum_columns())
+		);
+	}
+
+	#[test]
+	fn toggling_nightlight_never_changes_layout_and_off_controls_do_nothing() {
+		use super::{Message, nightlight};
+		let mut config = config::ConfigFile::default();
+		config.system_menu =
+			config::SystemMenu::from_rows(vec![config::MenuRow(vec![config::MenuEntry::Widget(
+				config::MenuTile {
+					widget: config::SystemMenuWidgets::Nightlight,
+					width: 4,
+					height: 2,
+				},
+			)])]);
+		let mut menu = SystemMenu::new(&config);
+		let before = menu.target_size();
+		let brightness = menu.nightlight.brightness;
+		assert_eq!(menu.update(Message::ChangeBrightness(0.4)).units(), 0);
+		assert_eq!(menu.nightlight.brightness, brightness);
+		let _ = menu.update(Message::Nightlight(nightlight::Message::Toggle));
+		assert_eq!(menu.target_size(), before);
+		let _ = menu.update(Message::Nightlight(nightlight::Message::Toggle));
+		assert_eq!(menu.target_size(), before);
+	}
+
+	#[test]
+	fn popup_growth_waits_for_its_own_configure_and_close_discards_old_acknowledgements() {
+		use iced::{Size, window::Id};
+		let mut config = config::ConfigFile::default();
+		config.system_menu.widgets = vec![config::SystemMenuWidgets::Nightlight];
+		let mut menu = SystemMenu::new(&config);
+		let old = Id::unique();
+		menu.popup_opened(old, Size::new(1000.0, 800.0));
+		menu.popup_configured(old, menu.target_size());
+		config.system_menu =
+			config::SystemMenu::from_rows(vec![config::MenuRow(vec![config::MenuEntry::Widget(
+				config::MenuTile {
+					widget: config::SystemMenuWidgets::Nightlight,
+					width: 8,
+					height: 4,
+				},
+			)])]);
+		let _ = menu.sync_config(&config);
+		assert!(menu.resize.waiting());
+		menu.popup_configured(Id::unique(), menu.target_size());
+		assert!(menu.resize.waiting());
+		menu.popup_configured(old, menu.target_size());
+		assert!(!menu.resize.waiting());
+		let _ = menu.popup_closed();
+		let current = Id::unique();
+		menu.popup_opened(current, Size::new(500.0, 400.0));
+		let target = menu.target_size();
+		assert!(target.width <= 500.0 && target.height <= 400.0);
+		menu.popup_configured(old, Size::new(1.0, 1.0));
+		assert_eq!(menu.popup_id, Some(current));
+		assert_eq!(menu.resize.envelope, target);
+	}
+
 	#[test]
 	fn config_reload_updates_available_homeassistant_widgets() {
 		let mut config = config::ConfigFile::default();
@@ -561,7 +942,7 @@ mod reliability_tests {
 			menu.layout.selected(),
 			&[Wifi, Homeassistant("light.untracked".into())]
 		);
-		menu.popup_closed();
+		let _ = menu.popup_closed();
 		let _ = menu.sync_config(&config);
 		assert_eq!(menu.layout.selected(), &[Bluetooth, Bluetooth]);
 		assert!(

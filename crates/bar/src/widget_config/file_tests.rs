@@ -2,6 +2,7 @@
 //! Never mutate the test runner's environment or read the user's configuration.
 use super::*;
 use crate::{Bar, Section, modules::ModuleMessage};
+use config::SystemMenuWidgets;
 use config::SystemMenuWidgets::{Bluetooth, Nightlight, Wifi};
 use futures::StreamExt;
 use std::{
@@ -114,7 +115,7 @@ fn save(bar: &mut Bar, widgets: Vec<SystemMenuWidgets>) -> Task<BarMessage> {
 		None,
 		Section::Left,
 		0,
-		ModuleMessage::SaveSystemMenuWidgets(widgets),
+		ModuleMessage::SaveSystemMenuLayout(config::SystemMenu::from_widgets(widgets)),
 	))
 }
 
@@ -130,7 +131,7 @@ async fn finish_and_reload(bar: &mut Bar, result: BarMessage) -> Result<(), Erro
 	assert!(matches!(reload, BarMessage::ConfigUpdated));
 	// Run the production reload, not merely an assertion that it was scheduled.
 	assert_eq!(bar.update(reload).units(), 0, "fixture has no live modules");
-	assert!(bar.widget_config.latest().is_none());
+	assert!(bar.widget_config.latest_layout().is_none());
 	Ok(())
 }
 
@@ -150,7 +151,17 @@ async fn direct_write_child() -> Result<(), Error> {
 
 	let first = output(save(&mut bar, vec![Wifi])).await?;
 	assert_saved(&first, true);
-	assert_eq!(ConfigFile::load()?.1.system_menu.widgets, vec![Wifi]);
+	assert_eq!(
+		ConfigFile::load()?
+			.1
+			.system_menu
+			.resolve()
+			.tiles
+			.into_iter()
+			.map(|tile| tile.tile.widget)
+			.collect::<Vec<_>>(),
+		vec![Wifi]
+	);
 	// The write finished, but its result has not reached update: later user
 	// edits must coalesce while that completion is still in flight.
 	assert_eq!(save(&mut bar, vec![Bluetooth]).units(), 0);
@@ -161,6 +172,7 @@ async fn direct_write_child() -> Result<(), Error> {
 	external.write_to_file(&mut document, root.join("config.kdl"))?;
 	let mut expected = external;
 	expected.system_menu.widgets = vec![Nightlight];
+	expected.system_menu.rows.clear();
 
 	let next_write = bar.update(first);
 	let _ = bar.update(BarMessage::ConfigUpdated);
@@ -195,6 +207,69 @@ async fn direct_write_child() -> Result<(), Error> {
 	finish_and_reload(&mut bar, failed).await?;
 	assert_eq!(bar.config_file, expected);
 	assert_eq!(ConfigFile::load()?.1, expected);
+	Ok(())
+}
+
+#[test]
+fn row_layout_writes_coalesce_and_preserve_fresh_unrelated_settings() -> Result<(), Error> {
+	run("widget_config::file_tests::row_write_child", false)
+}
+
+#[tokio::test]
+#[ignore = "isolated config subprocess helper; run its parent test"]
+async fn row_write_child() -> Result<(), Error> {
+	use config::{MenuEntry, MenuRow, MenuTile};
+	let root = require_sandbox(false)?;
+	seed(&root)?;
+	let mut bar = crate::tests::empty_bar();
+	let layout = |width| {
+		config::SystemMenu::from_rows(vec![
+			MenuRow(vec![MenuEntry::Widget(MenuTile {
+				widget: Nightlight,
+				width,
+				height: 2,
+			})]),
+			MenuRow(vec![
+				MenuEntry::Gap(width),
+				MenuEntry::Widget(MenuTile {
+					widget: Wifi,
+					width: 1,
+					height: 1,
+				}),
+			]),
+			MenuRow::default(),
+		])
+	};
+	let save = |bar: &mut Bar, layout| {
+		bar.update(BarMessage::Module(
+			None,
+			Section::Left,
+			0,
+			ModuleMessage::SaveSystemMenuLayout(layout),
+		))
+	};
+	let first = output(save(&mut bar, layout(4))).await?;
+	assert_saved(&first, true);
+	assert_eq!(save(&mut bar, layout(5)).units(), 0);
+	assert_eq!(save(&mut bar, layout(6)).units(), 0);
+	let (mut document, mut external) = ConfigFile::load()?;
+	external.spotify.poll_interval_seconds = 123;
+	external.write_to_file(&mut document, root.join("config.kdl"))?;
+	let next_write = bar.update(first);
+	let _ = bar.update(BarMessage::ConfigUpdated);
+	assert_eq!(bar.config_file.system_menu, layout(6));
+	assert_eq!(bar.config_file.spotify.poll_interval_seconds, 123);
+	let saved = output(next_write).await?;
+	assert_saved(&saved, true);
+	finish_and_reload(&mut bar, saved).await?;
+	let (_, persisted) = ConfigFile::load()?;
+	assert_eq!(persisted.system_menu, layout(6));
+	assert_eq!(persisted.spotify.poll_interval_seconds, 123);
+	let contents = std::fs::read_to_string(root.join("config.kdl"))?;
+	assert!(contents.contains("unrelated configuration comment"));
+	assert!(contents.contains("gap"));
+	assert!(!contents.contains("widgets {"));
+	assert!(bar.widget_config.latest_layout().is_none());
 	Ok(())
 }
 
@@ -251,8 +326,12 @@ async fn failed_override_write_child() -> Result<(), Error> {
 	std::fs::create_dir(&blocker)?;
 	let mut expected = external;
 	expected.system_menu.widgets = vec![Nightlight];
+	expected.system_menu.rows.clear();
 	let next_write = bar.update(failed);
-	assert_eq!(bar.widget_config.latest(), Some([Nightlight].as_slice()));
+	assert_eq!(
+		bar.widget_config.latest_layout(),
+		Some(&config::SystemMenu::from_widgets(vec![Nightlight]))
+	);
 	let _ = bar.update(BarMessage::ConfigUpdated);
 	assert_eq!(bar.config_file, expected);
 	let saved = output(next_write).await?;
@@ -278,6 +357,7 @@ async fn failed_override_write_child() -> Result<(), Error> {
 	active.write_to_file(&mut document, root.join("override/config.kdl"))?;
 	expected = active;
 	expected.system_menu.widgets = vec![Wifi];
+	expected.system_menu.rows.clear();
 	let saved = output(save(&mut bar, vec![Wifi])).await?;
 	assert_saved(&saved, true);
 	finish_and_reload(&mut bar, saved).await?;

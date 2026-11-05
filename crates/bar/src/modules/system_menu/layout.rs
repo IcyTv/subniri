@@ -1,33 +1,40 @@
 //! `SystemMenuWidgets` selection, editing and reload rules; no widgets or I/O.
 use config::{ConfigFile, SystemMenuWidgets};
+mod session;
+use session::Session;
 
 #[derive(Debug, Clone)]
 pub(super) struct Layout {
 	selected: Vec<SystemMenuWidgets>,
 	available: Vec<SystemMenuWidgets>,
 	editing: bool,
+	rows: Vec<config::MenuRow>,
+	session: Option<Session>,
 }
 
+#[cfg(test)]
 pub(super) enum Event {
 	Editing(bool),
-	Edited(Vec<SystemMenuWidgets>),
-	Reload {
-		widgets: Vec<SystemMenuWidgets>,
-		tracked_devices: Vec<String>,
-	},
 	Closed,
 }
 
 impl Layout {
 	pub fn new(config: &ConfigFile) -> Self {
-		let available = catalog(
-			&config.system_menu.widgets,
-			&config.homeassistant.tracked_devices,
-		);
+		let rows = config.system_menu.effective_rows();
+		let selected = config
+			.system_menu
+			.resolve()
+			.tiles
+			.into_iter()
+			.map(|tile| tile.tile.widget)
+			.collect::<Vec<_>>();
+		let available = catalog(&selected, &config.homeassistant.tracked_devices);
 		Self {
-			selected: config.system_menu.widgets.clone(),
+			selected,
 			available,
 			editing: false,
+			rows,
+			session: None,
 		}
 	}
 
@@ -41,6 +48,132 @@ impl Layout {
 		self.editing
 	}
 
+	pub fn configuration(&self) -> config::SystemMenu {
+		config::SystemMenu::from_rows(self.rows.clone())
+	}
+
+	pub fn begin_edit(&mut self, columns: u32) {
+		if self.session.is_none() {
+			self.session = Some(Session::new(
+				&self.configuration(),
+				&self.available,
+				columns,
+			));
+		}
+		self.editing = true;
+	}
+
+	pub fn tiles(&self) -> Vec<config::PlacedTile> {
+		self.session.as_ref().map_or_else(
+			|| self.configuration().resolve().tiles,
+			|session| session.tiles.clone(),
+		)
+	}
+	pub fn edit_baseline_rows(&self) -> Vec<config::MenuRow> {
+		self.session
+			.as_ref()
+			.map_or_else(|| self.rows.clone(), |session| session.rows.clone())
+	}
+	pub fn enabled(&self) -> Vec<bool> {
+		self.session.as_ref().map_or_else(
+			|| vec![true; self.selected.len()],
+			|session| session.enabled.clone(),
+		)
+	}
+
+	fn refresh_session_configuration(&mut self) {
+		if let Some(session) = &self.session {
+			self.rows = session.configuration(false).effective_rows();
+			self.selected = self
+				.configuration()
+				.resolve()
+				.tiles
+				.into_iter()
+				.map(|tile| tile.tile.widget)
+				.collect();
+		}
+	}
+
+	pub fn edit_tiles(
+		&mut self, tiles: Vec<config::PlacedTile>, rows: Vec<config::MenuRow>,
+	) -> bool {
+		let changed = self
+			.session
+			.as_mut()
+			.is_some_and(|session| session.replace(tiles, rows));
+		if changed {
+			self.refresh_session_configuration();
+		}
+		changed
+	}
+
+	pub fn toggle(&mut self, index: usize) -> bool {
+		let changed = self
+			.session
+			.as_mut()
+			.is_some_and(|session| session.toggle(index));
+		if changed {
+			self.refresh_session_configuration();
+		}
+		changed
+	}
+
+	pub fn finish_edit(&mut self) -> bool {
+		let before = self.configuration();
+		if let Some(session) = self.session.take() {
+			self.rows = session.configuration(true).effective_rows();
+			self.selected = self
+				.configuration()
+				.resolve()
+				.tiles
+				.into_iter()
+				.map(|tile| tile.tile.widget)
+				.collect();
+		}
+		self.editing = false;
+		before != self.configuration()
+	}
+
+	#[cfg(test)]
+	pub fn edit_rows(&mut self, rows: Vec<config::MenuRow>) -> bool {
+		if !self.editing || self.rows == rows {
+			return false;
+		}
+		self.rows = rows;
+		self.selected = self
+			.configuration()
+			.resolve()
+			.tiles
+			.into_iter()
+			.map(|tile| tile.tile.widget)
+			.collect();
+		if self.session.is_some() {
+			self.session = Some(Session::new(&self.configuration(), &self.available, 6));
+		}
+		true
+	}
+
+	pub fn reload(&mut self, config: &ConfigFile) {
+		let widgets = config
+			.system_menu
+			.resolve()
+			.tiles
+			.into_iter()
+			.map(|tile| tile.tile.widget)
+			.collect::<Vec<_>>();
+		self.available = catalog(&widgets, &config.homeassistant.tracked_devices);
+		if !self.editing {
+			self.selected = widgets;
+			self.rows = config.system_menu.effective_rows();
+		}
+		// Reload the catalog without invalidating in-progress cards or their observers.
+		for widget in &self.selected {
+			if !self.available.contains(widget) {
+				self.available.push(widget.clone());
+			}
+		}
+	}
+
 	pub fn homeassistant_ids(&self) -> Vec<String> {
 		self.available()
 			.iter()
@@ -51,46 +184,14 @@ impl Layout {
 			.collect()
 	}
 
-	pub fn entries(&self) -> Vec<&SystemMenuWidgets> {
-		let mut entries = self.selected.iter().collect::<Vec<_>>();
-		if self.editing {
-			entries.extend(
-				self.available
-					.iter()
-					.filter(|widget| !self.selected.contains(widget)),
-			);
-		}
-		entries
-	}
-
-	/// Only accepted, changed user edits request persistence. Reloads never do.
-	pub fn update(&mut self, event: Event) -> Option<Vec<SystemMenuWidgets>> {
+	#[cfg(test)]
+	pub fn update(&mut self, event: Event) {
 		match event {
-			Event::Editing(editing) => self.editing = editing,
-			Event::Closed => self.editing = false,
-			Event::Edited(widgets) if self.editing && self.selected != widgets => {
-				self.selected = widgets;
-				return Some(self.selected.clone());
+			Event::Editing(true) => self.begin_edit(6),
+			Event::Editing(false) | Event::Closed => {
+				self.finish_edit();
 			}
-			Event::Reload {
-				widgets,
-				tracked_devices,
-			} => {
-				self.available = catalog(&widgets, &tracked_devices);
-				if !self.editing {
-					self.selected = widgets;
-				}
-				// Keep in-progress cards usable even if an external config reload
-				// removes their entity from the configured catalog.
-				for widget in &self.selected {
-					if !self.available.contains(widget) {
-						self.available.push(widget.clone());
-					}
-				}
-			}
-			Event::Edited(_) => {}
 		}
-		None
 	}
 }
 
@@ -110,26 +211,6 @@ fn catalog(widgets: &[SystemMenuWidgets], tracked_devices: &[String]) -> Vec<Sys
 	available
 }
 
-/// Pointer geometry stays in the editor; this is the resulting layout intent.
-pub(super) fn changed_widgets(
-	keys: &[SystemMenuWidgets], active: usize, source: usize, target: Option<usize>,
-) -> Vec<SystemMenuWidgets> {
-	let mut widgets = keys.iter().take(active).cloned().collect::<Vec<_>>();
-	if source >= active {
-		if let Some(widget) = keys.get(source) {
-			widgets.push(widget.clone());
-		}
-	} else if let Some(target) = target {
-		if source < widgets.len() && target < widgets.len() {
-			let widget = widgets.remove(source);
-			widgets.insert(target, widget);
-		}
-	} else if source < widgets.len() {
-		widgets.remove(source);
-	}
-	widgets
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -145,44 +226,18 @@ mod tests {
 				.available()
 				.contains(&Homeassistant("light.untracked".into()))
 		);
-		assert_eq!(
-			layout.entries(),
-			layout.selected().iter().collect::<Vec<_>>()
-		);
-		assert!(layout.update(Event::Edited(vec![Bluetooth])).is_none());
+		let rows = config::SystemMenu::from_widgets(vec![Bluetooth]).effective_rows();
+		assert!(!layout.edit_rows(rows.clone()));
 		layout.update(Event::Editing(true));
-		assert!(layout.entries().len() > layout.selected().len());
-		assert!(
-			layout
-				.update(Event::Reload {
-					widgets: vec![],
-					tracked_devices: vec![]
-				})
-				.is_none()
-		);
+		layout.reload(&ConfigFile::default());
 		assert_eq!(layout.selected(), config.system_menu.widgets);
-		assert_eq!(
-			layout.update(Event::Edited(vec![Bluetooth])),
-			Some(vec![Bluetooth])
-		);
-		assert!(layout.update(Event::Edited(vec![Bluetooth])).is_none());
+		assert!(layout.edit_rows(rows.clone()));
+		assert_eq!(layout.selected(), &[Bluetooth]);
+		assert!(!layout.edit_rows(rows));
 		layout.update(Event::Closed);
 		assert!(!layout.editing());
-		assert!(layout.update(Event::Edited(vec![])).is_none());
-		layout.update(Event::Reload {
-			widgets: vec![],
-			tracked_devices: vec![],
-		});
+		assert!(!layout.edit_rows(Vec::new()));
+		layout.reload(&ConfigFile::default());
 		assert!(layout.selected().is_empty());
-	}
-
-	#[test]
-	fn click_and_drag_intents_preserve_order_in_both_directions() {
-		let keys = vec![Wifi, Bluetooth, Homeassistant("light.test".into())];
-		assert_eq!(changed_widgets(&keys, 2, 0, None), vec![Bluetooth]);
-		assert_eq!(changed_widgets(&keys, 2, 2, None), keys);
-		assert_eq!(changed_widgets(&keys, 2, 0, Some(1)), vec![Bluetooth, Wifi]);
-		assert_eq!(changed_widgets(&keys, 2, 1, Some(0)), vec![Bluetooth, Wifi]);
-		assert_eq!(changed_widgets(&keys, 2, 0, Some(0)), vec![Wifi, Bluetooth]);
 	}
 }

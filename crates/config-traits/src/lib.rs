@@ -9,6 +9,15 @@ type ConfigSource = Arc<NamedSource<String>>;
 
 #[derive(thiserror::Error, Diagnostic, Debug)]
 pub enum ConfigError {
+	#[error("Invalid value: {message}")]
+	#[diagnostic(code(config::invalid_value))]
+	InvalidValue {
+		message: String,
+		#[label]
+		span: Option<SourceSpan>,
+		#[source_code]
+		src: Option<ConfigSource>,
+	},
 	#[error("Missing field {name}")]
 	#[diagnostic(code(config::missing_field))]
 	MissingField {
@@ -125,6 +134,13 @@ impl From<url::ParseError> for ConfigError {
 }
 
 impl ConfigError {
+	pub fn invalid_value(message: impl Into<String>, span: Option<SourceSpan>) -> Self {
+		Self::InvalidValue {
+			message: message.into(),
+			span,
+			src: None,
+		}
+	}
 	pub fn missing_field(name: impl Into<String>, span: Option<SourceSpan>) -> Self {
 		Self::MissingField {
 			name: name.into(),
@@ -211,6 +227,15 @@ impl ConfigError {
 	#[must_use]
 	pub fn with_span_no_overwrite(self, new_span: SourceSpan) -> Self {
 		match self {
+			Self::InvalidValue {
+				message,
+				span: None,
+				src,
+			} => Self::InvalidValue {
+				message,
+				span: Some(new_span),
+				src,
+			},
 			Self::MissingField { name, span, src } if span.is_none() => Self::MissingField {
 				name,
 				span: Some(new_span),
@@ -272,6 +297,11 @@ impl ConfigError {
 		let source = source.into();
 		let source = || Arc::new(NamedSource::new("config", source.clone()));
 		match self {
+			Self::InvalidValue { message, span, .. } => Self::InvalidValue {
+				message,
+				span,
+				src: Some(source()),
+			},
 			Self::MissingField { name, span, .. } => Self::MissingField {
 				name,
 				span,

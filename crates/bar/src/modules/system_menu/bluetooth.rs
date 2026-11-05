@@ -2,11 +2,7 @@ use std::time::{Duration, Instant};
 
 use bluer::Session;
 use iced::{Animation, Length, Subscription, Task};
-use neo_widgets::{
-	phosphor_icon,
-	style::COLORS,
-	widgets::{NeoButton, neo_toggle_button},
-};
+use neo_widgets::{phosphor_icon, style::COLORS, widgets::NeoButton};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -150,7 +146,7 @@ impl Bluetooth {
 		self.active_devices = state.active_devices;
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
 		let icon_color =
 			self.enabled
 				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
@@ -158,18 +154,23 @@ impl Bluetooth {
 			self.enabled
 				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
 
-		neo_toggle_button(
+		neo_widgets::widgets::neo_tile(
 			phosphor_icon!("bluetooth"),
 			"Bluetooth",
 			self.subtitle(),
-			self.enabled.value(),
+			Some(self.enabled.value()),
 			Some(icon_color),
+			size,
 		)
 		.background(background)
 		.on_press(Message::Toggle)
 		.enabled(self.async_data.is_some() && self.pending.is_none())
 		.width(Length::Fill)
-		.height(64)
+		.height(Length::Fill)
+	}
+
+	pub fn is_animating(&self, now: Instant) -> bool {
+		self.enabled.is_animating(now)
 	}
 
 	fn subtitle(&self) -> String {

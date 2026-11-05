@@ -2452,7 +2452,7 @@ dependencies = [
 [[package]]
 name = "exwlshellev"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "calloop 0.14.5",
  "calloop-wayland-source 0.4.1",
@@ -3447,7 +3447,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -3460,7 +3460,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "enumflags2",
  "exwlshellev",
@@ -3486,7 +3486,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell_macros"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "darling 0.24.1",
  "manyhow",
@@ -3581,7 +3581,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "futures",
  "iced_core",
@@ -9546,7 +9546,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#be4e00e8bdd429eb512a171c8535005543da4e0b"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#78ae66532deef5b7b6ec4bfd170bdd9a34cf1375"
 dependencies = [
  "calloop 0.14.5",
  "log 0.4.35",

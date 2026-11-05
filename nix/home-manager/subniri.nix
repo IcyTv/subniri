@@ -183,7 +183,20 @@
       ])
       ++ [
         (plain "system_menu" (
-          lib.optionals (settings.systemMenu.widgets != []) [
+          (map (row:
+            plain "row" (map (
+                entry:
+                  if entry.gap != null && entry.widget != null
+                  then throw "subniri: a row entry cannot contain both widget and gap"
+                  else if entry.gap != null
+                  then leaf "gap" [{width = entry.gap;}]
+                  else if entry.widget != null
+                  then leaf "widget" ([entry.widget] ++ lib.optional (entry.width != 2) {width = entry.width;} ++ lib.optional (entry.height != 1) {height = entry.height;})
+                  else throw "subniri: row entries need either widget or gap"
+              )
+              row))
+          settings.systemMenu.rows)
+          ++ lib.optionals (settings.systemMenu.widgets != []) [
             (node "widgets" settings.systemMenu.widgets [])
           ]
         ))
@@ -353,16 +366,50 @@ in {
         };
 
         systemMenu.widgets = mkOption {
-          type = types.listOf (types.enum [
-            "wifi"
-            "bluetooth"
-            "speaker"
-            "microphone"
-            "vpn"
-            "nightlight"
-          ]);
+          type = types.listOf types.str;
           default = [];
-          description = "Widgets to display in the system menu.";
+          description = "Legacy widget list, arranged in rows of two. Do not combine with systemMenu.rows. Home Assistant entity IDs are accepted.";
+        };
+
+        systemMenu.rows = mkOption {
+          type = types.listOf (types.listOf (types.submodule {
+            options = {
+              widget = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+              };
+              width = mkOption {
+                type = types.ints.between 1 4294967295;
+                default = 2;
+              };
+              height = mkOption {
+                type = types.ints.between 1 4294967295;
+                default = 1;
+              };
+              gap = mkOption {
+                type = types.nullOr (types.ints.between 1 4294967295);
+                default = null;
+              };
+            };
+          }));
+          default = [];
+          description = "Spatial quick-tile rows. Entries contain widget/width/height or gap. Empty lists preserve empty rows. Tall tiles push obstructed tiles rightwards.";
+          example = [
+            [
+              {
+                widget = "nightlight";
+                width = 4;
+                height = 2;
+              }
+            ]
+            [
+              {gap = 4;}
+              {
+                widget = "wifi";
+                width = 1;
+              }
+            ]
+          ];
         };
 
         launcher = {
@@ -410,6 +457,10 @@ in {
 
   config = mkIf cfg.enable {
     assertions = [
+      {
+        assertion = cfg.settings.systemMenu.rows == [] || cfg.settings.systemMenu.widgets == [];
+        message = "services.subniri.settings.systemMenu: use either rows or the legacy widgets list, not both.";
+      }
       {
         assertion = cfg.config.target != cfg.config.overrideTarget;
         message = "services.subniri.config.target and overrideTarget must be different paths.";
