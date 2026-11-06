@@ -1,7 +1,7 @@
 use std::{fmt, str::FromStr};
 
 pub use tracing::{debug, error, info, trace, warn};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 enum LogBackend {
 	Auto,
@@ -105,7 +105,11 @@ fn init_journald(default_filter: &str) -> Result<(), Box<dyn std::error::Error>>
 
 	tracing_subscriber::registry()
 		.with(env_filter(default_filter))
-		.with(journald)
+		.with(
+			journald.with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+				safe_dependency_target(metadata.target())
+			})),
+		)
 		.try_init()
 		.map_err(|err| -> Box<dyn std::error::Error> { std::io::Error::other(err).into() })?;
 
@@ -113,14 +117,45 @@ fn init_journald(default_filter: &str) -> Result<(), Box<dyn std::error::Error>>
 }
 
 fn init_console(default_filter: &str) -> Result<(), Box<dyn std::error::Error>> {
-	let subscriber = tracing_subscriber::fmt().with_env_filter(env_filter(default_filter));
+	let layer = tracing_subscriber::fmt::layer();
 
 	#[cfg(debug_assertions)]
-	let subscriber = subscriber.pretty();
+	let layer = layer.pretty();
 
-	subscriber
+	tracing_subscriber::registry()
+		.with(env_filter(default_filter))
+		.with(
+			layer.with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+				safe_dependency_target(metadata.target())
+			})),
+		)
 		.try_init()
 		.map_err(|err| -> Box<dyn std::error::Error> { std::io::Error::other(err).into() })?;
 
 	Ok(())
+}
+
+// These dependencies log authentication tokens or WebSocket token URLs at trace
+// level. This guard cannot be overridden by RUST_LOG=trace or a more-specific
+// module directive. Spotify's own owner emits credential-safe status/errors.
+fn safe_dependency_target(target: &str) -> bool {
+	![
+		"librespot_core",
+		"librespot_oauth",
+		"tungstenite",
+		"tokio_tungstenite",
+	]
+	.iter()
+	.any(|prefix| target == *prefix || target.starts_with(&format!("{prefix}::")))
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	#[test]
+	fn sensitive_dependency_logs_are_suppressed_even_with_user_trace_filters() {
+		assert!(!safe_dependency_target("librespot_core::login5"));
+		assert!(!safe_dependency_target("tungstenite::handshake::client"));
+		assert!(safe_dependency_target("daemon::spotify"));
+	}
 }

@@ -50,11 +50,8 @@ pub struct ConfigFile {
 	/// Settings for controlling Spotify.
 	/// Enabling this will let you do things, like adding a song to your library from the bar, at
 	/// the cost of some networking overhead.
-	/// To connect to spotify, you'll need a client id and a client secret by creating an
-	/// application at <https://developer.spotify.com/dashboard> and setting the client id and
-	/// client secret in the settings (Or manually adding them to the key store). Then you need to
-	/// log in to your Spotify account.
-	/// As far as I undertand, this will only work using a Spotify Premium account.
+	/// Pair using snowconf and spotify.com/pair. No developer application, client ID or secret
+	/// is required. Spotify Premium is required by the underlying session implementation.
 	/// Connection details and secrets are stored in your system's secret store.
 	#[config(default)]
 	#[garde(dive)]
@@ -284,13 +281,6 @@ impl ConfigFile {
 			self.spotify.enabled,
 			declarative.spotify.enabled,
 			|value| value.to_string(),
-		);
-		nix_assignment(
-			&mut out,
-			"services.subniri.settings.spotify.clientId",
-			self.spotify.client_id.as_str(),
-			declarative.spotify.client_id.as_str(),
-			nix_string,
 		);
 		nix_assignment(
 			&mut out,
@@ -758,13 +748,15 @@ pub struct Spotify {
 	/// Whether to enable the spotify integration or not.
 	#[garde(skip)]
 	pub enabled: bool,
-	/// The client ID of the user's Spotify application.
-	#[config(default)]
+	/// Deprecated: accepted for old configurations but ignored. Pair through snowconf instead.
+	/// This compatibility-only field is no longer generated or exported.
+	#[config(default, deprecated)]
 	#[garde(skip)]
 	pub client_id: String,
-	/// How often to check observed tracks for library changes, in seconds. Values below 15 seconds
-	/// increase API usage and may trigger Spotify's rolling 30-second rate limit.
-	#[config(default = 15)]
+	/// Recovery refresh interval when push is disconnected, in seconds. Saved tracks normally
+	/// update through WebSocket events; healthy connections reconcile at most every 15 minutes.
+	/// Legacy values below 60 are accepted but clamped to 60 at runtime, with a warning.
+	#[config(default = 60)]
 	#[garde(range(min = 5, max = 3600))]
 	pub poll_interval_seconds: u64,
 }
@@ -774,7 +766,7 @@ impl Default for Spotify {
 		Self {
 			enabled: false,
 			client_id: String::new(),
-			poll_interval_seconds: 15,
+			poll_interval_seconds: 60,
 		}
 	}
 }
@@ -985,9 +977,9 @@ mod tests {
 		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
 		let _environment = TestEnvironment::new("lifecycle");
 		let (mut doc, mut config) = ConfigFile::load_declarative().unwrap();
-		assert_eq!(config.spotify.poll_interval_seconds, 15);
+		assert_eq!(config.spotify.poll_interval_seconds, 60);
 
-		config.spotify.client_id = "0123456789abcdef0123456789abcdef".to_string();
+		config.spotify.enabled = true;
 		config.write(&mut doc).unwrap();
 
 		assert!(ConfigFile::override_active());
@@ -1022,7 +1014,7 @@ mod tests {
 	#[test]
 	fn spotify_poll_interval_defaults_and_validates() {
 		let mut spotify = Spotify::default();
-		assert_eq!(spotify.poll_interval_seconds, 15);
+		assert_eq!(spotify.poll_interval_seconds, 60);
 		assert!(spotify.validate().is_ok());
 
 		spotify.poll_interval_seconds = 4;
@@ -1033,6 +1025,23 @@ mod tests {
 		assert!(spotify.validate().is_ok());
 		spotify.poll_interval_seconds = 3601;
 		assert!(spotify.validate().is_err());
+	}
+
+	#[test]
+	fn legacy_spotify_client_id_is_read_but_never_generated_or_exported() {
+		use config_traits::{Config as _, ConfigSerialize as _};
+		let doc: KdlDocument = "spotify {\n client_id \"old-client\"\n enabled\n}\n"
+			.parse()
+			.unwrap();
+		let spotify = Spotify::from_kdl_node(doc.get("spotify").unwrap()).unwrap();
+		assert_eq!(spotify.client_id, "old-client");
+		assert!(spotify.enabled);
+		let mut node = kdl::KdlNode::new("spotify");
+		spotify.apply_to_kdl_node(&mut node).unwrap();
+		assert!(!node.to_string().contains("client_id"));
+		let mut config = ConfigFile::default();
+		config.spotify = spotify;
+		assert!(!config.nix_diff(&ConfigFile::default()).contains("clientId"));
 	}
 
 	#[test]
@@ -1047,7 +1056,6 @@ mod tests {
 			effective.nix_diff(&base),
 			concat!(
 				"services.subniri.settings.spotify.enable = true;\n",
-				"services.subniri.settings.spotify.clientId = \"client\\\"\\${id}\";\n",
 				"services.subniri.settings.spotify.pollIntervalSeconds = 30;\n",
 			)
 		);

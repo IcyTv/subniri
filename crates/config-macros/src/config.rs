@@ -30,6 +30,9 @@ struct VariantAttrs {
 #[deluxe(attributes(config))]
 #[deluxe(crate = deluxe)]
 struct FieldAttrs {
+	/// Read compatibility only: preserve existing input, never generate this field.
+	#[deluxe(default)]
+	deprecated: bool,
 	#[deluxe(default)]
 	parameter: bool,
 	#[deluxe(default)]
@@ -496,6 +499,9 @@ fn generate_serialize_for_struct(_opts: &ConfigOpts, s: &mut syn::DataStruct) ->
 
 	for field in &mut s.fields {
 		let attrs: FieldAttrs = deluxe::extract_attributes_optional(&mut field.attrs, &errors);
+		if attrs.deprecated {
+			continue;
+		}
 
 		let Some(field_ident) = field.ident.as_ref() else {
 			abort!(field, "Field without a name");
@@ -571,6 +577,9 @@ fn generate_serialize_for_document(opts: &ConfigOpts, s: &mut syn::DataStruct) -
 
 	for field in &mut s.fields {
 		let attrs: FieldAttrs = deluxe::extract_attributes_optional(&mut field.attrs, &errors);
+		if attrs.deprecated {
+			continue;
+		}
 		if attrs.argument || attrs.parameter {
 			abort!(field, "ConfigFile fields cannot be parameters or arguments");
 		}

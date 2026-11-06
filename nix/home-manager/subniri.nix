@@ -170,13 +170,10 @@
           ]
         ))
       ])
-      ++ (lib.optionals (settings.spotify.enable || settings.spotify.clientId != "" || settings.spotify.pollIntervalSeconds != 15) [
+      ++ (lib.optionals (settings.spotify.enable || settings.spotify.pollIntervalSeconds != 60) [
         (plain "spotify" (
           lib.optionals settings.spotify.enable [
             (flag "enabled")
-          ]
-          ++ lib.optionals (settings.spotify.clientId != "") [
-            (leaf "client_id" settings.spotify.clientId)
           ]
           ++ [(leaf "poll_interval_seconds" settings.spotify.pollIntervalSeconds)]
         ))
@@ -355,13 +352,13 @@ in {
             type = types.either (types.enum [""]) (types.strMatching "[0-9a-fA-F]{32}");
             default = "";
             example = "0123456789abcdef0123456789abcdef";
-            description = "Client ID of the user's Spotify application.";
+            description = "Deprecated and ignored. Pair Spotify through snowconf; no user-defined client ID is needed.";
           };
 
           pollIntervalSeconds = mkOption {
             type = types.ints.between 5 3600;
-            default = 15;
-            description = "Seconds between batched Spotify saved-state checks. Values below 15 increase API usage and may trigger Spotify rate limits.";
+            default = 60;
+            description = "Recovery refresh interval while Spotify push is disconnected. Legacy values below 60 are clamped to 60. Healthy push uses a slow 15-minute safety reconciliation; server cooldowns always take precedence.";
           };
         };
 
@@ -456,6 +453,11 @@ in {
     };
 
   config = mkIf cfg.enable {
+    warnings =
+      lib.optional (cfg.settings.spotify.clientId != "")
+      "services.subniri.settings.spotify.clientId is deprecated and ignored; pair through snowconf."
+      ++ lib.optional (cfg.settings.spotify.pollIntervalSeconds < 60)
+      "Legacy Spotify recovery intervals below 60 seconds are clamped to 60.";
     assertions = [
       {
         assertion = cfg.settings.systemMenu.rows == [] || cfg.settings.systemMenu.widgets == [];

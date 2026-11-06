@@ -1,8 +1,13 @@
 use zbus::zvariant::OwnedObjectPath;
 
-pub const SPOTIFY_PORT: u16 = 43817;
-pub const SPOTIFY_REDIRECT_URL: &str =
-	const_format::formatc!("http://127.0.0.1:{}/callback", SPOTIFY_PORT);
+#[derive(
+	Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, zbus::zvariant::Type,
+)]
+pub struct SpotifyPairing {
+	pub verification_uri: String,
+	pub user_code: String,
+	pub expires_at: u64,
+}
 
 #[zbus::interface(
 	name = "de.icytv.subniri.Spotify",
@@ -20,9 +25,14 @@ pub trait Spotify {
 	#[zbus(property)]
 	async fn authenticated(&self) -> bool;
 
-	async fn begin_authorization(&self) -> zbus::fdo::Result<String>;
-	async fn complete_authorization(&self, code: &str, state: &str) -> zbus::fdo::Result<bool>;
-	async fn cancel_authorization(&self) -> zbus::fdo::Result<()>;
+	async fn begin_pairing(
+		&self, #[zbus(header)] header: zbus::message::Header<'_>,
+	) -> zbus::fdo::Result<SpotifyPairing>;
+	async fn cancel_pairing(
+		&self, #[zbus(header)] header: zbus::message::Header<'_>,
+	) -> zbus::fdo::Result<()>;
+	#[zbus(property)]
+	async fn retry_at(&self) -> u64;
 	async fn get_track(&self, track_id: &str) -> zbus::fdo::Result<OwnedObjectPath>;
 }
 
@@ -39,8 +49,11 @@ pub trait SpotifyTrack {
 	fn track_id(&self) -> String;
 
 	#[zbus(property(emits_changed_signal = "invalidates"))]
-	async fn saved(&self) -> bool;
+	async fn saved(&self) -> zbus::fdo::Result<bool>;
 
+	/// Registers interest even if the initial saved value is temporarily unknown.
+	/// Keep the connection/property subscription alive for later push updates;
+	/// Unobserve or disconnect releases that interest.
 	async fn observe(
 		&self, #[zbus(header)] header: zbus::message::Header<'_>,
 		#[zbus(signal_emitter)] emitter: zbus::object_server::SignalEmitter<'_>,
@@ -77,6 +90,8 @@ pub enum SpotifyStatus {
 	AuthenticationRequired,
 	Authorizing,
 	Error,
+	RateLimited,
+	Unavailable,
 }
 
 impl SpotifyStatus {
@@ -90,6 +105,8 @@ impl SpotifyStatus {
 			Self::AuthenticationRequired => "Authentication required",
 			Self::Authorizing => "Authorizing",
 			Self::Error => "Error",
+			Self::RateLimited => "Rate limited; waiting to retry",
+			Self::Unavailable => "Temporarily unavailable; reconnecting",
 		}
 	}
 }

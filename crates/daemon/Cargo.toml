@@ -24,8 +24,11 @@ jiff.workspace = true
 log.workspace = true
 memmap2 = "0.9.10"
 rand = "0.10.3"
+base64 = "0.22"
+flate2 = "1"
+librespot-core.workspace = true
+protobuf = "3.7"
 reqwest = { workspace = true, features = ["form", "json"] }
-rspotify.workspace = true
 rustix = { version = "1.1.4", features = ["fs"] }
 rustls = "0.23.45"
 sea-orm = { version = "2.0.3", features = [
@@ -48,3 +51,7 @@ wayrs-protocols = { version = "0.14.11", features = [
   "wlr-gamma-control-unstable-v1",
 ] }
 zbus.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+zbus = { workspace = true, features = ["p2p"] }

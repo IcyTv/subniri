@@ -48,6 +48,7 @@ lazy-regex = "3.6.1"
 launcher-common = { path = "./crates/launcher-common" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
+librespot-core = { git = "https://github.com/librespot-org/librespot", rev = "99b6088bf3ea028f90192676ac1a337fa4b2ed12", default-features = false, features = ["rustls-tls-native-roots"] }
 log = { path = "./crates/log" }
 lru = "0.18.0"
 lyon_algorithms = "1.0.20"
@@ -58,10 +59,6 @@ nix = { version = "0.31.3", features = ["user"] }
 nmrs = "3.1.5"
 num-traits = "0.2.19"
 reqwest = "0.13.3"
-rspotify = { version = "0.16.1", features = [
-  "client-reqwest",
-  "reqwest-default-tls",
-] }
 secret-store = { path = "crates/secret-store" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

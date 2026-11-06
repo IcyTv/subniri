@@ -1,8 +1,8 @@
 use config::ConfigFile;
-use daemon_common::{SPOTIFY_REDIRECT_URL, SpotifyProxy};
+use daemon_common::{SpotifyPairing, SpotifyProxy, SpotifyStatus};
 use iced::{
 	Alignment, Border, Color, Element, Length, Task, font,
-	widget::{Svg, column, container, grid, row, space, svg, text},
+	widget::{Svg, button, column, container, grid, row, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
@@ -10,10 +10,7 @@ use neo_widgets::{
 	widgets::{neo_card, neo_toggle, neo_toggle_button},
 };
 
-use crate::{
-	oauth::{CallbackListener, OAUTH_CALLBACK_TIMEOUT},
-	setting::{InputCardOptions, input_card},
-};
+use crate::setting::{InputCardOptions, input_card};
 
 #[derive(Clone, Debug)]
 pub enum Message {
@@ -22,7 +19,10 @@ pub enum Message {
 
 	StartAuthFlow,
 
-	OnClientIdChanged(String),
+	PairingStarted(u64, Result<(SpotifyPairing, zbus::Connection), String>),
+	PairingFinished(u64, Result<(bool, String), String>),
+	CancelPairing,
+	OpenPairing,
 	PollIntervalChanged(String),
 	SyncPollInterval(u64),
 	ToggleEnabled(bool),
@@ -35,6 +35,9 @@ pub struct Spotify {
 	status: String,
 	auth_enabled: bool,
 	poll_interval: String,
+	pairing: Option<SpotifyPairing>,
+	generation: u64,
+	pairing_connection: Option<zbus::Connection>,
 }
 
 impl Spotify {
@@ -43,7 +46,10 @@ impl Spotify {
 			authenticated: false,
 			status: "Checking daemon".to_string(),
 			auth_enabled: true,
-			poll_interval: "15".to_string(),
+			poll_interval: "60".to_string(),
+			pairing: None,
+			generation: 0,
+			pairing_connection: None,
 		}
 	}
 
@@ -80,33 +86,90 @@ impl Spotify {
 			}
 			Message::StartAuthFlow => {
 				self.auth_enabled = false;
-				self.status = "Starting authorization".to_string();
-				Task::future(async {
-					match run_authorization().await {
-						Ok((authenticated, status)) => {
-							Message::UpdateAuthenticationStatus(authenticated, status)
-						}
+				self.status = "Starting Spotify pairing".to_string();
+				self.generation = self.generation.wrapping_add(1);
+				let generation = self.generation;
+				Task::future(
+					async move { Message::PairingStarted(generation, begin_pairing().await) },
+				)
+			}
+			Message::PairingStarted(generation, result) => {
+				if generation != self.generation {
+					return Task::none();
+				}
+				match result {
+					Ok((pairing, connection)) => {
+						let expires_at = pairing.expires_at;
+						self.pairing = Some(pairing);
+						self.pairing_connection = Some(connection.clone());
+						self.status = "Waiting for approval at spotify.com/pair".into();
+						Task::future(async move {
+							Message::PairingFinished(
+								generation,
+								wait_for_pairing(connection, expires_at).await,
+							)
+						})
+					}
+					Err(error) => self.update(config, Message::AuthenticationFailed(error)),
+				}
+			}
+			Message::PairingFinished(generation, result) => {
+				if generation != self.generation {
+					return Task::none();
+				}
+				self.pairing = None;
+				self.pairing_connection = None;
+				match result {
+					Ok((authenticated, status)) => self.update(
+						config,
+						Message::UpdateAuthenticationStatus(authenticated, status),
+					),
+					Err(error) => self.update(config, Message::AuthenticationFailed(error)),
+				}
+			}
+			Message::CancelPairing => {
+				self.generation = self.generation.wrapping_add(1);
+				self.pairing = None;
+				self.auth_enabled = true;
+				let connection = self.pairing_connection.take();
+				Task::future(async move {
+					let result = async {
+						let Some(connection) = connection else {
+							return spotify_status().await;
+						};
+						SpotifyProxy::new(&connection)
+							.await
+							.map_err(|error| error.to_string())?
+							.cancel_pairing()
+							.await
+							.map_err(|error| error.to_string())?;
+						spotify_status().await
+					}
+					.await;
+					match result {
+						Ok((a, s)) => Message::UpdateAuthenticationStatus(a, s),
 						Err(error) => Message::AuthenticationFailed(error),
 					}
 				})
 			}
-			Message::OnClientIdChanged(client_id) => {
-				config.spotify.client_id.clone_from(&client_id);
-				Task::done(Message::UpdateConfig)
-			}
+			Message::OpenPairing => Task::future(async {
+				let _ =
+					tokio::task::spawn_blocking(|| open::that("https://spotify.com/pair")).await;
+				Message::UpdateConfig
+			}),
 			Message::PollIntervalChanged(interval) => {
 				self.poll_interval.clone_from(&interval);
 				let Ok(interval) = interval.parse::<u64>() else {
 					return Task::none();
 				};
-				if !(5..=3600).contains(&interval) {
+				if !(60..=3600).contains(&interval) {
 					return Task::none();
 				}
 				config.spotify.poll_interval_seconds = interval;
 				Task::done(Message::UpdateConfig)
 			}
 			Message::SyncPollInterval(interval) => {
-				self.poll_interval = interval.to_string();
+				self.poll_interval = interval.max(60).to_string();
 				Task::none()
 			}
 			Message::ToggleEnabled(on) => {
@@ -118,11 +181,9 @@ impl Spotify {
 	}
 
 	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
-		let client_id_valid = Self::credentials_are_valid(&config.spotify.client_id);
 		let poll_interval = self.poll_interval.parse::<u64>().ok();
 		let poll_interval_valid =
-			poll_interval.is_some_and(|seconds| (5..=3600).contains(&seconds));
-		let poll_interval_warning = poll_interval.is_some_and(|seconds| (5..15).contains(&seconds));
+			poll_interval.is_some_and(|seconds| (60..=3600).contains(&seconds));
 		column![
 			neo_card(
 				row![
@@ -169,28 +230,14 @@ impl Spotify {
 			.background(Self::accent_color())
 			.padding(18),
 			grid![
-				input_card(
-					InputCardOptions::<_, &str, _, _>::new(
-						&config.spotify.client_id,
-						Message::OnClientIdChanged
-					)
-					.background(COLORS.decorative.green50)
-					.border(if client_id_valid {
-						COLORS.border
-					} else {
-						COLORS.feedback.danger
-					})
-					.display("CLIENT ID")
-					.placeholder("https://developer.spotify.com/dashboard")
-				),
 				neo_toggle_button(
 					phosphor_icon!("user"),
-					"Is Authenticated?",
+					"Pair Spotify",
 					&self.status,
 					self.is_authenticated(),
 					Some(COLORS.decorative.green)
 				)
-				.enabled(self.auth_enabled)
+				.enabled(self.auth_enabled && config.spotify.enabled)
 				.padding(16)
 				.width(Length::Fill)
 				.height(112)
@@ -200,7 +247,8 @@ impl Spotify {
 			.height(Length::Shrink)
 			.columns(2)
 			.spacing(14),
-			poll_interval_note(poll_interval_valid, poll_interval_warning)
+			poll_interval_note(poll_interval_valid),
+			self.pairing_view(),
 		]
 		.spacing(16)
 		.into()
@@ -218,9 +266,28 @@ impl Spotify {
 		self.authenticated
 	}
 
-	fn credentials_are_valid(client_id: &str) -> bool {
-		let plausible_regex = lazy_regex::lazy_regex!(r"^[0-9a-fA-F]{32}$");
-		plausible_regex.is_match(client_id)
+	fn pairing_view(&self) -> Element<'_, Message> {
+		if let Some(pairing) = &self.pairing {
+			neo_card(
+				column![
+					text("Enter this code at spotify.com/pair"),
+					text(&pairing.user_code).size(32),
+					row![
+						button("Open Spotify").on_press(Message::OpenPairing),
+						button("Cancel").on_press(Message::CancelPairing)
+					]
+					.spacing(12)
+				]
+				.spacing(12),
+			)
+			.padding(16)
+			.into()
+		} else {
+			text(
+				"Pair once; credentials refresh automatically. No developer account or client ID needed.",
+			)
+			.into()
+		}
 	}
 }
 
@@ -233,20 +300,18 @@ fn poll_interval_card(value: &str, valid: bool) -> Element<'_, Message> {
 			} else {
 				COLORS.feedback.danger
 			})
-			.display("POLL INTERVAL (SECONDS)")
-			.placeholder("15"),
+			.display("RECOVERY REFRESH (SECONDS)")
+			.placeholder("60"),
 	)
 }
 
-fn poll_interval_note(valid: bool, warning: bool) -> Element<'static, Message> {
-	text(if warning {
-		"Polling faster than 15 seconds increases Spotify API usage and may trigger rate limits."
-	} else if valid {
-		"Spotify checks all observed tracks in one batched request per interval."
+fn poll_interval_note(valid: bool) -> Element<'static, Message> {
+	text(if valid {
+		"Saved tracks update live. This interval is used only while reconnecting; Spotify cooldowns take precedence."
 	} else {
-		"Polling interval must be between 5 and 3600 seconds."
+		"Recovery interval must be between 60 and 3600 seconds."
 	})
-	.color(if warning || !valid {
+	.color(if !valid {
 		COLORS.feedback.danger
 	} else {
 		COLORS.text.scale_alpha(0.76)
@@ -274,55 +339,49 @@ async fn spotify_status() -> Result<(bool, String), String> {
 	Ok((authenticated, status))
 }
 
-async fn run_authorization() -> Result<(bool, String), String> {
-	let listener = CallbackListener::bind(SPOTIFY_REDIRECT_URL)
-		.await
-		.map_err(|error| error.to_string())?;
+async fn begin_pairing() -> Result<(SpotifyPairing, zbus::Connection), String> {
 	let connection = zbus::Connection::session()
 		.await
 		.map_err(|error| error.to_string())?;
 	let proxy = SpotifyProxy::new(&connection)
 		.await
 		.map_err(|error| error.to_string())?;
-	let url = proxy
-		.begin_authorization()
+	let pairing = proxy
+		.begin_pairing()
 		.await
 		.map_err(|error| error.to_string())?;
-	let open_result = tokio::task::spawn_blocking(move || open::that(url))
-		.await
-		.map_err(|error| error.to_string())?
-		.map_err(|error| error.to_string());
-	if let Err(error) = open_result {
-		let _ = proxy.cancel_authorization().await;
-		return Err(error);
-	}
+	Ok((pairing, connection))
+}
 
-	let callback = match tokio::time::timeout(OAUTH_CALLBACK_TIMEOUT, listener.receive()).await {
-		Ok(Ok(callback)) => callback,
-		Ok(Err(error)) => {
-			let _ = proxy.cancel_authorization().await;
-			return Err(error.to_string());
+async fn wait_for_pairing(
+	connection: zbus::Connection, expires_at: u64,
+) -> Result<(bool, String), String> {
+	loop {
+		// Local D-Bus status polling only: the daemon alone polls the OAuth endpoint.
+		tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+		let proxy = SpotifyProxy::new(&connection)
+			.await
+			.map_err(|error| error.to_string())?;
+		let authenticated = proxy
+			.authenticated()
+			.await
+			.map_err(|error| error.to_string())?;
+		let status = proxy.status().await.map_err(|error| error.to_string())?;
+		if authenticated {
+			return Ok((true, status.to_string()));
 		}
-		Err(_) => {
-			let _ = proxy.cancel_authorization().await;
-			return Err("Spotify authorization timed out".to_string());
+		if matches!(
+			status,
+			SpotifyStatus::AuthenticationRequired | SpotifyStatus::Error | SpotifyStatus::Disabled
+		) {
+			return Err(status.to_string());
 		}
-	};
-	let result = proxy
-		.complete_authorization(&callback.code, &callback.state)
-		.await;
-	match result {
-		Ok(true) => callback.success().await,
-		Ok(false) => {
-			callback.failure().await;
-			let _ = proxy.cancel_authorization().await;
-			return Err("Spotify did not authenticate the user".to_string());
-		}
-		Err(error) => {
-			callback.failure().await;
-			let _ = proxy.cancel_authorization().await;
-			return Err(error.to_string());
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.map_err(|error| error.to_string())?
+			.as_secs();
+		if now >= expires_at {
+			return Err("Spotify pairing expired; try again".into());
 		}
 	}
-	spotify_status().await
 }

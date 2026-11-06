@@ -891,7 +891,7 @@ fn spotify_track_id(url: Option<&str>) -> Option<String> {
 
 fn spotify_track_stream(track_id: String, generation: u64) -> impl Stream<Item = Message> {
 	async_stream::stream! {
-		loop {
+		'connection: loop {
 			let connection = match zbus::Connection::session().await {
 				Ok(connection) => connection,
 				Err(error) => {
@@ -900,7 +900,8 @@ fn spotify_track_stream(track_id: String, generation: u64) -> impl Stream<Item =
 					continue;
 				}
 			};
-			let root = match SpotifyProxy::new(&connection).await {
+			let root = match SpotifyProxy::builder(&connection)
+				.cache_properties(zbus::proxy::CacheProperties::No).build().await {
 				Ok(proxy) => proxy,
 				Err(error) => {
 					yield spotify_saved_message(&track_id, generation, None, SpotifySavedSource::Initial, Err(error.to_string()));
@@ -932,7 +933,10 @@ fn spotify_track_stream(track_id: String, generation: u64) -> impl Stream<Item =
 					continue;
 				}
 			};
-			let track_builder = match SpotifyTrackProxy::builder(&connection).path(path.clone()) {
+			// Saved is genuinely unknown until Observe completes; subscribe lazily
+			// rather than trying to preload an invented false value via GetAll.
+			let track_builder = match SpotifyTrackProxy::builder(&connection)
+				.cache_properties(zbus::proxy::CacheProperties::Lazily).path(path.clone()) {
 				Ok(builder) => builder,
 				Err(error) => {
 					yield spotify_saved_message(&track_id, generation, None, SpotifySavedSource::Initial, Err(error.to_string()));
@@ -959,8 +963,32 @@ fn spotify_track_stream(track_id: String, generation: u64) -> impl Stream<Item =
 				),
 				Err(error) => {
 					yield spotify_saved_message(&track_id, generation, None, SpotifySavedSource::Initial, Err(error.to_string()));
-					tokio::time::sleep(Duration::from_secs(5)).await;
-					continue;
+					// A failed initial read does not remove daemon observation. Keep
+					// listening for push while honoring its current (uncached) deadline.
+					let retry_at = root.retry_at().await.unwrap_or(0);
+					let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+					let deadline = tokio::time::Instant::now().checked_add(Duration::from_secs(saved_track::retry_delay_seconds(retry_at,now)));
+					let retry = async move {
+						if let Some(deadline) = deadline { tokio::time::sleep_until(deadline).await; }
+						else { std::future::pending::<()>().await; }
+					};
+					tokio::pin!(retry);
+					loop {
+						tokio::select! {
+							() = &mut retry => continue 'connection,
+							change = changes.next() => {
+								let Some(change) = change else { continue 'connection; };
+								if let Ok(saved) = change.get().await {
+									yield spotify_saved_message(&track_id,generation,Some(path.clone()),SpotifySavedSource::Initial,Ok(saved));
+									break;
+								}
+							},
+							owner = owner_changes.next() => {
+								let Some(owner) = owner else { continue 'connection; };
+								if owner.args().is_ok_and(|args|args.name().as_str()==DEFAULT_BUS_NAME.as_str()) { continue 'connection; }
+							}
+						}
+					}
 				}
 			}
 

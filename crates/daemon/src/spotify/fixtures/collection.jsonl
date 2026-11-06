@@ -1,0 +1,4 @@
+{"uri":"hm://collection/collection/fixture-user/json","headers":{"Collection-Update-Id":"save-local"},"payloads":["{\"items\":[{\"identifier\":\"3uADmRFuyQBoCwUn19B6lV\",\"type\":\"track\",\"removed\":false,\"addedAt\":1793929953,\"unheard\":false}]}"]}
+{"uri":"hm://collection/collection/fixture-user/json","headers":{"Collection-Update-Id":"save-confirmation"},"payloads":[{"items":[{"identifier":"3uADmRFuyQBoCwUn19B6lV","type":"track","removed":false,"addedAt":1793929952}]}]}
+{"uri":"hm://collection/collection/fixture-user/json","headers":{"Collection-Update-Id":"remove-local"},"payloads":[{"items":[{"identifier":"3uADmRFuyQBoCwUn19B6lV","type":"track","removed":true,"addedAt":0}]}]}
+{"uri":"hm://collection/collection/fixture-user/json","headers":{"Collection-Update-Id":"remove-confirmation"},"payloads":[{"items":[{"identifier":"3uADmRFuyQBoCwUn19B6lV","type":"track","removed":true,"addedAt":0}]}]}

@@ -1,6 +1,15 @@
 //! Saved-track decisions only: no widgets, clocks, tasks, or connections.
 use zbus::zvariant::OwnedObjectPath;
 
+/// Pure deadline decision; clocks and sleeping remain in the subscription.
+pub(super) fn retry_delay_seconds(retry_at: u64, now: u64) -> u64 {
+	if retry_at > now {
+		retry_at.saturating_sub(now).saturating_add(1).max(5)
+	} else {
+		5
+	}
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct SavedTrack {
 	id: Option<String>,
@@ -113,6 +122,11 @@ impl SavedTrack {
 					self.path = None;
 					self.saved = None;
 				}
+				if matches!(source, Source::Signal) {
+					// The daemon invalidates Saved when pairing/account generation changes.
+					// Never leave the previous account's value actionable in the UI.
+					self.saved = None;
+				}
 				Err(error)
 			}
 		}
@@ -122,6 +136,42 @@ impl SavedTrack {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn recovery_never_retries_before_the_daemon_deadline() {
+		assert_eq!(retry_delay_seconds(120, 100), 21);
+		assert_eq!(retry_delay_seconds(0, 100), 5);
+		assert_eq!(retry_delay_seconds(99, 100), 5);
+		assert_eq!(retry_delay_seconds(u64::MAX, 0), u64::MAX);
+	}
+
+	#[test]
+	fn invalidated_account_state_is_unknown_until_the_next_push()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let mut track = SavedTrack::default();
+		track.set_track(Some("track".into()));
+		let (_, generation) = track.observation().ok_or("observation missing")?;
+		let path = OwnedObjectPath::try_from("/track/test")?;
+		let event = |source, result| Observation {
+			track_id: "track".into(),
+			generation,
+			path: Some(path.clone()),
+			source,
+			result,
+		};
+		track.apply(event(Source::Initial, Ok(true)))?;
+		assert!(
+			track
+				.apply(event(Source::Signal, Err("state unknown".into())))
+				.is_err()
+		);
+		assert_eq!(track.saved(), None);
+		assert!(track.toggle().is_none());
+		track.apply(event(Source::Signal, Ok(false)))?;
+		assert_eq!(track.saved(), Some(false));
+		assert!(track.toggle().is_some());
+		Ok(())
+	}
 
 	#[test]
 	fn observation_and_mutation_ordering_is_independent_of_ui()

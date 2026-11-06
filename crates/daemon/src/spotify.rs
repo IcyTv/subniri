@@ -1,6 +1,5 @@
 use std::{
 	collections::{HashMap, HashSet},
-	path::PathBuf,
 	sync::{
 		Arc, Weak,
 		atomic::{AtomicBool, AtomicU64, Ordering},
@@ -9,18 +8,12 @@ use std::{
 };
 
 use daemon_common::{
-	SPOTIFY_OBJECT_PATH, SPOTIFY_REDIRECT_URL, Spotify, SpotifyServer, SpotifyStatus, SpotifyTrack,
+	SPOTIFY_OBJECT_PATH, Spotify, SpotifyPairing, SpotifyServer, SpotifyStatus, SpotifyTrack,
 	SpotifyTrackProperties, SpotifyTrackServer,
 };
-use rspotify::{
-	AuthCodePkceSpotify, Credentials, OAuth, Token, TokenCallback,
-	model::{LibraryId, TrackId},
-	prelude::{BaseClient, Id, OAuthClient},
-	scopes,
-};
-use secret_store::{SecretAttributes, SecretStore};
+use secret_store::SecretStore;
 use tokio::{
-	sync::{Mutex, RwLock, mpsc, oneshot, watch},
+	sync::{Mutex, Notify, RwLock, mpsc, oneshot, watch},
 	task::JoinHandle,
 	time::MissedTickBehavior,
 };
@@ -33,10 +26,19 @@ use zbus::{
 
 use crate::observed::{ObservationLimitReached, Observed, watch_disconnections};
 
+#[doc(hidden)]
+pub mod auth;
+mod collection;
+mod connection;
+pub mod protocol;
+mod rate_limit;
+mod requests;
+use rate_limit::Failure;
+
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 
-// Spotify's current /me/library/contains endpoint accepts at most 40 URIs per request.
-const MAX_OBSERVERS: usize = 40;
+// Local bounded batch/observation policy, not a claimed native-service quota.
+const MAX_OBSERVERS: usize = collection::MAX_ITEMS;
 const UNOBSERVED_TRACK_LIFETIME: Duration = Duration::from_secs(30);
 const SCHEDULER_QUEUE_CAPACITY: usize = 64;
 const MIN_REQUEST_SPACING: Duration = Duration::from_secs(1);
@@ -55,15 +57,24 @@ struct SpotifyInner {
 	poll_interval_tx: watch::Sender<u64>,
 	shutdown_tx: watch::Sender<bool>,
 	tasks: Mutex<Vec<JoinHandle<()>>>,
+	pairing_task: Mutex<Option<JoinHandle<()>>>,
+	lifecycle: watch::Sender<u64>,
+	sequence: Arc<AtomicU64>,
+	push_healthy: AtomicBool,
+	reconcile: Notify,
 }
 
 struct SpotifyState {
 	store: Option<Arc<SecretStore>>,
-	client: Option<AuthCodePkceSpotify>,
+	client: Option<Arc<requests::Api>>,
+	auth: Option<Arc<auth::Auth>>,
 	status: SpotifyStatus,
 	authenticated: bool,
 	generation: u64,
-	connection_config: Option<(bool, String)>,
+	connection_config: Option<bool>,
+	retry_at: u64,
+	pairing_owner: Option<String>,
+	push_connected: bool,
 }
 
 struct TrackRegistry {
@@ -93,6 +104,7 @@ enum SchedulerRequest {
 
 struct Scheduled<T> {
 	sequence: u64,
+	generation: u64,
 	value: T,
 }
 
@@ -101,6 +113,7 @@ struct SpotifyTrackDbus {
 	track_id: String,
 	saved: Arc<RwLock<CachedSaved>>,
 	observation: Arc<Mutex<()>>,
+	initialization: Arc<Mutex<()>>,
 	retiring: Arc<AtomicBool>,
 	expiry_generation: Arc<AtomicU64>,
 	scheduler: SpotifyScheduler,
@@ -110,6 +123,20 @@ struct SpotifyTrackDbus {
 struct CachedSaved {
 	value: bool,
 	sequence: u64,
+	generation: u64,
+}
+
+impl CachedSaved {
+	fn apply(&mut self, generation: u64, sequence: u64, saved: bool) -> bool {
+		if sequence < self.sequence {
+			return false;
+		}
+		let changed = self.sequence == 0 || self.generation != generation || self.value != saved;
+		self.sequence = sequence;
+		self.generation = generation;
+		self.value = saved;
+		changed
+	}
 }
 
 enum TrackRemoval {
@@ -153,13 +180,18 @@ impl SpotifyDbus {
 		let (scheduler_tx, scheduler_rx) = mpsc::channel(SCHEDULER_QUEUE_CAPACITY);
 		let (poll_interval_tx, poll_interval_rx) = watch::channel(poll_interval_seconds);
 		let (shutdown_tx, _) = watch::channel(false);
+		let (lifecycle, _) = watch::channel(0);
 		let state = Arc::new(RwLock::new(SpotifyState {
 			store: None,
 			client: None,
+			auth: None,
 			status: SpotifyStatus::Unconfigured,
 			authenticated: false,
 			generation: 0,
 			connection_config: None,
+			retry_at: 0,
+			pairing_owner: None,
+			push_connected: false,
 		}));
 		let service = Self {
 			inner: Arc::new(SpotifyInner {
@@ -176,6 +208,11 @@ impl SpotifyDbus {
 				poll_interval_tx,
 				shutdown_tx,
 				tasks: Mutex::new(Vec::new()),
+				pairing_task: Mutex::new(None),
+				lifecycle,
+				sequence: Arc::new(AtomicU64::new(1)),
+				push_healthy: AtomicBool::new(false),
+				reconcile: Notify::new(),
 			}),
 		};
 		(service, scheduler_rx, poll_interval_rx)
@@ -191,12 +228,17 @@ impl SpotifyDbus {
 			scheduler_state,
 			scheduler_rx,
 			scheduler_shutdown,
+			self.inner.sequence.clone(),
 		));
 
 		let poller = self.clone();
 		let poller_shutdown = self.inner.shutdown_tx.subscribe();
 		let poller_task = tokio::spawn(async move {
 			poller.run_poller(poll_interval_rx, poller_shutdown).await;
+		});
+		let sync = self.clone();
+		let sync_task = tokio::spawn(async move {
+			sync.run_sync().await;
 		});
 
 		let watcher = self.clone();
@@ -219,11 +261,12 @@ impl SpotifyDbus {
 			}
 		});
 
-		self.inner
-			.tasks
-			.lock()
-			.await
-			.extend([scheduler_task, poller_task, watcher_task]);
+		self.inner.tasks.lock().await.extend([
+			scheduler_task,
+			poller_task,
+			watcher_task,
+			sync_task,
+		]);
 		watcher_ready_rx
 			.await
 			.map_err(|_| "Spotify D-Bus disconnect watcher stopped during initialization".into())
@@ -231,6 +274,9 @@ impl SpotifyDbus {
 
 	async fn stop_tasks(&self) {
 		let _ = self.inner.shutdown_tx.send(true);
+		if let Some(task) = self.inner.pairing_task.lock().await.take() {
+			task.abort();
+		}
 		for task in std::mem::take(&mut *self.inner.tasks.lock().await) {
 			task.abort();
 			if let Err(error) = task.await
@@ -244,11 +290,17 @@ impl SpotifyDbus {
 	async fn run_poller(
 		&self, mut poll_interval: watch::Receiver<u64>, mut shutdown: watch::Receiver<bool>,
 	) {
-		let mut timer =
-			tokio::time::interval(Duration::from_secs(*poll_interval.borrow_and_update()));
-		timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-
 		loop {
+			let mut interval = reconciliation_interval(
+				self.inner.push_healthy.load(Ordering::Acquire),
+				*poll_interval.borrow_and_update(),
+			);
+			let retry_at = self.inner.state.read().await.retry_at;
+			if retry_at > unix_seconds() {
+				interval = interval.min(Duration::from_secs(
+					retry_at.saturating_sub(unix_seconds()).saturating_add(1),
+				));
+			}
 			tokio::select! {
 				changed = shutdown.changed() => {
 					if changed.is_err() || *shutdown.borrow() {
@@ -259,15 +311,147 @@ impl SpotifyDbus {
 					if changed.is_err() {
 						break;
 					}
-					timer = tokio::time::interval(Duration::from_secs(*poll_interval.borrow_and_update()));
-					timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 				}
-				_ = timer.tick() => self.poll_observed_tracks().await,
+				() = self.inner.reconcile.notified() => self.poll_observed_tracks().await,
+				() = tokio::time::sleep(interval) => self.poll_observed_tracks().await,
 			}
 		}
 	}
 
+	#[allow(clippy::too_many_lines)] // Keep lifecycle cancellation and reconnect policy together.
+	async fn run_sync(&self) {
+		let mut lifecycle = self.inner.lifecycle.subscribe();
+		let mut shutdown = self.inner.shutdown_tx.subscribe();
+		let mut failures = 0_u32;
+		loop {
+			let (auth, api, generation, enabled) = {
+				let state = self.inner.state.read().await;
+				(
+					state.auth.clone(),
+					state.client.clone(),
+					state.generation,
+					state.connection_config == Some(true) && state.authenticated,
+				)
+			};
+			if !enabled || auth.is_none() || api.is_none() {
+				tokio::select! {
+					_ = lifecycle.changed() => {},
+					_ = shutdown.changed() => break,
+				}
+				continue;
+			}
+			let Some(auth) = auth else {
+				continue;
+			};
+			let Some(api) = api else {
+				continue;
+			};
+			let (tx, mut rx) = mpsc::channel(64);
+			let mut session = ConnectionTask(tokio::spawn(connection::run(auth.clone(), api, tx)));
+			let mut maintenance = tokio::time::interval(Duration::from_secs(30));
+			maintenance.set_missed_tick_behavior(MissedTickBehavior::Skip);
+			let mut last_reconcile = tokio::time::Instant::now() - Duration::from_secs(60);
+			let failure = loop {
+				tokio::select! {
+					_ = shutdown.changed() => return,
+					_ = lifecycle.changed() => break None,
+					result = &mut session.0 => break Some(result.unwrap_or(Err(Failure::Unavailable)).err().unwrap_or(Failure::Unavailable)),
+					_ = maintenance.tick() => {
+						if let Err(failure) = auth.access_token().await { break Some(failure); }
+						if self.inner.state.read().await.status == SpotifyStatus::RateLimited { mark_recovered(&self.inner.state,generation).await; }
+					},
+					update = rx.recv() => match update {
+						Some(connection::Update::Connected) => {
+							self.inner.push_healthy.store(true,Ordering::Release);
+							failures = 0;
+							let mut state = self.inner.state.write().await;
+							state.push_connected = state.generation == generation;
+							if state.generation == generation && state.retry_at <= unix_seconds() {
+								state.status = SpotifyStatus::Ready;
+								state.retry_at = 0;
+							}
+							drop(state);
+							self.inner.reconcile.notify_one();
+						},
+						Some(connection::Update::Event(protocol::Event::Collection { changes,.. })) => {
+							let sequence = self.inner.sequence.fetch_add(1,Ordering::AcqRel);
+							for change in changes { self.apply_change(generation,sequence,&change.id,change.saved).await; }
+						},
+						Some(connection::Update::Event(protocol::Event::Reconcile)) if last_reconcile.elapsed() >= Duration::from_secs(60) => {
+								last_reconcile = tokio::time::Instant::now();
+								self.inner.reconcile.notify_one();
+						},
+						None => break Some(Failure::Unavailable),
+						_ => {},
+					}
+				}
+			};
+			drop(session);
+			if self.inner.push_healthy.swap(false, Ordering::AcqRel) {
+				self.inner.reconcile.notify_one();
+			}
+			{
+				let mut state = self.inner.state.write().await;
+				if state.generation == generation {
+					state.push_connected = false;
+				}
+			}
+			let Some(failure) = failure else {
+				continue;
+			};
+			set_failure(&self.inner.state, generation, &failure).await;
+			if failure == Failure::SessionThrottled {
+				log::warn!(
+					"Spotify session throttled without retry timing; automatic reconnect paused until re-enabled"
+				);
+				tokio::select! { _ = shutdown.changed() => break, _ = lifecycle.changed() => {} }
+				continue;
+			}
+			failures = failures.saturating_add(1);
+			let delay = match failure {
+				Failure::RateLimited(delay) => delay,
+				_ => Duration::from_secs(15_u64.saturating_mul(1 << failures.min(5)).min(900)),
+			};
+			log::warn!(retry_seconds = delay.as_secs(), failure = %failure,
+				"Spotify connection supervisor waiting before reconnect; see stage diagnostic for cause");
+			if tokio::time::Instant::now().checked_add(delay).is_none() {
+				tokio::select! { _ = shutdown.changed() => break, _ = lifecycle.changed() => {} }
+				continue;
+			}
+			tokio::select! {
+				_ = shutdown.changed() => break,
+				_ = lifecycle.changed() => {},
+				() = tokio::time::sleep(delay) => {},
+			}
+		}
+	}
+
+	async fn apply_change(&self, generation: u64, sequence: u64, id: &str, saved: bool) {
+		let state = self.inner.state.read().await;
+		if generation != state.generation {
+			return;
+		}
+		let track = self.inner.registry.lock().await.tracks.get(id).cloned();
+		let Some(track) = track else {
+			return;
+		};
+		let _observation = track.observation.lock().await;
+		if track.retiring.load(Ordering::Acquire)
+			|| !track.update_saved(generation, sequence, saved).await
+		{
+			return;
+		}
+		if let Ok(path) = track_path(id)
+			&& let Ok(emitter) = SignalEmitter::new(&self.inner.connection, path)
+		{
+			let _ = track.emit_saved_changed(&emitter).await;
+		}
+	}
+
 	async fn poll_observed_tracks(&self) {
+		if !self.inner.state.read().await.authenticated {
+			return;
+		}
 		let track_ids = self
 			.inner
 			.registry
@@ -298,38 +482,13 @@ impl SpotifyDbus {
 		}
 
 		for (track_id, saved) in track_ids.into_iter().zip(result.value) {
-			let track = self
-				.inner
-				.registry
-				.lock()
-				.await
-				.tracks
-				.get(&track_id)
-				.cloned();
-			let Some(track) = track else {
-				continue;
-			};
-			let _observation = track.observation.lock().await;
-			if track.retiring.load(Ordering::Acquire) {
-				continue;
-			}
-			if !track.update_saved(result.sequence, saved).await {
-				continue;
-			}
-
-			let path = track_path(&track_id);
-			match path.and_then(|path| SignalEmitter::new(&self.inner.connection, path)) {
-				Ok(emitter) => {
-					if let Err(error) = track.emit_saved_changed(&emitter).await {
-						log::warn!("Failed to emit Spotify saved-state change: {error}");
-					}
-				}
-				Err(error) => log::warn!("Failed to create Spotify track signal emitter: {error}"),
-			}
+			self.apply_change(result.generation, result.sequence, &track_id, saved)
+				.await;
 		}
 	}
 
 	async fn release_client(&self, client: &UniqueName<'_>) {
+		self.cancel_pairing_for(client.as_str()).await;
 		let orphaned = {
 			let mut registry = self.inner.registry.lock().await;
 			registry
@@ -463,24 +622,30 @@ impl SpotifyDbus {
 	}
 
 	pub async fn reconfigure(&self, config: config::Spotify) {
-		if config.poll_interval_seconds < 15 {
-			log::warn!(
-				"Spotify polling interval is below 15 seconds and may exceed API rate limits"
-			);
+		if !config.client_id.is_empty() {
+			log::warn!("spotify.client_id is deprecated and ignored; use pairing in snowconf");
+		}
+		if config.poll_interval_seconds < 60 {
+			log::warn!("Legacy Spotify poll interval is clamped to 60 seconds for recovery only");
 		}
 		let _ = self
 			.inner
 			.poll_interval_tx
-			.send(config.poll_interval_seconds);
+			.send(config.poll_interval_seconds.max(60));
 		let generation = {
 			let mut state = self.inner.state.write().await;
-			let connection_config = (config.enabled, config.client_id.clone());
+			let connection_config = config.enabled;
 			if state.connection_config.as_ref() == Some(&connection_config) {
 				return;
 			}
 			state.connection_config = Some(connection_config);
 			state.generation = state.generation.wrapping_add(1);
-			state.client = None;
+			// Keep quota owners across disable/enable; toggling must not clear cooldowns.
+			if let Some(client) = &state.client {
+				client.retire();
+			}
+			state.pairing_owner = None;
+			state.push_connected = false;
 			state.authenticated = false;
 			state.status = if config.enabled {
 				SpotifyStatus::Connecting
@@ -489,13 +654,13 @@ impl SpotifyDbus {
 			};
 			state.generation
 		};
-
-		if !config.enabled {
-			return;
+		if let Some(task) = self.inner.pairing_task.lock().await.take() {
+			task.abort();
 		}
-		if !valid_client_id(&config.client_id) {
-			self.set_connection_state(generation, None, SpotifyStatus::Unconfigured, false)
-				.await;
+		self.inner.push_healthy.store(false, Ordering::Release);
+		self.inner.lifecycle.send_replace(generation);
+		self.invalidate_tracks().await;
+		if !config.enabled {
 			return;
 		}
 
@@ -509,29 +674,80 @@ impl SpotifyDbus {
 			}
 		};
 
-		match initialize_client(config.client_id, store).await {
-			Ok((client, has_token)) => {
-				let refresh_token = current_refresh_token(&client).await;
-				let authenticated = has_token && client.current_user().await.is_ok();
-				restore_refresh_token(&client, refresh_token).await;
-				let status = if authenticated {
-					SpotifyStatus::Ready
-				} else {
-					SpotifyStatus::AuthenticationRequired
-				};
-				self.set_connection_state(generation, Some(client), status, authenticated)
-					.await;
+		let existing_auth = self.inner.state.read().await.auth.clone();
+		let auth = if let Some(existing) = existing_auth {
+			Ok(existing)
+		} else {
+			auth::Auth::new(store).map(Arc::new)
+		};
+		let Ok(auth) = auth else {
+			self.set_connection_state(generation, None, SpotifyStatus::Unavailable, false)
+				.await;
+			return;
+		};
+		// Malformed/obsolete credentials must not prevent the user pairing again.
+		let loaded = auth.load().await.unwrap_or(false);
+		let previous_api = self.inner.state.read().await.client.clone();
+		let api = previous_api.map_or_else(requests::Api::new, |api| Ok(api.replacement()));
+		let Ok(api) = api else {
+			return;
+		};
+		{
+			let mut state = self.inner.state.write().await;
+			if state.generation != generation {
+				return;
 			}
-			Err(error) => {
-				log::error!("Failed to initialize Spotify: {error}");
-				self.set_connection_state(generation, None, SpotifyStatus::Error, false)
-					.await;
+			state.auth = Some(auth);
+			state.client = Some(Arc::new(api));
+			state.authenticated = loaded;
+			state.status = if loaded {
+				SpotifyStatus::Connecting
+			} else {
+				SpotifyStatus::AuthenticationRequired
+			};
+		}
+		self.inner.lifecycle.send_replace(generation);
+	}
+
+	async fn cancel_pairing_for(&self, owner: &str) {
+		let mut task = self.inner.pairing_task.lock().await;
+		let mut state = self.inner.state.write().await;
+		if state.pairing_owner.as_deref() != Some(owner) {
+			return;
+		}
+		state.pairing_owner = None;
+		state.generation = state.generation.wrapping_add(1);
+		if let Some(task) = task.take() {
+			task.abort();
+		}
+		if !state.authenticated {
+			state.status = SpotifyStatus::AuthenticationRequired;
+		}
+		self.inner.lifecycle.send_replace(state.generation);
+	}
+
+	async fn invalidate_tracks(&self) {
+		let tracks: Vec<_> = self
+			.inner
+			.registry
+			.lock()
+			.await
+			.tracks
+			.values()
+			.cloned()
+			.collect();
+		for track in tracks {
+			track.saved.write().await.sequence = 0;
+			if let Ok(path) = track_path(&track.track_id)
+				&& let Ok(emitter) = SignalEmitter::new(&self.inner.connection, path)
+			{
+				let _ = track.emit_saved_changed(&emitter).await;
 			}
 		}
 	}
 
 	async fn set_connection_state(
-		&self, generation: u64, client: Option<AuthCodePkceSpotify>, status: SpotifyStatus,
+		&self, generation: u64, client: Option<Arc<requests::Api>>, status: SpotifyStatus,
 		authenticated: bool,
 	) {
 		let mut state = self.inner.state.write().await;
@@ -585,81 +801,146 @@ impl Spotify for SpotifyDbus {
 		self.inner.state.read().await.authenticated
 	}
 
-	async fn begin_authorization(&self) -> zbus::fdo::Result<String> {
-		let mut state = self.inner.state.write().await;
-		let client = state
-			.client
-			.as_mut()
-			.ok_or_else(|| zbus::fdo::Error::Failed("Spotify is not configured".to_string()))?;
-		let authorization_url = client
-			.get_authorize_url(None)
-			.map_err(|error| spotify_error(&error))?;
-		state.status = SpotifyStatus::Authorizing;
-		state.authenticated = false;
-		Ok(authorization_url)
+	async fn retry_at(&self) -> u64 {
+		self.inner.state.read().await.retry_at
 	}
 
-	async fn complete_authorization(&self, code: &str, state: &str) -> zbus::fdo::Result<bool> {
-		let (client, generation) = {
-			let current = self.inner.state.read().await;
-			if current.status != SpotifyStatus::Authorizing {
-				return Err(zbus::fdo::Error::Failed(
-					"No Spotify authorization is in progress".to_string(),
-				));
-			}
-			let client = current
-				.client
-				.clone()
-				.ok_or_else(|| zbus::fdo::Error::Failed("Spotify is not configured".to_string()))?;
-			if client.oauth.state != state {
-				return Err(zbus::fdo::Error::InvalidArgs(
-					"Spotify OAuth state did not match".to_string(),
-				));
-			}
-			(client, current.generation)
-		};
-
-		let result = match client.request_token(code).await {
-			Ok(()) => client
-				.current_user()
-				.await
-				.map(|_| ())
-				.map_err(|error| spotify_error(&error)),
-			Err(error) => Err(spotify_error(&error)),
-		};
-		let mut current = self.inner.state.write().await;
-		if current.generation != generation {
+	#[allow(clippy::too_many_lines)] // Keep generation validation and pairing commit together.
+	async fn begin_pairing(&self, header: Header<'_>) -> zbus::fdo::Result<SpotifyPairing> {
+		let caller = Self::caller(&header)?.to_string();
+		let mut task_slot = self.inner.pairing_task.lock().await;
+		if self
+			.inner
+			.state
+			.read()
+			.await
+			.pairing_owner
+			.as_ref()
+			.is_some_and(|owner| owner != &caller)
+		{
 			return Err(zbus::fdo::Error::Failed(
-				"Spotify configuration changed during authorization".to_string(),
+				"A different settings client is already pairing Spotify".into(),
 			));
 		}
-		match result {
-			Ok(()) => {
-				current.client = Some(client);
-				current.status = SpotifyStatus::Ready;
-				current.authenticated = true;
-				Ok(true)
-			}
-			Err(error) => {
-				current.status = SpotifyStatus::Error;
-				current.authenticated = false;
-				Err(error)
-			}
+		if let Some(task) = task_slot.take() {
+			task.abort();
 		}
+		let (auth, generation) = {
+			let mut state = self.inner.state.write().await;
+			if state.connection_config != Some(true) {
+				return Err(zbus::fdo::Error::Failed(
+					"Enable Spotify before pairing".into(),
+				));
+			}
+			let previous_auth = state.auth.clone().ok_or_else(|| {
+				zbus::fdo::Error::Failed("Spotify credential store is unavailable".into())
+			})?;
+			// An in-flight operation for the previous account must never acquire the
+			// newly paired account's token. Share budgets, not credential ownership.
+			let auth = Arc::new(previous_auth.fresh_identity());
+			if let Some(api) = state.client.as_ref() {
+				state.client = Some(Arc::new(api.replacement()));
+			}
+			state.auth = Some(auth.clone());
+			state.pairing_owner = Some(caller);
+			state.push_connected = false;
+			state.generation = state.generation.wrapping_add(1);
+			state.status = SpotifyStatus::Authorizing;
+			state.authenticated = false;
+			(auth, state.generation)
+		};
+		self.inner.lifecycle.send_replace(generation);
+		self.invalidate_tracks().await;
+		let grant = match auth.begin_pairing().await {
+			Ok(grant) => grant,
+			Err(error) => {
+				self.inner.state.write().await.pairing_owner = None;
+				set_failure(&self.inner.state, generation, &error).await;
+				return Err(zbus::fdo::Error::Failed(error.to_string()));
+			}
+		};
+		let public = grant
+			.public()
+			.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
+		let expires_at = public.expires_at;
+		let service = self.clone();
+		*task_slot = Some(tokio::spawn(async move {
+			let mut interval = grant.interval.max(1);
+			loop {
+				if unix_seconds() >= expires_at {
+					set_failure(
+						&service.inner.state,
+						generation,
+						&Failure::AuthenticationRequired,
+					)
+					.await;
+					break;
+				}
+				tokio::time::sleep(Duration::from_secs(
+					interval.min(expires_at.saturating_sub(unix_seconds())),
+				))
+				.await;
+				match auth.poll_pairing(&grant).await {
+					Ok(auth::Approval::Pending) => {}
+					Ok(auth::Approval::SlowDown) => interval = interval.saturating_add(5),
+					Ok(auth::Approval::Authorized(token)) => {
+						let mut state = service.inner.state.write().await;
+						if state.generation != generation
+							|| state.connection_config != Some(true)
+							|| unix_seconds() >= expires_at
+						{
+							break;
+						}
+						match auth.accept(token).await {
+							Ok(()) => {
+								state.authenticated = true;
+								state.status = SpotifyStatus::Connecting;
+								state.retry_at = 0;
+							}
+							Err(_) => state.status = SpotifyStatus::Unavailable,
+						}
+						state.pairing_owner = None;
+						drop(state);
+						service.inner.lifecycle.send_replace(generation);
+						break;
+					}
+					Err(Failure::RateLimited(delay)) => {
+						set_failure(
+							&service.inner.state,
+							generation,
+							&Failure::RateLimited(delay),
+						)
+						.await;
+						interval = interval.max(delay.as_secs().saturating_add(1));
+					}
+					Err(Failure::Unavailable) => interval = interval.saturating_mul(2).min(60),
+					Err(error) => {
+						set_failure(&service.inner.state, generation, &error).await;
+						break;
+					}
+				}
+			}
+			let mut state = service.inner.state.write().await;
+			if state.generation == generation {
+				state.pairing_owner = None;
+			}
+		}));
+		Ok(public)
 	}
 
-	async fn cancel_authorization(&self) -> zbus::fdo::Result<()> {
-		let mut state = self.inner.state.write().await;
-		if state.status == SpotifyStatus::Authorizing {
-			state.status = SpotifyStatus::AuthenticationRequired;
-		}
+	async fn cancel_pairing(&self, header: Header<'_>) -> zbus::fdo::Result<()> {
+		self.cancel_pairing_for(Self::caller(&header)?.as_str())
+			.await;
 		Ok(())
 	}
 
 	async fn get_track(&self, track_id: &str) -> zbus::fdo::Result<OwnedObjectPath> {
-		let track_id = TrackId::from_id(track_id)
-			.map_err(|error| zbus::fdo::Error::InvalidArgs(error.to_string()))?;
-		let track_id = track_id.id().to_string();
+		if !protocol::valid_track_id(track_id) {
+			return Err(zbus::fdo::Error::InvalidArgs(
+				"Invalid Spotify track ID".into(),
+			));
+		}
+		let track_id = track_id.to_owned();
 		let path = track_path(&track_id)
 			.map_err(|error| zbus::fdo::Error::InvalidArgs(error.to_string()))?;
 		let mut protected_evictions = HashSet::new();
@@ -803,8 +1084,10 @@ impl SpotifyTrackDbus {
 			saved: Arc::new(RwLock::new(CachedSaved {
 				value: false,
 				sequence: 0,
+				generation: 0,
 			})),
 			observation: Arc::new(Mutex::new(())),
+			initialization: Arc::new(Mutex::new(())),
 			retiring: Arc::new(AtomicBool::new(false)),
 			expiry_generation: Arc::new(AtomicU64::new(0)),
 			scheduler,
@@ -819,17 +1102,9 @@ impl SpotifyTrackDbus {
 			.ok_or_else(|| zbus::fdo::Error::Failed("Spotify service is shutting down".to_string()))
 	}
 
-	async fn update_saved(&self, sequence: u64, saved: bool) -> bool {
+	async fn update_saved(&self, generation: u64, sequence: u64, saved: bool) -> bool {
 		let mut cached = self.saved.write().await;
-		if sequence < cached.sequence {
-			return false;
-		}
-		cached.sequence = sequence;
-		if cached.value == saved {
-			return false;
-		}
-		cached.value = saved;
-		true
+		cached.apply(generation, sequence, saved)
 	}
 
 	async fn emit_saved_changed(&self, emitter: &SignalEmitter<'_>) -> zbus::Result<()> {
@@ -850,22 +1125,32 @@ impl SpotifyTrack for SpotifyTrackDbus {
 		self.track_id.clone()
 	}
 
-	async fn saved(&self) -> bool {
-		self.saved.read().await.value
+	async fn saved(&self) -> zbus::fdo::Result<bool> {
+		let service = self.service()?;
+		let state = service.inner.state.read().await;
+		let cached = self.saved.read().await;
+		if cached.sequence == 0 || cached.generation != state.generation {
+			return Err(zbus::fdo::Error::Failed(
+				"Spotify track state is not known yet".into(),
+			));
+		}
+		Ok(cached.value)
 	}
 
 	async fn observe(
 		&self, header: Header<'_>, emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<bool> {
 		let service = self.service()?;
+		let _initialization = self.initialization.lock().await;
+		let generation = service.inner.state.read().await.generation;
 		let caller = SpotifyDbus::caller(&header)?;
-		let _observation = self.observation.lock().await;
+		let observation = self.observation.lock().await;
 		if self.retiring.load(Ordering::Acquire) {
 			return Err(zbus::fdo::Error::Failed(
 				"Spotify track object is being released".to_string(),
 			));
 		}
-		let added = service
+		let _added = service
 			.inner
 			.registry
 			.lock()
@@ -893,15 +1178,13 @@ impl SpotifyTrack for SpotifyTrackDbus {
 				"D-Bus caller disconnected while observing Spotify track".to_string(),
 			));
 		}
-		if !added.added {
-			return Ok(self.saved.read().await.value);
-		}
-		if !added.newly_observed {
+		{
 			let cached = self.saved.read().await;
-			if cached.sequence > 0 {
+			if cached.sequence > 0 && cached.generation == generation {
 				return Ok(cached.value);
 			}
 		}
+		drop(observation);
 
 		let result = match self.scheduler.contains(vec![self.track_id.clone()]).await {
 			Ok(result) if result.value.len() == 1 => result,
@@ -913,19 +1196,20 @@ impl SpotifyTrack for SpotifyTrackDbus {
 				)));
 			}
 			Err(error) => {
-				service.remove_observation(caller, &self.track_id).await;
+				// The value is unknown, but observation is still useful: Dealer can
+				// establish it during an HTTP cooldown. Retain it until Unobserve or
+				// caller disconnect rather than evicting a subscribed track.
 				return Err(zbus::fdo::Error::Failed(error));
 			}
 		};
 		let saved = result.value.into_iter().next().ok_or_else(|| {
 			zbus::fdo::Error::Failed("Spotify returned no track state".to_string())
 		})?;
-		if self.update_saved(result.sequence, saved).await {
-			self.emit_saved_changed(&emitter)
-				.await
-				.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
-		}
-		Ok(self.saved.read().await.value)
+		let _ = emitter;
+		service
+			.apply_change(result.generation, result.sequence, &self.track_id, saved)
+			.await;
+		self.saved().await
 	}
 
 	async fn unobserve(&self, header: Header<'_>) -> zbus::fdo::Result<()> {
@@ -937,7 +1221,6 @@ impl SpotifyTrack for SpotifyTrackDbus {
 	}
 
 	async fn refresh(&self, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<bool> {
-		let _observation = self.observation.lock().await;
 		let result = self
 			.scheduler
 			.contains(vec![self.track_id.clone()])
@@ -946,38 +1229,31 @@ impl SpotifyTrack for SpotifyTrackDbus {
 		let saved = result.value.into_iter().next().ok_or_else(|| {
 			zbus::fdo::Error::Failed("Spotify returned no track state".to_string())
 		})?;
-		if self.update_saved(result.sequence, saved).await {
-			self.emit_saved_changed(&emitter)
-				.await
-				.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
-		}
-		Ok(self.saved.read().await.value)
+		let _ = emitter;
+		self.service()?
+			.apply_change(result.generation, result.sequence, &self.track_id, saved)
+			.await;
+		self.saved().await
 	}
 
 	async fn set_saved(&self, saved: bool, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<bool> {
-		let _observation = self.observation.lock().await;
-		let result = self
-			.scheduler
-			.set_saved(self.track_id.clone(), saved)
-			.await
-			.map_err(zbus::fdo::Error::Failed)?;
-		let (applied, current) = {
-			let mut cached = self.saved.write().await;
-			if result.sequence < cached.sequence {
-				(false, cached.value)
-			} else {
-				let changed = cached.value != result.value;
-				cached.sequence = result.sequence;
-				cached.value = result.value;
-				(changed, cached.value)
+		let result = match self.scheduler.set_saved(self.track_id.clone(), saved).await {
+			Ok(result) => result,
+			Err(error) => {
+				self.service()?.inner.reconcile.notify_one();
+				return Err(zbus::fdo::Error::Failed(error));
 			}
 		};
-		if applied {
-			self.emit_saved_changed(&emitter)
-				.await
-				.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
-		}
-		Ok(current)
+		let _ = emitter;
+		self.service()?
+			.apply_change(
+				result.generation,
+				result.sequence,
+				&self.track_id,
+				result.value,
+			)
+			.await;
+		self.saved().await
 	}
 }
 
@@ -992,34 +1268,117 @@ fn observation_limit_error(error: ObservationLimitReached) -> zbus::fdo::Error {
 	))
 }
 
+#[allow(clippy::too_many_lines)] // Ordered actor dispatch; reads cannot jump across mutations.
 async fn run_scheduler(
 	state: Arc<RwLock<SpotifyState>>, mut requests: mpsc::Receiver<SchedulerRequest>,
-	mut shutdown: watch::Receiver<bool>,
+	mut shutdown: watch::Receiver<bool>, sequence: Arc<AtomicU64>,
 ) {
-	let mut sequence = 0_u64;
 	let mut next_request = tokio::time::Instant::now();
+	let mut pending = std::collections::VecDeque::new();
 	loop {
+		let request = if let Some(request) = pending.pop_front() {
+			request
+		} else {
+			tokio::select! {
+				biased;
+				_ = shutdown.changed() => break,
+				request = requests.recv() => match request { Some(request) => request, None => break },
+			}
+		};
+		if let Err(error) = scheduler_request_ready(&state, &request).await {
+			reject_scheduler_request(request, error);
+			continue;
+		}
 		tokio::select! {
-			biased;
-			changed = shutdown.changed() => {
-				if changed.is_err() || *shutdown.borrow() {
-					break;
+			_ = shutdown.changed() => break,
+			() = tokio::time::sleep_until(next_request.max(tokio::time::Instant::now() + Duration::from_millis(25))) => {},
+		}
+		next_request = tokio::time::Instant::now() + MIN_REQUEST_SPACING;
+		let sequence = sequence.fetch_add(1, Ordering::AcqRel);
+		if let SchedulerRequest::Contains {
+			track_ids,
+			generation,
+			reply,
+		} = request
+		{
+			let mut batch = vec![(track_ids.clone(), reply)];
+			let mut ids = track_ids;
+			while let Ok(request) = requests.try_recv() {
+				match request {
+					SchedulerRequest::Contains {
+						track_ids,
+						generation: next_generation,
+						reply,
+					} if next_generation == generation => {
+						let mut union = ids.clone();
+						for id in &track_ids {
+							if !union.contains(id) {
+								union.push(id.clone());
+							}
+						}
+						if union.len() > MAX_OBSERVERS {
+							pending.push_back(SchedulerRequest::Contains {
+								track_ids,
+								generation: next_generation,
+								reply,
+							});
+							break;
+						}
+						ids = union;
+						batch.push((track_ids, reply));
+					}
+					other => {
+						pending.push_back(other);
+						break;
+					}
 				}
 			}
-			request = requests.recv() => {
-				let Some(request) = request else {
-					break;
-				};
-				if let Err(error) = scheduler_request_ready(&state, &request).await {
-					reject_scheduler_request(request, error);
-					continue;
+			let client = {
+				let current = state.read().await;
+				if current.generation == generation && current.authenticated {
+					current.client.clone()
+				} else {
+					None
 				}
-				tokio::time::sleep_until(next_request).await;
-				next_request = tokio::time::Instant::now() + MIN_REQUEST_SPACING;
-				sequence = sequence.wrapping_add(1);
-				if let Some(retry_after) = handle_scheduler_request(&state, request, sequence).await {
-					next_request = next_request.max(tokio::time::Instant::now() + retry_after);
+			};
+			let result = if let Some(client) = client {
+				client.contains(&ids).await
+			} else {
+				Err(Failure::AuthenticationRequired)
+			};
+			match result {
+				Ok(values) => {
+					mark_recovered(&state, generation).await;
+					let values: HashMap<_, _> = ids.into_iter().zip(values).collect();
+					for (ids, reply) in batch {
+						let value = ids
+							.iter()
+							.filter_map(|id| values.get(id).copied())
+							.collect();
+						reply_if_current(
+							&state,
+							generation,
+							reply,
+							Scheduled {
+								sequence,
+								generation,
+								value,
+							},
+						)
+						.await;
+					}
 				}
+				Err(error) => {
+					set_failure(&state, generation, &error).await;
+					for (_, reply) in batch {
+						let _ = reply.send(Err(error.to_string()));
+					}
+				}
+			}
+		} else {
+			tokio::select! {
+				_ = shutdown.changed() => break,
+				_ = handle_scheduler_request(&state,request,sequence) => {},
 			}
 		}
 	}
@@ -1035,6 +1394,9 @@ async fn scheduler_request_ready(
 	}
 	if !state.authenticated || state.client.is_none() {
 		return Err("Spotify is not authenticated".to_string());
+	}
+	if let Some(client) = &state.client {
+		client.ready().await.map_err(|error| error.to_string())?;
 	}
 	Ok(())
 }
@@ -1118,28 +1480,23 @@ async fn handle_scheduler_request(
 }
 
 async fn handle_contains_request(
-	state: &RwLock<SpotifyState>, client: AuthCodePkceSpotify, track_ids: Vec<String>,
+	state: &RwLock<SpotifyState>, client: Arc<requests::Api>, track_ids: Vec<String>,
 	generation: u64, sequence: u64, reply: oneshot::Sender<Result<Scheduled<Vec<bool>>, String>>,
 ) -> Option<Duration> {
-	let tracks = track_ids
-		.into_iter()
-		.map(|id| TrackId::from_id(id).map_err(|error| error.to_string()))
-		.collect::<Result<Vec<_>, _>>();
-	let tracks = match tracks {
-		Ok(tracks) => tracks,
-		Err(error) => {
-			let _ = reply.send(Err(error));
-			return None;
-		}
-	};
-	let refresh_token = current_refresh_token(&client).await;
-	let result = client
-		.library_contains(tracks.into_iter().map(LibraryId::Track))
-		.await;
-	restore_refresh_token(&client, refresh_token).await;
+	let result = client.contains(&track_ids).await;
 	match result {
 		Ok(value) => {
-			reply_if_current(state, generation, reply, Scheduled { sequence, value }).await;
+			reply_if_current(
+				state,
+				generation,
+				reply,
+				Scheduled {
+					sequence,
+					generation,
+					value,
+				},
+			)
+			.await;
 			None
 		}
 		Err(error) => handle_api_error(state, generation, reply, error).await,
@@ -1147,31 +1504,20 @@ async fn handle_contains_request(
 }
 
 async fn handle_set_saved_request(
-	state: &RwLock<SpotifyState>, client: AuthCodePkceSpotify, track_id: String, saved: bool,
+	state: &RwLock<SpotifyState>, client: Arc<requests::Api>, track_id: String, saved: bool,
 	generation: u64, sequence: u64, reply: oneshot::Sender<Result<Scheduled<bool>, String>>,
 ) -> Option<Duration> {
-	let track = match TrackId::from_id(track_id) {
-		Ok(track) => track,
-		Err(error) => {
-			let _ = reply.send(Err(error.to_string()));
-			return None;
-		}
-	};
-	let refresh_token = current_refresh_token(&client).await;
-	let result = if saved {
-		client.library_add([LibraryId::Track(track)]).await
-	} else {
-		client.library_remove([LibraryId::Track(track)]).await
-	};
-	restore_refresh_token(&client, refresh_token).await;
+	let result = client.set_saved(track_id, saved).await;
 	match result {
-		Ok(()) => {
+		Ok(_) => {
+			mark_recovered(state, generation).await;
 			reply_if_current(
 				state,
 				generation,
 				reply,
 				Scheduled {
 					sequence,
+					generation,
 					value: saved,
 				},
 			)
@@ -1197,202 +1543,452 @@ async fn reply_if_current<T>(
 
 async fn handle_api_error<T>(
 	state: &RwLock<SpotifyState>, generation: u64,
-	reply: oneshot::Sender<Result<Scheduled<T>, String>>, error: rspotify::ClientError,
+	reply: oneshot::Sender<Result<Scheduled<T>, String>>, error: Failure,
 ) -> Option<Duration> {
-	let retry_after = spotify_retry_after(&error);
-	log::warn!("Spotify API request failed: {error}");
-	if matches!(error, rspotify::ClientError::InvalidToken)
-		|| spotify_status_code(&error) == Some(401)
-	{
-		mark_authentication_required(state, generation).await;
-	}
+	set_failure(state, generation, &error).await;
 	let _ = reply.send(Err(error.to_string()));
-	retry_after
+	None
 }
 
-fn spotify_retry_after(error: &rspotify::ClientError) -> Option<Duration> {
-	if spotify_status_code(error) != Some(429) {
-		return None;
+fn unix_seconds() -> u64 {
+	u64::try_from(chrono::Utc::now().timestamp()).unwrap_or(0)
+}
+
+fn reconciliation_interval(push_healthy: bool, recovery_seconds: u64) -> Duration {
+	Duration::from_secs(if push_healthy {
+		900
+	} else {
+		recovery_seconds.max(60)
+	})
+}
+
+struct ConnectionTask(JoinHandle<Result<(), Failure>>);
+impl Drop for ConnectionTask {
+	fn drop(&mut self) {
+		self.0.abort();
 	}
-	let rspotify::ClientError::Http(error) = error else {
-		return None;
-	};
-	let rspotify::http::HttpError::StatusCode(response) = error.as_ref() else {
-		return None;
-	};
-	response
-		.headers()
-		.get("retry-after")?
-		.to_str()
-		.ok()?
-		.parse()
-		.ok()
-		.map(Duration::from_secs)
 }
 
-fn spotify_status_code(error: &rspotify::ClientError) -> Option<u16> {
-	let rspotify::ClientError::Http(error) = error else {
-		return None;
-	};
-	let rspotify::http::HttpError::StatusCode(response) = error.as_ref() else {
-		return None;
-	};
-	Some(response.status().as_u16())
-}
-
-async fn mark_authentication_required(state: &RwLock<SpotifyState>, generation: u64) {
+async fn mark_recovered(state: &RwLock<SpotifyState>, generation: u64) {
 	let mut state = state.write().await;
-	if state.generation == generation {
-		state.authenticated = false;
-		state.status = SpotifyStatus::AuthenticationRequired;
+	if state.generation == generation && state.authenticated && state.retry_at <= unix_seconds() {
+		state.retry_at = 0;
+		state.status = if state.push_connected {
+			SpotifyStatus::Ready
+		} else {
+			SpotifyStatus::Connecting
+		};
 	}
 }
 
-async fn current_refresh_token(client: &AuthCodePkceSpotify) -> Option<String> {
-	client
-		.get_token()
-		.lock()
-		.await
-		.ok()
-		.and_then(|token| token.as_ref().and_then(|token| token.refresh_token.clone()))
-}
-
-async fn restore_refresh_token(client: &AuthCodePkceSpotify, refresh_token: Option<String>) {
-	let Some(refresh_token) = refresh_token else {
+async fn set_failure(state: &RwLock<SpotifyState>, generation: u64, failure: &Failure) {
+	let mut state = state.write().await;
+	if state.generation != generation {
 		return;
-	};
-	let token = client.get_token();
-	let Ok(mut token) = token.lock().await else {
-		return;
-	};
-	if let Some(token) = token.as_mut()
-		&& token.refresh_token.is_none()
-	{
-		token.refresh_token = Some(refresh_token);
+	}
+	match failure {
+		Failure::AuthenticationRequired => {
+			state.authenticated = false;
+			state.status = SpotifyStatus::AuthenticationRequired;
+		}
+		Failure::RateLimited(delay) => {
+			state.retry_at = state.retry_at.max(
+				unix_seconds()
+					.saturating_add(delay.as_secs())
+					.saturating_add(1),
+			);
+			state.status = SpotifyStatus::RateLimited;
+		}
+		Failure::SessionThrottled => {
+			state.status = SpotifyStatus::RateLimited;
+			state.retry_at = 0;
+		}
+		Failure::Forbidden | Failure::InvalidResponse => state.status = SpotifyStatus::Error,
+		Failure::Unavailable => state.status = SpotifyStatus::Unavailable,
 	}
 }
 
 fn track_path(track_id: &str) -> zbus::Result<OwnedObjectPath> {
+	if !protocol::valid_track_id(track_id) {
+		return Err(zbus::Error::Failure("Invalid Spotify track ID".into()));
+	}
 	OwnedObjectPath::try_from(format!("{TRACK_OBJECT_PATH_PREFIX}/{track_id}"))
 		.map_err(zbus::Error::from)
-}
-
-async fn initialize_client(
-	client_id: String, store: Arc<SecretStore>,
-) -> Result<(AuthCodePkceSpotify, bool), Error> {
-	let credentials = Credentials::new_pkce(&client_id);
-	let oauth = OAuth {
-		redirect_uri: SPOTIFY_REDIRECT_URL.to_string(),
-		scopes: scopes!("user-library-read user-library-modify"),
-		..Default::default()
-	};
-
-	let (token_tx, mut token_rx) = tokio::sync::mpsc::unbounded_channel();
-	let callback = TokenCallback(Box::new(move |token| {
-		let _ = token_tx.send(token);
-		Ok(())
-	}));
-	let token_store = store.clone();
-	tokio::spawn(async move {
-		while let Some(token) = token_rx.recv().await {
-			if let Err(error) = persist_token(&token_store, token).await {
-				log::error!("Failed to persist Spotify token: {error}");
-			}
-		}
-	});
-
-	let rspotify_config = rspotify::Config {
-		token_cached: false,
-		token_refreshing: true,
-		token_callback_fn: Arc::new(Some(callback)),
-		cache_path: PathBuf::from("/dev/null/invalid"),
-		..Default::default()
-	};
-
-	let attributes = spotify_attributes();
-	let access_token = store
-		.get(&attributes.clone().insert("type", "access_token"))
-		.await?;
-	let expiry = store
-		.get(&attributes.clone().insert("type", "access_token_expiry"))
-		.await?;
-	let refresh_token = store
-		.get(&attributes.insert("type", "refresh_token"))
-		.await?;
-	let token = access_token.zip(expiry).map(|(access_token, expiry)| {
-		let expires_at = chrono::DateTime::parse_from_rfc3339(&expiry).map_or_else(
-			|_| chrono::Utc::now(),
-			|date| date.with_timezone(&chrono::Utc),
-		);
-		Token {
-			access_token,
-			expires_in: expires_at - chrono::Utc::now(),
-			expires_at: Some(expires_at),
-			refresh_token,
-			scopes: oauth.scopes.clone(),
-		}
-	});
-	let has_token = token.is_some();
-	let client = if let Some(token) = token {
-		AuthCodePkceSpotify::from_token_with_config(token, credentials, oauth, rspotify_config)
-	} else {
-		AuthCodePkceSpotify::with_config(credentials, oauth, rspotify_config)
-	};
-	Ok((client, has_token))
-}
-
-async fn persist_token(store: &SecretStore, token: Token) -> Result<(), secret_store::Error> {
-	if token.is_expired() {
-		return Ok(());
-	}
-	let expiry = token
-		.expires_at
-		.unwrap_or_else(|| chrono::Utc::now() + token.expires_in)
-		.to_rfc3339();
-	let attributes = spotify_attributes();
-	store
-		.store(
-			"Spotify Access Token",
-			&attributes.clone().insert("type", "access_token"),
-			token.access_token,
-		)
-		.await?;
-	store
-		.store(
-			"Spotify Access Token Expiry",
-			&attributes.clone().insert("type", "access_token_expiry"),
-			expiry,
-		)
-		.await?;
-	if let Some(refresh_token) = token.refresh_token {
-		store
-			.store(
-				"Spotify Refresh Token",
-				&attributes.insert("type", "refresh_token"),
-				refresh_token,
-			)
-			.await?;
-	}
-	Ok(())
-}
-
-fn spotify_attributes() -> SecretAttributes {
-	SecretAttributes::new()
-		.insert("application", "subniri")
-		.insert("service", "spotify")
-}
-
-fn valid_client_id(client_id: &str) -> bool {
-	client_id.len() == 32 && client_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-fn spotify_error(error: &rspotify::ClientError) -> zbus::fdo::Error {
-	zbus::fdo::Error::Failed(error.to_string())
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[tokio::test]
+	async fn initial_cooldown_retains_observation_and_push_establishes_state_without_http() {
+		use daemon_common::SpotifyTrackProxy;
+		use futures::StreamExt;
+		use std::{
+			io::BufRead,
+			process::{Command, Stdio},
+		};
+		use tokio::io::{AsyncReadExt, AsyncWriteExt};
+		struct PrivateBus(std::process::Child);
+		impl Drop for PrivateBus {
+			fn drop(&mut self) {
+				let _ = self.0.kill();
+				let _ = self.0.wait();
+			}
+		}
+		// A private bus, never the user's real session bus. No AP/Dealer workers.
+		let mut bus = PrivateBus(
+			Command::new("dbus-daemon")
+				.args(["--session", "--nofork", "--print-address=1"])
+				.stdout(Stdio::piped())
+				.stderr(Stdio::null())
+				.spawn()
+				.expect("private D-Bus regression requires dbus-daemon"),
+		);
+		let mut address = String::new();
+		std::io::BufReader::new(bus.0.stdout.take().unwrap())
+			.read_line(&mut address)
+			.unwrap();
+		let server = zbus::connection::Builder::address(address.trim())
+			.unwrap()
+			.name(daemon_common::DEFAULT_BUS_NAME.clone())
+			.unwrap()
+			.build()
+			.await
+			.unwrap();
+		let client = zbus::connection::Builder::address(address.trim())
+			.unwrap()
+			.build()
+			.await
+			.unwrap();
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let api = Arc::new(requests::Api::test_with_base(format!(
+			"http://{}",
+			listener.local_addr().unwrap()
+		)));
+		let http = tokio::spawn(async move {
+			let (mut socket, _) = listener.accept().await.unwrap();
+			let mut bytes = [0; 8192];
+			socket.read(&mut bytes).await.unwrap();
+			socket.write_all(b"HTTP/1.1 429 Too Many Requests\r\nRetry-After: 7200\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await.unwrap();
+			assert!(
+				tokio::time::timeout(Duration::from_millis(150), listener.accept())
+					.await
+					.is_err()
+			);
+		});
+		let (service, rx, _interval) = SpotifyDbus::new(server.clone(), 60);
+		{
+			let mut state = service.inner.state.write().await;
+			state.client = Some(api.clone());
+			state.authenticated = true;
+			state.generation = 1;
+		}
+		let (stop, shutdown) = watch::channel(false);
+		let worker = tokio::spawn(run_scheduler(
+			service.inner.state.clone(),
+			rx,
+			shutdown,
+			service.inner.sequence.clone(),
+		));
+		let id = "3uADmRFuyQBoCwUn19B6lV";
+		let track = SpotifyTrackDbus::new(
+			id.into(),
+			service.inner.scheduler.clone(),
+			Arc::downgrade(&service.inner),
+		);
+		service
+			.inner
+			.registry
+			.lock()
+			.await
+			.tracks
+			.insert(id.into(), track.clone());
+		let path = track_path(id).unwrap();
+		server
+			.object_server()
+			.at(path.clone(), SpotifyTrackServer(track))
+			.await
+			.unwrap();
+		let proxy = SpotifyTrackProxy::builder(&client)
+			.path(path)
+			.unwrap()
+			.cache_properties(zbus::proxy::CacheProperties::Lazily)
+			.build()
+			.await
+			.unwrap();
+		let mut changes = proxy.receive_saved_changed().await;
+		assert!(proxy.observe().await.is_err());
+		assert!(
+			service
+				.inner
+				.registry
+				.lock()
+				.await
+				.observed
+				.is_observed(&id.to_owned())
+		);
+		assert!(matches!(api.ready().await, Err(Failure::RateLimited(_))));
+		service.apply_change(1, 2, id, true).await;
+		let change = tokio::time::timeout(Duration::from_secs(3), changes.next())
+			.await
+			.unwrap()
+			.unwrap();
+		assert!(change.get().await.unwrap());
+		assert!(matches!(api.ready().await, Err(Failure::RateLimited(_))));
+		proxy.unobserve().await.unwrap();
+		assert!(
+			!service
+				.inner
+				.registry
+				.lock()
+				.await
+				.observed
+				.is_observed(&id.to_owned())
+		);
+		http.await.unwrap();
+		stop.send(true).unwrap();
+		worker.await.unwrap();
+	}
+
+	fn mock_state(api: Arc<requests::Api>) -> Arc<RwLock<SpotifyState>> {
+		Arc::new(RwLock::new(SpotifyState {
+			store: None,
+			client: Some(api),
+			auth: None,
+			status: SpotifyStatus::Ready,
+			authenticated: true,
+			generation: 1,
+			connection_config: Some(true),
+			retry_at: 0,
+			pairing_owner: None,
+			push_connected: true,
+		}))
+	}
+
+	#[tokio::test]
+	async fn simultaneous_initial_observations_are_one_batched_http_request() {
+		use tokio::io::{AsyncReadExt, AsyncWriteExt};
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let base = format!("http://{}", listener.local_addr().unwrap());
+		let server = tokio::spawn(async move {
+			let (mut socket, _) = listener.accept().await.unwrap();
+			let mut data = Vec::new();
+			loop {
+				let mut bytes = [0; 1024];
+				let n = socket.read(&mut bytes).await.unwrap();
+				assert_ne!(n, 0);
+				data.extend_from_slice(&bytes[..n]);
+				if let Some(end) = data.windows(4).position(|chunk| chunk == b"\r\n\r\n") {
+					let head = String::from_utf8_lossy(&data[..end]);
+					let len: usize = head
+						.lines()
+						.find_map(|line| {
+							line.to_ascii_lowercase()
+								.strip_prefix("content-length: ")
+								.map(str::to_owned)
+						})
+						.unwrap()
+						.parse()
+						.unwrap();
+					if data.len() >= end + 4 + len {
+						break;
+					}
+				}
+			}
+			let text = String::from_utf8(data).unwrap();
+			assert!(text.contains("3uADmRFuyQBoCwUn19B6lV"));
+			assert!(text.contains("4iV5W9uYEdYUVa79Axb7Rh"));
+			assert!(text.starts_with("POST /collection/v2/contains "));
+			let body = [10, 2, 1, 0];
+			socket
+				.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\n")
+				.await
+				.unwrap();
+			socket.write_all(&body).await.unwrap();
+		});
+		let api = Arc::new(requests::Api::test_with_base(base));
+		let state = mock_state(api);
+		let (tx, rx) = mpsc::channel(64);
+		let (stop, shutdown) = watch::channel(false);
+		let worker = tokio::spawn(run_scheduler(
+			state,
+			rx,
+			shutdown,
+			Arc::new(AtomicU64::new(1)),
+		));
+		let (a, first) = oneshot::channel();
+		let (b, second) = oneshot::channel();
+		tx.send(SchedulerRequest::Contains {
+			track_ids: vec!["3uADmRFuyQBoCwUn19B6lV".into()],
+			generation: 1,
+			reply: a,
+		})
+		.await
+		.unwrap();
+		tx.send(SchedulerRequest::Contains {
+			track_ids: vec!["4iV5W9uYEdYUVa79Axb7Rh".into()],
+			generation: 1,
+			reply: b,
+		})
+		.await
+		.unwrap();
+		assert_eq!(first.await.unwrap().unwrap().value, [true]);
+		assert_eq!(second.await.unwrap().unwrap().value, [false]);
+		server.await.unwrap();
+		stop.send(true).unwrap();
+		worker.await.unwrap();
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn generation_is_rechecked_after_pacing_before_any_http_request() {
+		let api = Arc::new(requests::Api::test_with_base("http://127.0.0.1:9".into()));
+		let state = mock_state(api);
+		let (tx, rx) = mpsc::channel(64);
+		let (stop, shutdown) = watch::channel(false);
+		let worker = tokio::spawn(run_scheduler(
+			state.clone(),
+			rx,
+			shutdown,
+			Arc::new(AtomicU64::new(1)),
+		));
+		let (reply, response) = oneshot::channel();
+		tx.send(SchedulerRequest::Contains {
+			track_ids: vec!["3uADmRFuyQBoCwUn19B6lV".into()],
+			generation: 1,
+			reply,
+		})
+		.await
+		.unwrap();
+		tokio::task::yield_now().await;
+		state.write().await.generation = 2;
+		tokio::time::advance(Duration::from_secs(1)).await;
+		let error = response.await.unwrap().err().unwrap();
+		assert_eq!(error, Failure::AuthenticationRequired.to_string()); // not a loopback transport error
+		stop.send(true).unwrap();
+		worker.await.unwrap();
+	}
+
+	#[test]
+	fn healthy_push_never_uses_the_legacy_fast_poll_interval() {
+		assert_eq!(reconciliation_interval(true, 5), Duration::from_secs(900));
+		assert_eq!(reconciliation_interval(false, 5), Duration::from_secs(60));
+		assert_eq!(
+			reconciliation_interval(false, 300),
+			Duration::from_secs(300)
+		);
+	}
+
+	#[tokio::test]
+	async fn cooldown_and_transient_failures_preserve_pairing_and_recover() {
+		let state = RwLock::new(SpotifyState {
+			store: None,
+			client: None,
+			auth: None,
+			status: SpotifyStatus::Ready,
+			authenticated: true,
+			generation: 7,
+			connection_config: Some(true),
+			retry_at: 0,
+			pairing_owner: None,
+			push_connected: true,
+		});
+		set_failure(&state, 7, &Failure::RateLimited(Duration::from_secs(3600))).await;
+		assert!(state.read().await.authenticated);
+		mark_recovered(&state, 7).await;
+		assert_eq!(state.read().await.status, SpotifyStatus::RateLimited);
+		state.write().await.retry_at = unix_seconds().saturating_sub(1);
+		mark_recovered(&state, 7).await;
+		assert_eq!(state.read().await.status, SpotifyStatus::Ready);
+		set_failure(&state, 7, &Failure::Unavailable).await;
+		assert!(state.read().await.authenticated);
+		set_failure(&state, 6, &Failure::AuthenticationRequired).await;
+		assert!(state.read().await.authenticated); // old generation cannot revoke a new grant
+	}
+
+	#[tokio::test]
+	async fn websocket_changes_reach_the_same_dbus_property_stream_used_by_the_bar() {
+		use daemon_common::SpotifyTrackProxy;
+		use futures::StreamExt;
+		let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
+		let guid = zbus::Guid::generate();
+		let server = zbus::connection::Builder::unix_stream(server_socket)
+			.p2p()
+			.server(guid)
+			.unwrap()
+			.build();
+		let client = zbus::connection::Builder::unix_stream(client_socket)
+			.p2p()
+			.build();
+		let (server, client) = tokio::join!(server, client);
+		let server = server.unwrap();
+		let client = client.unwrap();
+		// Deliberately do NOT start network workers or install an HTTP/auth client.
+		let (service, _requests, _interval) = SpotifyDbus::new(server.clone(), 60);
+		service.inner.state.write().await.generation = 1;
+		let id = "3uADmRFuyQBoCwUn19B6lV";
+		let track = SpotifyTrackDbus::new(
+			id.into(),
+			service.inner.scheduler.clone(),
+			Arc::downgrade(&service.inner),
+		);
+		service
+			.inner
+			.registry
+			.lock()
+			.await
+			.tracks
+			.insert(id.into(), track.clone());
+		let path = track_path(id).unwrap();
+		server
+			.object_server()
+			.at(path.clone(), SpotifyTrackServer(track))
+			.await
+			.unwrap();
+		let proxy = SpotifyTrackProxy::builder(&client)
+			.path(path)
+			.unwrap()
+			.cache_properties(zbus::proxy::CacheProperties::Lazily)
+			.build()
+			.await
+			.unwrap();
+		assert!(proxy.saved().await.is_err()); // unknown must never be false
+		let mut changes = proxy.receive_saved_changed().await;
+		for (sequence, saved) in [(2, true), (3, false)] {
+			let value: serde_json::Value = serde_json::json!({"uri":"hm://collection/collection/user/json","payloads":[{"items":[{"type":"track","identifier":id,"removed":!saved}]}]});
+			let protocol::Event::Collection { changes: items, .. } =
+				protocol::decode(&value, "user")
+			else {
+				panic!("Expected collection event");
+			};
+			for item in items {
+				service
+					.apply_change(1, sequence, &item.id, item.saved)
+					.await;
+			}
+			let change = tokio::time::timeout(Duration::from_secs(3), changes.next())
+				.await
+				.unwrap()
+				.unwrap();
+			assert_eq!(change.get().await.unwrap(), saved);
+		}
+	}
+
+	#[test]
+	fn push_cannot_be_overwritten_by_an_older_http_read_or_write_completion() {
+		let mut cache = CachedSaved {
+			value: false,
+			sequence: 0,
+			generation: 1,
+		};
+		assert!(cache.apply(1, 2, true));
+		assert!(!cache.apply(1, 1, false));
+		assert!(cache.value);
+		assert!(!cache.apply(1, 3, true)); // duplicate remote confirmation emits no signal
+		assert!(cache.apply(1, 4, false));
+		assert!(!cache.apply(1, 3, true));
+		assert!(!cache.value);
+	}
 
 	#[test]
 	fn creates_stable_track_object_paths() {
@@ -1407,23 +2003,5 @@ mod tests {
 	#[test]
 	fn rejects_invalid_track_object_paths() {
 		assert!(track_path("not-a-track").is_err());
-	}
-
-	#[tokio::test]
-	async fn restores_refresh_token_omitted_by_pkce_refresh_response() {
-		let client = AuthCodePkceSpotify::from_token(Token {
-			access_token: "access".to_string(),
-			expires_in: chrono::Duration::hours(1),
-			expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
-			refresh_token: None,
-			scopes: std::collections::HashSet::new(),
-		});
-
-		restore_refresh_token(&client, Some("refresh".to_string())).await;
-
-		assert_eq!(
-			current_refresh_token(&client).await.as_deref(),
-			Some("refresh")
-		);
 	}
 }
