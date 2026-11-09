@@ -2489,7 +2489,7 @@ dependencies = [
 [[package]]
 name = "exwlshellev"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "calloop 0.14.5",
  "calloop-wayland-source 0.4.1",
@@ -2551,17 +2551,23 @@ version = "0.0.1"
 dependencies = [
  "async-channel",
  "clap",
+ "config",
  "dirs 6.0.0",
+ "futures",
  "iced",
+ "iced_exwlshell",
  "iced_runtime",
  "ignore",
+ "image",
+ "libc",
  "log 0.0.1",
  "mime",
  "neo-widgets",
+ "nix 0.31.3",
  "serde",
  "serde_json",
  "tokio",
- "undo",
+ "utilities",
  "xdg-mime",
  "zbus",
 ]
@@ -3562,7 +3568,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -3575,7 +3581,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "enumflags2",
  "exwlshellev",
@@ -3601,7 +3607,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell_macros"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "darling 0.24.1",
  "manyhow",
@@ -3696,7 +3702,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "futures",
  "iced_core",
@@ -4430,7 +4436,6 @@ dependencies = [
  "eyre",
  "freedesktop-desktop-entry",
  "futures",
- "fuzzy-matcher",
  "iced",
  "iced_exwlshell",
  "iced_runtime",
@@ -4443,7 +4448,6 @@ dependencies = [
  "neo-widgets",
  "serde",
  "serde_json",
- "strsim 0.11.1",
  "tantivy 0.26.2",
  "tantivy-derive",
  "tokio",
@@ -8056,9 +8060,6 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
-dependencies = [
- "serde",
-]
 
 [[package]]
 name = "slotmap"
@@ -9702,16 +9703,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "undo"
-version = "0.52.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1dfbb202cb07dd2a685c765aa040db18d8a0dbe7079cf57c275833521f67653"
-dependencies = [
- "serde",
- "slab",
-]
-
-[[package]]
 name = "unicase"
 version = "2.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9869,6 +9860,10 @@ checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
 [[package]]
 name = "utilities"
 version = "0.0.1"
+dependencies = [
+ "fuzzy-matcher",
+ "strsim 0.11.1",
+]
 
 [[package]]
 name = "uuid"
@@ -10061,7 +10056,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?branch=master#e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=de5fcc2c33c723f2a8c8c9079d6b4877679ace33#de5fcc2c33c723f2a8c8c9079d6b4877679ace33"
 dependencies = [
  "calloop 0.14.5",
  "log 0.4.35",

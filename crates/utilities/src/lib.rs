@@ -109,3 +109,4 @@ mod tests {
 }
 mod latest_write;
 pub use latest_write::LatestWrite;
+pub mod matching;

@@ -11,11 +11,10 @@ use std::{
 use async_channel::{Receiver, Sender};
 use config::LauncherTypoSearch;
 use freedesktop_desktop_entry::{DesktopEntry, desktop_entries, get_languages_from_env};
-use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use iced::widget::{span, text::Span};
 use neo_widgets::{icons::resolve_icon, style::COLORS};
-use strsim::damerau_levenshtein;
 use tokio::{process::Command, sync::RwLock};
+use utilities::matching::{self, SkimMatcherV2, TypoOptions};
 use zbus::zvariant::{OwnedObjectPath, Value};
 
 use crate::providers::{
@@ -544,133 +543,34 @@ impl AnalyzeMatch {
 fn analyze_match(
 	text: &str, pattern: &str, matcher: &SkimMatcherV2, typo_search: Option<&LauncherTypoSearch>,
 ) -> Option<AnalyzeMatch> {
-	let fuzzy = analyze_fuzzy_match(text, pattern, matcher);
+	let options = typo_search.map(typo_options);
+	matching::analyze(text, pattern, matcher, options.as_ref()).map(from_shared_match)
+}
 
-	if fuzzy.as_ref().is_some_and(|m| {
-		matches!(
-			m.kind,
-			MatchKind::Exact | MatchKind::Prefix | MatchKind::Substring
-		)
-	}) {
-		return fuzzy;
-	}
-
-	if let Some(typo_search) = typo_search {
-		analyze_typo_match(text, pattern, typo_search).or(fuzzy)
-	} else {
-		fuzzy
+fn from_shared_match(value: matching::Match) -> AnalyzeMatch {
+	AnalyzeMatch {
+		score: value.score,
+		kind: value.kind,
+		indices: value.indices,
 	}
 }
 
-fn analyze_fuzzy_match(text: &str, pattern: &str, matcher: &SkimMatcherV2) -> Option<AnalyzeMatch> {
-	let (score, indices) = matcher.fuzzy_indices(text, pattern)?;
-
-	#[allow(clippy::indexing_slicing)]
-	let is_contiguous = indices.windows(2).all(|w| w[0] + 1 == w[1]);
-
-	let kind = if indices.len() == text.len() {
-		MatchKind::Exact
-	} else if is_contiguous && indices.first().is_some_and(|i| *i == 0) {
-		MatchKind::Prefix
-	} else if is_contiguous {
-		MatchKind::Substring
-	} else {
-		MatchKind::Fuzzy
-	};
-
-	Some(AnalyzeMatch {
-		score,
-		kind,
-		indices: Arc::from(indices),
-	})
-}
-
+#[cfg(test)]
 fn analyze_typo_match(
 	text: &str, pattern: &str, typo_search: &LauncherTypoSearch,
 ) -> Option<AnalyzeMatch> {
-	let pattern_len = pattern.chars().count();
-	let max_distance = typo_distance_limit(pattern_len, typo_search)?;
-	let pattern = pattern.to_lowercase();
-	let mut best: Option<AnalyzeMatch> = None;
-
-	for token in typo_tokens(text) {
-		if token.indices.len() < pattern_len {
-			continue;
-		}
-
-		let token_prefix = token
-			.chars
-			.iter()
-			.take(pattern_len)
-			.collect::<String>()
-			.to_lowercase();
-		let distance = damerau_levenshtein(&pattern, &token_prefix);
-
-		if distance == 0 || distance > max_distance {
-			continue;
-		}
-
-		let start = token.indices[0];
-		let score = 48 - (distance as i64 * 12) - (start.min(20) as i64);
-		if score <= 0 {
-			continue;
-		}
-
-		let candidate = AnalyzeMatch {
-			score,
-			kind: MatchKind::Typo,
-			indices: Arc::from(&token.indices[..pattern_len]),
-		};
-
-		if best
-			.as_ref()
-			.is_none_or(|best| candidate.score > best.score)
-		{
-			best = Some(candidate);
-		}
-	}
-
-	best
+	matching::typo_match(text, pattern, &typo_options(typo_search)).map(from_shared_match)
 }
 
-fn typo_distance_limit(pattern_len: usize, typo_search: &LauncherTypoSearch) -> Option<usize> {
-	if pattern_len < typo_search.min_chars as usize {
-		None
-	} else if pattern_len <= typo_search.short_query_chars as usize {
-		Some(typo_search.short_max_distance as usize)
-	} else if pattern_len <= typo_search.medium_query_chars as usize {
-		Some(typo_search.medium_max_distance as usize)
-	} else {
-		Some(typo_search.long_max_distance as usize)
+fn typo_options(value: &LauncherTypoSearch) -> TypoOptions {
+	TypoOptions {
+		min_chars: value.min_chars,
+		short_query_chars: value.short_query_chars,
+		short_max_distance: value.short_max_distance,
+		medium_query_chars: value.medium_query_chars,
+		medium_max_distance: value.medium_max_distance,
+		long_max_distance: value.long_max_distance,
 	}
-}
-
-struct TypoToken {
-	chars: Vec<char>,
-	indices: Vec<usize>,
-}
-
-fn typo_tokens(text: &str) -> impl Iterator<Item = TypoToken> + '_ {
-	let mut tokens = Vec::new();
-	let mut chars = Vec::new();
-	let mut indices = Vec::new();
-
-	for (idx, ch) in text.chars().enumerate() {
-		if ch.is_alphanumeric() {
-			chars.push(ch);
-			indices.push(idx);
-		} else if !chars.is_empty() {
-			tokens.push(TypoToken { chars, indices });
-			chars = Vec::new();
-			indices = Vec::new();
-		}
-	}
-
-	if !chars.is_empty() {
-		tokens.push(TypoToken { chars, indices });
-	}
-
-	tokens.into_iter()
 }
 
 #[cfg(test)]

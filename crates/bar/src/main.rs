@@ -718,28 +718,19 @@ impl Bar {
 			)),
 			_ => None,
 		});
-		let context_children = self.popups.context_children();
-		let context_parent_clicks = iced::event::listen_with(|event, _status, window| {
-			matches!(
-				event,
-				iced::Event::Mouse(iced::mouse::Event::ButtonPressed(_))
-			)
-			.then_some(window)
-		})
-		.with(context_children)
-		.map(|(context_children, window)| {
-			if let Some((parent, expected_child)) = context_children
-				.into_iter()
-				.find(|(parent, _)| *parent == window)
-			{
-				BarMessage::CloseContextDescendants {
-					parent,
-					expected_child,
+		let context_parent_clicks =
+			neo_widgets::popup::parent_clicks::<()>(self.popups.context_children()).map(|event| {
+				match event {
+					neo_widgets::popup::Event::CloseDescendants {
+						parent,
+						expected_child,
+					} => BarMessage::CloseContextDescendants {
+						parent,
+						expected_child,
+					},
+					_ => BarMessage::Noop,
 				}
-			} else {
-				BarMessage::Noop
-			}
-		});
+			});
 
 		let mut subscriptions = vec![
 			neo_widgets::icons::background::updates().map(|()| BarMessage::Noop),

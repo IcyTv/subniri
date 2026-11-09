@@ -42,7 +42,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "17456a9f4aa585648b44556598e955c06747efecc0787c9d5b1da4317103478f";
+  nixifiedLockHash = "e3239681a59b522b524b3d669833e9ef1ba47985972261cef1e39dfeb8f4e48a";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -3424,8 +3424,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "exwlshellev";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     dependencies = {
       calloop = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".calloop."0.14.5" { inherit profileName; }).out;
       calloop_wayland_source = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".calloop-wayland-source."0.4.1" { inherit profileName; }).out;
@@ -3507,16 +3506,23 @@ in
     dependencies = {
       async_channel = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".async-channel."2.5.0" { inherit profileName; }).out;
       clap = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".clap."4.6.7" { inherit profileName; }).out;
+      config = (rustPackages."unknown".config."0.0.1" { inherit profileName; }).out;
       dirs = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".dirs."6.0.0" { inherit profileName; }).out;
+      futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
       iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
+      iced_exwlshell = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_exwlshell."0.20.1" { inherit profileName; }).out;
       iced_runtime = (rustPackages."git+https://github.com/IcyTv/iced".iced_runtime."0.15.0-dev" { inherit profileName; }).out;
       ignore = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".ignore."0.4.34" { inherit profileName; }).out;
+      image = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".image."0.25.10" { inherit profileName; }).out;
+      libc = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".libc."0.2.191" { inherit profileName; }).out;
       log = (rustPackages."unknown".log."0.0.1" { inherit profileName; }).out;
       mime = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".mime."0.3.18" { inherit profileName; }).out;
       neo_widgets = (rustPackages."unknown".neo-widgets."0.0.1" { inherit profileName; }).out;
+      nix = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".nix."0.31.3" { inherit profileName; }).out;
       serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
+      serde_json = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde_json."1.0.154" { inherit profileName; }).out;
       tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.54.1" { inherit profileName; }).out;
-      undo = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".undo."0.52.0" { inherit profileName; }).out;
+      utilities = (rustPackages."unknown".utilities."0.0.1" { inherit profileName; }).out;
       xdg_mime = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".xdg-mime."0.4.0" { inherit profileName; }).out;
       zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
     };
@@ -4983,8 +4989,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exdevtools";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     dependencies = {
       iced_debug = (rustPackages."git+https://github.com/IcyTv/iced".iced_debug."0.15.0-dev" { inherit profileName; }).out;
       iced_devtools = (rustPackages."git+https://github.com/IcyTv/iced".iced_devtools."0.15.0-dev" { inherit profileName; }).out;
@@ -5003,8 +5008,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exwlshell";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     features = builtins.concatLists [
       [ "default" ]
       [ "linux-theme-detection" ]
@@ -5041,8 +5045,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_exwlshell_macros";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     features = builtins.concatLists [
       [ "default" ]
     ];
@@ -5221,8 +5224,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "iced_wayland_subscriber";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     features = builtins.concatLists [
       [ "default" ]
     ];
@@ -6240,7 +6242,6 @@ in
       eyre = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".eyre."0.6.14" { inherit profileName; }).out;
       freedesktop_desktop_entry = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".freedesktop-desktop-entry."0.8.4" { inherit profileName; }).out;
       futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
-      fuzzy_matcher = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".fuzzy-matcher."0.3.7" { inherit profileName; }).out;
       iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
       iced_exwlshell = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_exwlshell."0.20.1" { inherit profileName; }).out;
       iced_runtime = (rustPackages."git+https://github.com/IcyTv/iced".iced_runtime."0.15.0-dev" { inherit profileName; }).out;
@@ -6252,7 +6253,6 @@ in
       neo_widgets = (rustPackages."unknown".neo-widgets."0.0.1" { inherit profileName; }).out;
       serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
       serde_json = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde_json."1.0.154" { inherit profileName; }).out;
-      strsim = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".strsim."0.11.1" { inherit profileName; }).out;
       tantivy = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tantivy."0.26.2" { inherit profileName; }).out;
       tantivy_derive = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tantivy-derive."0.5.0" { inherit profileName; }).out;
       tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.54.1" { inherit profileName; }).out;
@@ -7547,8 +7547,10 @@ in
     features = builtins.concatLists [
       [ "default" ]
       [ "feature" ]
+      [ "fs" ]
       [ "memoffset" ]
       [ "net" ]
+      [ "process" ]
       [ "socket" ]
       [ "user" ]
     ];
@@ -12132,12 +12134,8 @@ in
     src = fetchCratesIo { inherit name version; sha256 = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"; };
     features = builtins.concatLists [
       [ "default" ]
-      [ "serde" ]
       [ "std" ]
     ];
-    dependencies = {
-      serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
-    };
   });
   
   "registry+https://github.com/rust-lang/crates.io-index".slotmap."1.1.1" = overridableMkRustCrate (profileName: rec {
@@ -14486,23 +14484,6 @@ in
     };
   });
   
-  "registry+https://github.com/rust-lang/crates.io-index".undo."0.52.0" = overridableMkRustCrate (profileName: rec {
-    name = "undo";
-    version = "0.52.0";
-    registry = "registry+https://github.com/rust-lang/crates.io-index";
-    src = fetchCratesIo { inherit name version; sha256 = "d1dfbb202cb07dd2a685c765aa040db18d8a0dbe7079cf57c275833521f67653"; };
-    features = builtins.concatLists [
-      [ "alloc" ]
-      [ "default" ]
-      [ "serde" ]
-      [ "std" ]
-    ];
-    dependencies = {
-      serde = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".serde."1.0.229" { inherit profileName; }).out;
-      slab = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".slab."0.4.12" { inherit profileName; }).out;
-    };
-  });
-  
   "registry+https://github.com/rust-lang/crates.io-index".unicase."2.10.0" = overridableMkRustCrate (profileName: rec {
     name = "unicase";
     version = "2.10.0";
@@ -14721,6 +14702,10 @@ in
     version = "0.0.1";
     registry = "unknown";
     src = fetchCrateLocal workspaceSrc;
+    dependencies = {
+      fuzzy_matcher = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".fuzzy-matcher."0.3.7" { inherit profileName; }).out;
+      strsim = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".strsim."0.11.1" { inherit profileName; }).out;
+    };
   });
   
   "registry+https://github.com/rust-lang/crates.io-index".uuid."1.29.0" = overridableMkRustCrate (profileName: rec {
@@ -14994,8 +14979,7 @@ in
       url = "https://github.com/IcyTv/exwlshelleventloop";
       name = "waycrate_xkbkeycode";
       version = "0.20.1";
-      rev = "e9c0da7321bf2fd8df6b1d27b448cbda0dde9fb0";
-      ref = "master";};
+      rev = "de5fcc2c33c723f2a8c8c9079d6b4877679ace33";};
     dependencies = {
       calloop = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".calloop."0.14.5" { inherit profileName; }).out;
       log = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".log."0.4.35" { inherit profileName; }).out;

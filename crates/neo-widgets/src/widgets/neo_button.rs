@@ -62,6 +62,7 @@ pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer
 	height: Length,
 	enabled: bool,
 	focusable: bool,
+	focus_on_click: bool,
 	id: Id,
 }
 
@@ -93,6 +94,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			height: Length::Shrink,
 			enabled: true,
 			focusable: false,
+			focus_on_click: true,
 			id: Id::unique(),
 		}
 	}
@@ -223,6 +225,13 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	/// Keep keyboard/programmatic focus, but optionally avoid persistent focus
+	/// decoration from pointer clicks. Existing consumers retain the old default.
+	pub fn focus_on_click(mut self, focus_on_click: bool) -> Self {
+		self.focus_on_click = focus_on_click;
+		self
+	}
+
 	pub fn map<F, Out>(self, func: F) -> NeoButton<'a, Out, Theme, Renderer>
 	where
 		F: Fn(Message) -> Out + Clone + 'a,
@@ -285,6 +294,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			height: self.height,
 			enabled: self.enabled,
 			focusable: self.focusable,
+			focus_on_click: self.focus_on_click,
 			id: self.id,
 		}
 	}
@@ -364,6 +374,13 @@ where
 		let state = tree.state.downcast_mut::<State>();
 		let bounds = layout.bounds();
 		let over = cursor.is_over(bounds);
+		if !self.focus_on_click && matches!(event, Event::Mouse(mouse::Event::ButtonPressed(_))) {
+			// Also clear a previous keyboard ring when clicking another control.
+			if state.focused {
+				shell.request_redraw();
+			}
+			state.focused = false;
+		}
 
 		if state.hovered != over {
 			shell.request_redraw();
@@ -410,7 +427,7 @@ where
 			Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left))
 				if self.enabled && over && !is_captured =>
 			{
-				state.focused = self.focusable;
+				state.focused = self.focusable && self.focus_on_click;
 				state.pressed = state.pressed.clone().go(true, Instant::now());
 				if let Some(message) = self.on_press_started.clone() {
 					shell.publish(match message {
@@ -569,5 +586,63 @@ impl Focusable for State {
 
 	fn unfocus(&mut self) {
 		self.focused = false;
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn pointer_focus_can_be_disabled_without_disabling_keyboard_focus() {
+		let mut button =
+			NeoButton::<u8, (), ()>::new(iced::widget::Space::new().width(40).height(30))
+				.focusable(true)
+				.focus_on_click(false)
+				.on_press(1);
+		let mut tree = Tree::new(&button as &dyn Widget<u8, (), ()>);
+		button.diff(&mut tree);
+		let layout = button.layout(
+			&mut tree,
+			&(),
+			&layout::Limits::new(iced::Size::ZERO, iced::Size::new(100.0, 100.0)),
+		);
+		// Tab/focus operations still set the ordinary focused state.
+		tree.state.downcast_mut::<State>().focus();
+		assert!(tree.state.downcast_ref::<State>().is_focused());
+		let mut bus = iced::advanced::shell::Bus::new();
+		button.update(
+			&mut tree,
+			&Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+			Layout::new(&layout),
+			mouse::Cursor::Available(Point::new(10.0, 10.0)),
+			&(),
+			&mut iced::advanced::Shell::new(
+				&window::Headless,
+				iced::advanced::shell::Waker::noop(),
+				&mut bus,
+			),
+			&Rectangle::with_size(iced::Size::new(100.0, 100.0)),
+		);
+		assert!(!tree.state.downcast_ref::<State>().is_focused());
+		button.update(
+			&mut tree,
+			&Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)),
+			Layout::new(&layout),
+			mouse::Cursor::Available(Point::new(10.0, 10.0)),
+			&(),
+			&mut iced::advanced::Shell::new(
+				&window::Headless,
+				iced::advanced::shell::Waker::noop(),
+				&mut bus,
+			),
+			&Rectangle::with_size(iced::Size::new(100.0, 100.0)),
+		);
+		assert_eq!(bus.into_iter().collect::<Vec<_>>(), vec![1]);
+		assert!(!tree.state.downcast_ref::<State>().is_focused());
+		tree.state.downcast_mut::<State>().focus();
+		assert!(tree.state.downcast_ref::<State>().is_focused());
+		// Other applications retain the original opt-in click-to-focus behavior.
+		assert!(NeoButton::<u8, (), ()>::new(iced::widget::Space::new()).focus_on_click);
 	}
 }

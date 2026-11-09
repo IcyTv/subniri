@@ -8,7 +8,7 @@
     outPath = "/fixture";
   };
   self.packages.test = lib.genAttrs names (_: fixture);
-  evaluate = menu:
+  evaluateWithFavorites = menu: favorites:
     lib.evalModules {
       specialArgs.pkgs.stdenv.hostPlatform.system = "test";
       modules = [
@@ -32,18 +32,25 @@
               type = lib.types.listOf lib.types.attrs;
               default = [];
             };
+            warnings = lib.mkOption {
+              type = lib.types.listOf lib.types.str;
+              default = [];
+            };
           };
           config = {
             xdg.configHome = "/fixture";
             services.subniri = {
               enable = true;
               settings.systemMenu = menu;
+              settings.fileberg.favorites = favorites;
             };
           };
         }
       ];
     };
+  evaluate = menu: evaluateWithFavorites menu [];
   render = menu: (evaluate menu).config.xdg.configFile."subniri/config.kdl".text;
+  favorites = (evaluateWithFavorites {} ["copy" "new-folder"]).config.xdg.configFile."subniri/config.kdl".text;
   rows = render {
     rows = [
       [
@@ -74,7 +81,8 @@ in
   assert lib.hasInfix ''widget "light.office" width=1'' rows;
   assert lib.hasInfix "    row\n" rows;
   assert lib.hasInfix ''widgets "wifi" "script.example"'' legacy;
-  assert lib.any (check: !check.assertion) mixed.config.assertions; {
-    passed = 6;
+  assert lib.any (check: !check.assertion) mixed.config.assertions;
+  assert lib.hasInfix ''favorites "copy" "new-folder"'' favorites; {
+    passed = 7;
     generated = rows;
   }

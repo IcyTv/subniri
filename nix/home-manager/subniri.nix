@@ -215,6 +215,9 @@
           ]
         ))
       ]
+      ++ lib.optionals (settings.fileberg.favorites != []) [
+        (plain "fileberg" [(node "favorites" settings.fileberg.favorites [])])
+      ]
       ++ lib.optionals cfg.icepickd.enable [
         (plain "indexing" [
           (flag "enabled")
@@ -407,6 +410,28 @@ in {
               }
             ]
           ];
+        };
+
+        fileberg.favorites = mkOption {
+          type = types.listOf (types.enum [
+            "open"
+            "open-with"
+            "open-window"
+            "cut"
+            "copy"
+            "duplicate"
+            "rename"
+            "trash"
+            "tags"
+            "properties"
+            "new-folder"
+            "paste"
+            "sort"
+            "view"
+            "refresh"
+          ]);
+          default = [];
+          description = "Fileberg context-menu favorite command IDs, in display order.";
         };
 
         launcher = {

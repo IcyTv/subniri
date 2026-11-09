@@ -10,17 +10,9 @@ pub(super) struct Route {
 	pub depth: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy)]
-struct Popup {
-	id: Id,
-	parent: Option<Id>,
-	route: Route,
-}
-
 #[derive(Default)]
 pub(super) struct Popups {
-	root: Option<Popup>,
-	contexts: Vec<Popup>,
+	inner: neo_widgets::popup::Popups<(Section, usize)>,
 }
 
 #[derive(Clone, Copy)]
@@ -60,127 +52,67 @@ pub(super) struct Change {
 
 impl Popups {
 	pub fn topmost(&self) -> Option<Id> {
-		self.contexts
-			.last()
-			.or(self.root.as_ref())
-			.map(|popup| popup.id)
+		self.inner.topmost()
 	}
 
 	pub fn context_children(&self) -> Vec<(Id, Id)> {
-		self.contexts
-			.iter()
-			.filter_map(|popup| popup.parent.map(|parent| (parent, popup.id)))
-			.collect()
+		self.inner.context_children()
 	}
 
 	pub fn route(&self, id: Id) -> Option<Route> {
-		self.contexts
-			.iter()
-			.find(|popup| popup.id == id)
-			.or_else(|| self.root.as_ref().filter(|popup| popup.id == id))
-			.map(|popup| popup.route)
+		self.inner.route(id).map(Self::route_from_shared)
 	}
 
 	pub fn update(&mut self, event: Event) -> Change {
-		let mut change = Change::default();
-		match event {
-			Event::Toggle { id, section, index } => {
-				let same = self.root.is_some_and(|popup| {
-					popup.route.section == section && popup.route.index == index
-				});
-				self.close_all(&mut change.effects, true);
-				if !same {
-					let route = Route {
-						section,
-						index,
-						depth: None,
-					};
-					self.root = Some(Popup {
-						id,
-						parent: None,
-						route,
-					});
-					change.opened = Some(route);
-				}
-			}
+		use neo_widgets::popup as shared;
+		let event = match event {
+			Event::Toggle { id, section, index } => shared::Event::Toggle {
+				id,
+				owner: (section, index),
+			},
 			Event::Context {
 				id,
 				parent,
 				section,
 				index,
-			} => {
-				let Some(route) = self
-					.route(parent)
-					.filter(|route| route.section == section && route.index == index)
-				else {
-					return change;
-				};
-				let depth = route.depth.map_or(0, |depth| depth + 1);
-				self.close_contexts(depth, &mut change.effects);
-				let route = Route {
-					section,
-					index,
-					depth: Some(depth),
-				};
-				self.contexts.push(Popup {
-					id,
-					parent: Some(parent),
-					route,
-				});
-				change.opened = Some(route);
-			}
-			Event::Closed(id) => {
-				if let Some(depth) = self.contexts.iter().position(|popup| popup.id == id) {
-					self.close_contexts(depth + 1, &mut change.effects);
-					self.contexts.remove(depth);
-				} else if self.root.is_some_and(|popup| popup.id == id) {
-					self.close_all(&mut change.effects, false);
-				}
-			}
-			Event::Unfocused(id) => {
-				if let Some(depth) = self.contexts.iter().position(|popup| popup.id == id) {
-					if depth + 1 == self.contexts.len() {
-						self.close_contexts(depth, &mut change.effects);
-					}
-				} else if self.contexts.is_empty() && self.root.is_some_and(|popup| popup.id == id)
-				{
-					self.close_all(&mut change.effects, true);
-				}
-			}
-			Event::CloseAll => self.close_all(&mut change.effects, true),
-			Event::CloseContexts => self.close_contexts(0, &mut change.effects),
+			} => shared::Event::Context {
+				id,
+				parent,
+				owner: (section, index),
+			},
+			Event::Closed(id) => shared::Event::Closed(id),
+			Event::Unfocused(id) => shared::Event::Unfocused(id),
+			Event::CloseAll => shared::Event::CloseAll,
+			Event::CloseContexts => shared::Event::CloseContexts,
 			Event::CloseDescendants {
 				parent,
 				expected_child,
-			} => {
-				if let Some(depth) = self
-					.contexts
-					.iter()
-					.position(|popup| popup.parent == Some(parent) && popup.id == expected_child)
-				{
-					self.close_contexts(depth, &mut change.effects);
-				}
-			}
+			} => shared::Event::CloseDescendants {
+				parent,
+				expected_child,
+			},
+		};
+		let change = self.inner.update(event);
+		Change {
+			opened: change.opened.map(Self::route_from_shared),
+			effects: change
+				.effects
+				.into_iter()
+				.map(|effect| match effect {
+					shared::Effect::Close(id) => Effect::Close(id),
+					shared::Effect::NotifyClosed((section, index)) => {
+						Effect::NotifyClosed(section, index)
+					}
+				})
+				.collect(),
 		}
-		change
 	}
 
-	fn close_contexts(&mut self, depth: usize, effects: &mut Vec<Effect>) {
-		effects.extend(
-			self.contexts
-				.drain(depth..)
-				.rev()
-				.map(|popup| Effect::Close(popup.id)),
-		);
-	}
-
-	fn close_all(&mut self, effects: &mut Vec<Effect>, close_root: bool) {
-		if let Some(popup) = self.root.take() {
-			self.close_contexts(0, effects);
-			if close_root {
-				effects.push(Effect::Close(popup.id));
-			}
-			effects.push(Effect::NotifyClosed(popup.route.section, popup.route.index));
+	fn route_from_shared(route: neo_widgets::popup::Route<(Section, usize)>) -> Route {
+		Route {
+			section: route.owner.0,
+			index: route.owner.1,
+			depth: route.depth,
 		}
 	}
 }

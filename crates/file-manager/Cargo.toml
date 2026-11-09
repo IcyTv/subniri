@@ -13,18 +13,25 @@ path = "src/main.rs"
 [dependencies]
 async-channel.workspace = true
 clap = { workspace = true, features = ["derive"] }
+config.workspace = true
+futures.workspace = true
 dirs = "6.0.0"
 iced.workspace = true
 iced_runtime.workspace = true
+iced_exwlshell.workspace = true
 ignore = "0.4.26"
+image.workspace = true
 log.workspace = true
 mime = "0.3.17"
 neo-widgets.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
-undo = { version = "0.52.0", features = ["serde"] }
+utilities.workspace = true
 xdg-mime = "0.4.0"
 zbus.workspace = true
+nix = { workspace = true, features = ["fs", "process"] }
+libc = "0.2.191"
 
 [lints]
 workspace = true

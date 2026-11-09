@@ -72,6 +72,53 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub indexing: Indexing,
+	/// Fileberg's prototype context-menu preferences.
+	#[config(default)]
+	#[garde(dive)]
+	pub fileberg: Fileberg,
+}
+
+pub const FILEBERG_ACTION_IDS: &[&str] = &[
+	"open",
+	"open-with",
+	"open-window",
+	"cut",
+	"copy",
+	"duplicate",
+	"rename",
+	"trash",
+	"tags",
+	"properties",
+	"new-folder",
+	"paste",
+	"sort",
+	"view",
+	"refresh",
+];
+
+#[derive(Default, Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
+pub struct Fileberg {
+	/// Stable command IDs in user-defined order, shared across menu contexts.
+	#[config(list_style = children)]
+	#[garde(custom(validate_fileberg_favorites))]
+	pub favorites: Vec<String>,
+}
+
+fn validate_fileberg_favorites(values: &[String], _ctx: &()) -> garde::Result {
+	let mut seen = HashSet::new();
+	for value in values {
+		if !FILEBERG_ACTION_IDS.contains(&value.as_str()) {
+			return Err(garde::Error::new(format!(
+				"Unknown Fileberg action: {value}"
+			)));
+		}
+		if !seen.insert(value) {
+			return Err(garde::Error::new(format!(
+				"Duplicate Fileberg favorite: {value}"
+			)));
+		}
+	}
+	Ok(())
 }
 
 impl ConfigFile {
@@ -365,6 +412,13 @@ impl ConfigFile {
 			|value| value.to_string(),
 		);
 
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.fileberg.favorites",
+			&self.fileberg.favorites,
+			&declarative.fileberg.favorites,
+			|values| nix_list(values.iter().map(String::as_str)),
+		);
 		out
 	}
 
@@ -970,6 +1024,40 @@ mod tests {
 			}
 			let _ = std::fs::remove_dir_all(&self.root);
 		}
+	}
+
+	#[test]
+	fn fileberg_favorites_roundtrip_preserves_settings_and_override_semantics() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("fileberg");
+		let (mut doc, mut config) = ConfigFile::load_declarative().unwrap();
+		config.spotify.enabled = true;
+		config.nightlight.day.temperature = 5300;
+		config.fileberg.favorites = vec!["copy".into(), "new-folder".into(), "open".into()];
+		config.write(&mut doc).unwrap();
+		let (_, loaded) = ConfigFile::load().unwrap();
+		assert_eq!(loaded.fileberg.favorites, config.fileberg.favorites);
+		assert!(loaded.spotify.enabled);
+		assert_eq!(loaded.nightlight.day.temperature, 5300);
+		let (_, base) = ConfigFile::load_declarative().unwrap();
+		assert!(base.fileberg.favorites.is_empty());
+		assert!(
+			loaded
+				.nix_diff(&base)
+				.contains("settings.fileberg.favorites = [\"copy\" \"new-folder\" \"open\"];")
+		);
+	}
+
+	#[test]
+	fn fileberg_favorites_validate_unique_known_command_ids() {
+		let mut settings = Fileberg {
+			favorites: vec!["open".into(), "open".into()],
+		};
+		assert!(settings.validate().is_err());
+		settings.favorites = vec!["not-an-action".into()];
+		assert!(settings.validate().is_err());
+		settings.favorites = vec!["open".into(), "tags".into()];
+		assert!(settings.validate().is_ok());
 	}
 
 	#[test]

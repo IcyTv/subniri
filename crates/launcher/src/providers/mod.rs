@@ -71,29 +71,7 @@ pub enum CandidateKind {
 	Other,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum MatchKind {
-	Exact,
-	Prefix,
-	Fuzzy,
-	Substring,
-	Typo,
-	#[default]
-	Unknown,
-}
-
-impl MatchKind {
-	pub fn priority(self) -> i32 {
-		match self {
-			Self::Exact => 4,
-			Self::Prefix => 3,
-			Self::Substring => 2,
-			Self::Typo => 1,
-			Self::Fuzzy => 0,
-			Self::Unknown => -1,
-		}
-	}
-}
+pub use utilities::matching::MatchKind;
 
 /// Soft grouping hint; launcher may ignore.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

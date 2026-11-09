@@ -1,8 +1,4 @@
-use std::{
-	collections::HashMap,
-	ffi::{CString, OsString},
-	os::unix::ffi::OsStringExt,
-};
+use std::{collections::HashMap, ffi::CString};
 
 use serde::{Deserialize, Deserializer, de};
 use zbus::{
@@ -10,6 +6,22 @@ use zbus::{
 	proxy,
 	zvariant::{self, ObjectPath, OwnedObjectPath, OwnedValue},
 };
+
+pub(crate) struct Disks {
+	connection: zbus::Connection,
+}
+
+impl Disks {
+	pub async fn new() -> zbus::Result<Self> {
+		let connection = zbus::Connection::system().await?;
+		Ok(Self { connection })
+	}
+
+	pub async fn objects(&self) -> zbus::Result<HashMap<OwnedObjectPath, UDisks2Object>> {
+		let proxy = UDisks2Proxy::new(&self.connection).await?;
+		proxy.get_managed_objects().await
+	}
+}
 
 const INTERFACE: InterfaceName<'static> =
 	InterfaceName::from_static_str_checked("org.freedesktop.DBus.ObjectManager");
@@ -26,14 +38,20 @@ pub trait UDisks2 {
 	fn get_managed_objects(&self) -> zbus::Result<HashMap<OwnedObjectPath, UDisks2Object>>;
 }
 
-#[derive(Debug, zvariant::Type, Default)]
+#[derive(Debug, zvariant::Type, Default, Clone)]
 #[zvariant(signature = "a{sa{sv}}")]
 pub struct UDisks2Object {
 	pub drive: DriveProperties,
 
 	pub block: BlockProperties,
 
-	pub filesystem: FilesystemProperties,
+	pub filesystem: Option<FilesystemProperties>,
+}
+
+impl UDisks2Object {
+	pub fn should_show(&self) -> bool {
+		!self.block.hint_ignore && self.filesystem.is_some()
+	}
 }
 
 impl<'de> Deserialize<'de> for UDisks2Object {
@@ -58,8 +76,7 @@ impl<'de> Deserialize<'de> for UDisks2Object {
 			filesystem: interfaces
 				.remove("org.freedesktop.UDisks2.Filesystem")
 				.map(decode_filesystem_properties)
-				.transpose()?
-				.unwrap_or_default(),
+				.transpose()?,
 		})
 	}
 }
@@ -91,6 +108,10 @@ where
 		size: take_property(&mut properties, "Size")?,
 		connection_bus: take_property(&mut properties, "ConnectionBus")?,
 		ejectable: take_property(&mut properties, "Ejectable")?,
+		can_power_off: take_property(&mut properties, "CanPowerOff")?,
+		sibling_id: take_property(&mut properties, "SiblingId")?,
+		time_detected: take_property(&mut properties, "TimeDetected")?,
+		time_media_detected: take_property(&mut properties, "TimeMediaDetected")?,
 	})
 }
 
@@ -108,6 +129,10 @@ where
 		drive: take_property(&mut properties, "Drive")?,
 		device: CString::from_vec_with_nul(take_property::<Vec<u8>, _>(&mut properties, "Device")?)
 			.map_err(|e| E::custom(format!("Invalid device path: {}", e)))?,
+		hint_ignore: take_property(&mut properties, "HintIgnore")?,
+		hint_system: take_property(&mut properties, "HintSystem")?,
+		device_number: take_property(&mut properties, "DeviceNumber")?,
+		id_usage: take_property(&mut properties, "IdUsage")?,
 	})
 }
 
@@ -126,7 +151,7 @@ where
 	})
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct DriveProperties {
 	#[serde(rename = "Model", default)]
 	pub model: String,
@@ -145,9 +170,17 @@ pub struct DriveProperties {
 
 	#[serde(rename = "Ejectable", default)]
 	pub ejectable: bool,
+
+	pub can_power_off: bool,
+
+	pub sibling_id: String,
+
+	pub time_detected: u64,
+
+	pub time_media_detected: u64,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct BlockProperties {
 	#[serde(rename = "IdLabel", default)]
 	pub id_label: String,
@@ -168,9 +201,19 @@ pub struct BlockProperties {
 	// Convert to string using: String::from_utf8_lossy(&device).to_string()
 	#[serde(rename = "Device", default)]
 	pub device: CString,
+
+	#[serde(rename = "HintIgnore", default)]
+	pub hint_ignore: bool,
+
+	#[serde(rename = "HintSystem", default)]
+	pub hint_system: bool,
+
+	pub device_number: u64,
+
+	pub id_usage: String,
 }
 
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct FilesystemProperties {
 	// Array of byte arrays representing mount paths
 	#[serde(rename = "MountPoints", default)]
@@ -190,18 +233,27 @@ mod tests {
 		let objects = proxy.get_managed_objects().await?;
 
 		for (path, object) in &objects {
-			println!("Object path: {}", path);
-			println!("Drive model: {}", object.drive.model);
-			println!("Block device: {}", object.block.device.to_string_lossy());
-			println!(
-				"Filesystem mount points: {:?}",
-				object
-					.filesystem
-					.mount_points
-					.iter()
-					.map(|mp| mp.to_string_lossy().to_string())
-					.collect::<Vec<_>>()
-			);
+			if !object.should_show() {
+				continue;
+			}
+			println!("===================");
+			println!("  Object path: {}", path);
+			println!("  Block device: {}", object.block.device.to_string_lossy());
+			println!("  Drive model: {}", object.drive.model);
+			println!("    Ejectable: {}", object.drive.ejectable);
+			println!("    Vendor: {}", object.drive.vendor);
+
+			println!("  id_type: {}", object.block.id_type);
+			println!("  drive: {}", object.block.drive);
+			// println!(
+			// 	"  Filesystem mount points: {:?}",
+			// 	object
+			// 		.filesystem
+			// 		.mount_points
+			// 		.iter()
+			// 		.map(|mp| mp.to_string_lossy().to_string())
+			// 		.collect::<Vec<_>>()
+			// );
 		}
 
 		Ok(())
