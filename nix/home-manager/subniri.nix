@@ -52,6 +52,13 @@
       bin = "icepickd";
       systemd = true;
     };
+    thawth = {
+      package = packages.thawth;
+      description = "Thawth polkit authentication agent";
+      bin = "thawth";
+      systemd = true;
+      serviceConfig.RestartPreventExitStatus = [77];
+    };
   };
 
   mkComponentOption = name: component: {
@@ -88,17 +95,19 @@
       After = ["graphical-session.target"];
     };
 
-    Service = {
-      ExecStart = "${component.package}/bin/${componentDefinitions.${name}.bin}";
-      Environment =
-        lib.optionals cfg.config.enable [
-          "SUBNIRI_CONFIG_FILE=${configPath}"
-          "SUBNIRI_CONFIG_OVERRIDE_FILE=${configOverridePath}"
-        ]
-        ++ ["RUST_LOG=info"];
-      Restart = "on-failure";
-      RestartSec = 5;
-    };
+    Service =
+      {
+        ExecStart = "${component.package}/bin/${componentDefinitions.${name}.bin}";
+        Environment =
+          lib.optionals cfg.config.enable [
+            "SUBNIRI_CONFIG_FILE=${configPath}"
+            "SUBNIRI_CONFIG_OVERRIDE_FILE=${configOverridePath}"
+          ]
+          ++ ["RUST_LOG=info"];
+        Restart = "on-failure";
+        RestartSec = 5;
+      }
+      // (componentDefinitions.${name}.serviceConfig or {});
   };
 
   subniriTarget = {

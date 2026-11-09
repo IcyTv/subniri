@@ -6454,6 +6454,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "polkit-agent"
+version = "0.0.1"
+dependencies = [
+ "async-channel",
+ "futures",
+ "iced",
+ "log 0.0.1",
+ "neo-widgets",
+ "nix 0.31.3",
+ "tokio",
+ "zbus",
+ "zeroize",
+ "zvariant",
+]
+
+[[package]]
 name = "polling"
 version = "3.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,26 @@
+[package]
+name = "polkit-agent"
+version.workspace = true
+authors.workspace = true
+description = "Subniri authentication agent"
+edition.workspace = true
+documentation.workspace = true
+
+[[bin]]
+name = "thawth"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+async-channel.workspace = true
+futures.workspace = true
+iced.workspace = true
+log.workspace = true
+neo-widgets.workspace = true
+nix.workspace = true
+tokio.workspace = true
+zbus.workspace = true
+zvariant.workspace = true
+zeroize = "1.9.1"

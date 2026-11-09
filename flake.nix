@@ -418,6 +418,10 @@
                 name = "launcher";
                 binName = "avalaunch";
               })
+              (mkWrappedGuiOverride {
+                name = "polkit-agent";
+                binName = "thawth";
+              })
             ];
         };
 
@@ -490,6 +494,10 @@
           {
             name = "icepickd";
             package = rustPkgs.workspace.indexer {};
+          }
+          {
+            name = "thawth";
+            package = rustPkgs.workspace.polkit-agent {};
           }
         ];
 

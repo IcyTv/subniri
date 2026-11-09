@@ -21,6 +21,7 @@ args@{
     "indexer-common/default"
     "launcher/default"
     "logout/default"
+    "polkit-agent/default"
     "settings/default"
   ],
   rustPackages,
@@ -42,7 +43,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "e3239681a59b522b524b3d669833e9ef1ba47985972261cef1e39dfeb8f4e48a";
+  nixifiedLockHash = "0ad25c0a17dfe3621b6876805fab16696460f3e1bb65df8c94c96c7e3dd6376e";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -89,6 +90,7 @@ in
     indexer-common = rustPackages.unknown.indexer-common."0.0.1";
     launcher = rustPackages.unknown.launcher."0.0.1";
     logout = rustPackages.unknown.logout."0.0.1";
+    polkit-agent = rustPackages.unknown.polkit-agent."0.0.1";
     settings = rustPackages.unknown.settings."0.0.1";
   };
   "registry+https://github.com/rust-lang/crates.io-index".ab_glyph."0.2.32" = overridableMkRustCrate (profileName: rec {
@@ -9781,6 +9783,25 @@ in
       fdeflate = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".fdeflate."0.3.7" { inherit profileName; }).out;
       flate2 = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".flate2."1.1.10" { inherit profileName; }).out;
       miniz_oxide = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".miniz_oxide."0.8.9" { inherit profileName; }).out;
+    };
+  });
+  
+  "unknown".polkit-agent."0.0.1" = overridableMkRustCrate (profileName: rec {
+    name = "polkit-agent";
+    version = "0.0.1";
+    registry = "unknown";
+    src = fetchCrateLocal workspaceSrc;
+    dependencies = {
+      async_channel = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".async-channel."2.5.0" { inherit profileName; }).out;
+      futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
+      iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
+      log = (rustPackages."unknown".log."0.0.1" { inherit profileName; }).out;
+      neo_widgets = (rustPackages."unknown".neo-widgets."0.0.1" { inherit profileName; }).out;
+      nix = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".nix."0.31.3" { inherit profileName; }).out;
+      tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.54.1" { inherit profileName; }).out;
+      zbus = (rustPackages."git+https://github.com/IcyTv/zbus".zbus."5.19.0" { inherit profileName; }).out;
+      zeroize = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".zeroize."1.9.1" { inherit profileName; }).out;
+      zvariant = (rustPackages."git+https://github.com/IcyTv/zbus".zvariant."5.15.0" { inherit profileName; }).out;
     };
   });
   
