@@ -239,7 +239,14 @@
           runtimeLibs ? waylandRuntimeLibs,
           wrapArgs ? [],
           extraAttrs ? {},
+          desktopEntry ? null,
         }: let
+          desktopItem = pkgs.makeDesktopItem ({
+              name = binName;
+              exec = binName;
+              terminal = false;
+            }
+            // desktopEntry);
           wrapperArgs =
             [
               "--prefix"
@@ -261,9 +268,12 @@
                 nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.makeWrapper] drv;
                 buildInputs = appendList "buildInputs" buildInputs drv;
 
-                postInstall =
-                  appendScript "postInstall" "makeWrapperArgs=(\n${wrapperArgLines}\n)\nwrapProgram $bin/bin/${binName} \"\${makeWrapperArgs[@]}\"\n"
-                  drv;
+                postInstall = appendScript "postInstall" ("makeWrapperArgs=(\n${wrapperArgLines}\n)\nwrapProgram $bin/bin/${binName} \"\${makeWrapperArgs[@]}\"\n"
+                  + lib.optionalString (desktopEntry != null) ''
+                    mkdir -p "$bin/share/applications"
+                    cp ${desktopItem}/share/applications/*.desktop "$bin/share/applications/"
+                  '')
+                drv;
               }
               // extraAttrs;
           };
@@ -409,14 +419,48 @@
               (mkWrappedGuiOverride {
                 name = "logout";
                 binName = "iceout";
+                desktopEntry = {
+                  desktopName = "Iceout";
+                  genericName = "Logout Menu";
+                  comment = "Log out, suspend, restart, or shut down";
+                  icon = "system-log-out";
+                  categories = ["System"];
+                };
               })
               (mkWrappedGuiOverride {
                 name = "settings";
                 binName = "snowconf";
+                desktopEntry = {
+                  desktopName = "Snowconf";
+                  genericName = "Subniri Settings";
+                  comment = "Configure the Subniri desktop";
+                  icon = "preferences-system";
+                  categories = ["Settings" "DesktopSettings"];
+                };
               })
               (mkWrappedGuiOverride {
                 name = "launcher";
                 binName = "avalaunch";
+                desktopEntry = {
+                  desktopName = "Avalaunch";
+                  genericName = "Application Launcher";
+                  comment = "Find and launch applications";
+                  icon = "system-run";
+                  categories = ["Utility"];
+                };
+              })
+              (mkWrappedGuiOverride {
+                name = "file-manager";
+                binName = "fileberg";
+                desktopEntry = {
+                  desktopName = "Fileberg";
+                  genericName = "File Manager";
+                  comment = "Browse files and folders";
+                  exec = "fileberg %f";
+                  icon = "system-file-manager";
+                  categories = ["System" "FileTools" "FileManager"];
+                  mimeTypes = ["inode/directory"];
+                };
               })
               (mkWrappedGuiOverride {
                 name = "polkit-agent";
@@ -490,6 +534,10 @@
           {
             name = "snowconf";
             package = rustPkgs.workspace.settings {};
+          }
+          {
+            name = "fileberg";
+            package = rustPkgs.workspace.file-manager {};
           }
           {
             name = "icepickd";

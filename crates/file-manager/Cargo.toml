@@ -30,6 +30,7 @@ tokio.workspace = true
 utilities.workspace = true
 xdg-mime = "0.4.0"
 zbus.workspace = true
+zvariant.workspace = true
 nix = { workspace = true, features = ["fs", "process"] }
 libc = "0.2.191"
 
