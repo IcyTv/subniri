@@ -503,6 +503,7 @@ in {
             "tags"
             "properties"
             "new-folder"
+            "new-file"
             "paste"
             "sort"
             "view"

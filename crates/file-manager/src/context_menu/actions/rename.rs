@@ -4,8 +4,12 @@ pub(super) const DEFINITION: Definition = Definition {
 	label: "Rename",
 	group: "EDIT",
 	aliases: "",
-	multiple: true,
+	multiple: false,
 	scope: Scope::Item,
-	execute: stub,
+	execute,
 	check: None,
 };
+
+fn execute(app: &mut FileManager, target: Target, _: Action) -> Task<Message> {
+	app.start_name_edit(None, Some(target))
+}

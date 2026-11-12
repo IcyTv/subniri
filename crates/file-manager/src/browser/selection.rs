@@ -320,7 +320,6 @@ mod tests {
 			Command::Cut,
 			Command::Copy,
 			Command::Duplicate,
-			Command::Rename,
 			Command::Trash,
 			Command::Properties,
 		] {
@@ -358,7 +357,7 @@ mod tests {
 	}
 
 	#[test]
-	fn multiple_selection_blocks_open_but_edit_stubs_leave_every_target_untouched() {
+	fn multiple_selection_blocks_open_and_rename_but_stubs_leave_every_target_untouched() {
 		let (_dir, mut app, p) = app();
 		click(&mut app, &p[0], Modifiers::empty());
 		click(&mut app, &p[2], Modifiers::CTRL);
@@ -374,12 +373,7 @@ mod tests {
 		);
 		let _ = app.open_menu(Some(p[0].clone()), Point::ORIGIN);
 		let snapshot = app.menu.as_ref().unwrap().target.clone();
-		for command in [
-			Command::Cut,
-			Command::Copy,
-			Command::Duplicate,
-			Command::Rename,
-		] {
+		for command in [Command::Cut, Command::Copy, Command::Duplicate] {
 			assert_eq!(
 				app.menu_dispatch(snapshot.clone(), Action::Command(command))
 					.units(),
@@ -390,6 +384,18 @@ mod tests {
 			members(&app, &[p[0].clone(), p[2].clone()]);
 		}
 		assert_eq!(app.visible_entries().len(), 6);
+
+		assert_eq!(
+			app.menu_dispatch(snapshot.clone(), Action::Command(Command::Rename))
+				.units(),
+			0
+		);
+		assert_eq!(
+			app.error.as_deref(),
+			Some("Not available for multiple items")
+		);
+		assert!(app.editing.editor.is_none());
+
 		assert_eq!(
 			app.menu_dispatch(snapshot, Action::Command(Command::Open))
 				.units(),

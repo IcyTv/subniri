@@ -117,13 +117,74 @@ pub fn format_size(bytes: u64) -> String {
 }
 
 pub fn create_folder(parent: &Path, name: &str) -> Result<PathBuf, String> {
-	let name = name.trim();
-	if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\0') {
-		return Err("Enter a folder name, without /, . or ...".into());
-	}
+	validate_name(name)?;
+
 	let path = parent.join(name);
 	fs::create_dir(&path).map_err(|e| format!("Cannot create {}: {e}", path.display()))?;
 	Ok(path)
+}
+
+pub fn validate_name(name: &str) -> Result<(), String> {
+	if name.trim().is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
+		return Err("Enter a name other than . or .., without / or NUL.".into());
+	}
+
+	Ok(())
+}
+
+pub fn create_file(parent: &Path, name: &str) -> Result<PathBuf, String> {
+	validate_name(name)?;
+
+	let path = parent.join(name);
+	fs::OpenOptions::new()
+		.write(true)
+		.create_new(true)
+		.open(&path)
+		.map_err(|e| format!("Cannot create {}: {e}", path.display()))?;
+
+	Ok(path)
+}
+
+/// Linux's exclusive rename refuses existing destinations atomically, including
+/// dangling symlinks. Never fall back to std::fs::rename, which can overwrite.
+pub fn rename(target: &crate::context_menu::Target, name: &str) -> Result<PathBuf, String> {
+	use std::{ffi::CString, os::unix::ffi::OsStrExt};
+
+	validate_name(name)?;
+	if !target.available() {
+		return Err("The item changed or disappeared. Refresh before renaming.".into());
+	}
+
+	let parent = target
+		.path
+		.parent()
+		.ok_or("Cannot rename the filesystem root")?;
+	let destination = parent.join(name);
+	if destination == target.path {
+		return Ok(destination);
+	}
+
+	let source = CString::new(target.path.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+	let dest = CString::new(destination.as_os_str().as_bytes()).map_err(|e| e.to_string())?;
+
+	let result = unsafe {
+		libc::renameat2(
+			libc::AT_FDCWD,
+			source.as_ptr(),
+			libc::AT_FDCWD,
+			dest.as_ptr(),
+			libc::RENAME_NOREPLACE,
+		)
+	};
+	if result != 0 {
+		return Err(format!(
+			"Cannot rename {}: {}",
+			target.path.display(),
+			std::io::Error::last_os_error()
+		));
+	}
+
+	Ok(destination)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -315,6 +376,104 @@ mod tests {
 		assert!(created.is_dir());
 		assert!(create_folder(dir.path(), "New folder").is_err());
 	}
+
+	#[test]
+	fn empty_file_creation_never_truncates_files_or_follows_symlinks() {
+		use std::os::unix::fs::symlink;
+
+		let dir = TestDir::new();
+		let existing = dir.path().join("existing");
+
+		fs::write(&existing, "keep this").unwrap();
+		symlink(&existing, dir.path().join("link")).unwrap();
+		symlink(dir.path().join("missing"), dir.path().join("dangling")).unwrap();
+
+		for name in [
+			"",
+			" ",
+			".",
+			"..",
+			"../outside",
+			"/absolute",
+			"x\0y",
+			"existing",
+			"link",
+			"dangling",
+		] {
+			assert!(create_file(dir.path(), name).is_err(), "accepted {name:?}");
+		}
+
+		let created = create_file(dir.path(), "New File").unwrap();
+
+		assert_eq!(fs::metadata(created).unwrap().len(), 0);
+		assert_eq!(fs::read_to_string(existing).unwrap(), "keep this");
+		assert!(!dir.path().join("missing").exists());
+	}
+
+	#[test]
+	fn rename_is_exclusive_and_preserves_file_folder_and_symlink_contents() {
+		use crate::context_menu::{Context, Target};
+		use std::os::unix::fs::{MetadataExt, symlink};
+
+		let dir = TestDir::new();
+		let source = dir.path().join("source.txt");
+
+		fs::write(&source, "source data").unwrap();
+		fs::write(dir.path().join("taken"), "destination data").unwrap();
+		symlink(dir.path().join("missing"), dir.path().join("dangling")).unwrap();
+		let target = Target::capture(&source, Context::File).unwrap();
+		let inode = fs::metadata(&source).unwrap().ino();
+
+		assert!(rename(&target, "taken").is_err());
+		assert!(rename(&target, "dangling").is_err());
+		assert!(rename(&target, "../outside").is_err());
+		assert_eq!(rename(&target, "source.txt").unwrap(), source);
+
+		let renamed = rename(&target, "renamed.txt").unwrap();
+
+		assert_eq!(fs::metadata(&renamed).unwrap().ino(), inode);
+		assert_eq!(fs::read_to_string(&renamed).unwrap(), "source data");
+		assert_eq!(
+			fs::read_to_string(dir.path().join("taken")).unwrap(),
+			"destination data"
+		);
+		assert!(!source.exists());
+
+		fs::create_dir(dir.path().join("folder")).unwrap();
+		fs::write(dir.path().join("folder/child"), "child").unwrap();
+		let folder = Target::capture(&dir.path().join("folder"), Context::Folder).unwrap();
+
+		let moved = rename(&folder, "renamed folder").unwrap();
+
+		assert_eq!(fs::read_to_string(moved.join("child")).unwrap(), "child");
+
+		let link = Target::capture(&dir.path().join("dangling"), Context::File).unwrap();
+
+		let moved_link = rename(&link, "renamed link").unwrap();
+
+		assert_eq!(
+			fs::read_link(moved_link).unwrap(),
+			dir.path().join("missing")
+		);
+	}
+
+	#[test]
+	fn rename_rejects_an_item_replaced_since_editing_started() {
+		use crate::context_menu::{Context, Target};
+
+		let dir = TestDir::new();
+		let source = dir.path().join("source");
+
+		fs::write(&source, "original").unwrap();
+		let target = Target::capture(&source, Context::File).unwrap();
+		fs::rename(&source, dir.path().join("original")).unwrap();
+		fs::write(&source, "replacement").unwrap();
+
+		assert!(rename(&target, "renamed").is_err());
+		assert_eq!(fs::read_to_string(source).unwrap(), "replacement");
+		assert!(!dir.path().join("renamed").exists());
+	}
+
 	#[test]
 	fn retains_non_utf8_path_identity() {
 		use std::os::unix::ffi::OsStringExt;

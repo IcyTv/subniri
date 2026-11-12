@@ -659,7 +659,8 @@ impl FileManager {
 		destination_guard: Option<Target>, undo: Option<String>,
 		restoration: Option<Vec<crate::trash::Captured>>,
 	) -> Task<crate::Message> {
-		if self.transfers.busy
+		if self.editing.busy
+			|| self.transfers.busy
 			|| self.trash_state.busy
 			|| !self.transfers.loaded
 			|| self.closing.is_some()

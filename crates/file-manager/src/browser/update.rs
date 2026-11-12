@@ -1,5 +1,5 @@
 use super::{Message, typeahead};
-use crate::{FileManager, filesystem::entry};
+use crate::FileManager;
 use iced::{
 	Task,
 	keyboard::{self, Key, key::Named},
@@ -7,6 +7,26 @@ use iced::{
 
 impl FileManager {
 	pub(crate) fn update_browser(&mut self, message: Message) -> Task<crate::Message> {
+		if (self.editing.editor.is_some() || self.editing.pending.is_some())
+			&& matches!(
+				&message,
+				Message::Clicked(_)
+					| Message::OpenEntry(_)
+					| Message::OpenSelected
+					| Message::GoTo(_)
+					| Message::GoUp | Message::GoBack
+					| Message::GoForward
+					| Message::Search(_)
+					| Message::View(_)
+					| Message::Sort | Message::Refresh
+					| Message::NewFolder
+					| Message::NewFile
+					| Message::Rename
+					| Message::ClearSelection
+			) {
+			return self.finish_edit_before(message.into());
+		}
+
 		if self.page == super::Page::Trash {
 			if let Message::Keyboard(event) = message {
 				return self.trash_keyboard(event);
@@ -45,7 +65,7 @@ impl FileManager {
 				return self.update_browser(Message::Loaded(id, result));
 			}
 			Message::TypeAhead(edit) => {
-				if self.menu.is_some() {
+				if self.menu.is_some() || self.editing.editor.is_some() {
 					return Task::none();
 				}
 				if edit == typeahead::Edit::Clear {
@@ -126,6 +146,13 @@ impl FileManager {
 						self.entries = entries;
 						self.reconcile_selection();
 						self.history.remember_selection(self.selected.clone());
+						if !self.editing.busy
+							&& self.editing.editor.is_none()
+							&& let Some(message) = self.editing.pending.take()
+						{
+							return self.update(*message);
+						}
+
 						if restoring {
 							return self.reveal_selection();
 						}
@@ -133,6 +160,7 @@ impl FileManager {
 					Err(error) => {
 						// Refresh failures retain the useful listing; navigation already cleared it.
 						self.pending_selection = None;
+						self.editing.pending = None;
 						self.error = Some(error);
 					}
 				}
@@ -148,54 +176,45 @@ impl FileManager {
 				return self.reveal_selection();
 			}
 			Message::Sort => self.ascending = !self.ascending,
-			Message::NewFolder => {
-				self.typeahead.clear();
-				self.tag_editor = None;
-				self.folder_name = Some(String::new());
-				return iced::widget::operation::focus("folder-name");
-			}
-			Message::CancelFolder => self.folder_name = None,
-			Message::FolderName(name) => self.folder_name = Some(name),
-			Message::CreateFolder => {
-				if self.creating_folder {
-					return Task::none();
-				}
-				if let Some(name) = self.folder_name.clone() {
-					self.creating_folder = true;
-					let parent = self.path.clone();
-					return Task::perform(
-						async move {
-							let worker_parent = parent.clone();
-							let result = tokio::task::spawn_blocking(move || {
-								entry::create_folder(&worker_parent, &name)
-							})
-							.await
-							.map_err(|e| e.to_string())
-							.and_then(|r| r);
-							(parent, result)
-						},
-						|(parent, result)| Message::FolderCreated(parent, result).into(),
-					);
+			Message::NewFolder => return self.start_name_edit(Some(true), None),
+			Message::NewFile => return self.start_name_edit(Some(false), None),
+			Message::Rename => return self.start_name_edit(None, None),
+			Message::EditName(name) => {
+				if !self.editing.busy
+					&& let Some(editor) = &mut self.editing.editor
+				{
+					editor.name = name;
+					editor.error = None;
 				}
 			}
-			Message::FolderCreated(parent, result) => {
-				self.creating_folder = false;
-				match result {
-					Ok(path) => {
-						if self.closing.is_some() && !self.tag_busy && !self.favorites.running() {
-							return self.finish_pending_close();
-						}
-						self.folder_name = None;
-						if parent == self.path {
-							self.select_only(path);
-							self.search.clear();
-							self.active_tag = None;
-							return self.load_directory();
-						}
+			Message::SaveEdit => return self.save_name_edit(),
+			Message::CancelEdit => {
+				if !self.editing.busy {
+					self.editing.editor = None;
+					self.editing.pending = None;
+					self.reconcile_selection();
+				}
+			}
+			Message::EditFinished(result) => return self.name_edit_finished(result),
+			Message::ShowEditedItem => return self.show_edited_item(),
+			Message::DismissToast => self.editing.toast = None,
+			Message::ToastHover(hovered) => {
+				if let Some(toast) = &mut self.editing.toast {
+					toast.hovered = hovered;
+					toast.last_tick = std::time::Instant::now();
+				}
+			}
+			Message::ToastTick(now) => {
+				if let Some(toast) = &mut self.editing.toast {
+					if !toast.hovered {
+						toast.remaining = toast
+							.remaining
+							.saturating_sub(now.saturating_duration_since(toast.last_tick));
 					}
-					Err(error) => {
-						self.closing = None;
-						self.error = Some(error);
+
+					toast.last_tick = now;
+					if toast.remaining.is_zero() {
+						self.editing.toast = None;
 					}
 				}
 			}
@@ -210,6 +229,32 @@ impl FileManager {
 			Message::DismissError => self.error = None,
 			Message::ToggleInfo => self.show_info = !self.show_info,
 			Message::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+				if self.editing.editor.is_some() {
+					return match key.as_ref() {
+						Key::Named(Named::Escape) => self.update_browser(Message::CancelEdit),
+						Key::Named(Named::Enter) => self.save_name_edit(),
+						Key::Named(Named::ArrowLeft) if modifiers.alt() => {
+							self.update_browser(Message::GoBack)
+						}
+						Key::Named(Named::ArrowRight) if modifiers.alt() => {
+							self.update_browser(Message::GoForward)
+						}
+						_ => Task::none(),
+					};
+				}
+
+				if modifiers.control()
+					&& !modifiers.alt()
+					&& !modifiers.logo()
+					&& matches!(key.as_ref(), Key::Character("n" | "N"))
+				{
+					return self.update_browser(if modifiers.shift() {
+						Message::NewFolder
+					} else {
+						Message::NewFile
+					});
+				}
+
 				if modifiers.control()
 					&& !modifiers.alt()
 					&& !modifiers.logo()
@@ -288,7 +333,7 @@ impl FileManager {
 						self.typeahead.clear()
 					}
 					Key::Named(Named::Escape) => {
-						if self.folder_name.take().is_none() && self.tag_editor.take().is_none() {
+						if self.tag_editor.take().is_none() {
 							return self.update_browser(Message::ClearSelection);
 						}
 					}
@@ -301,6 +346,7 @@ impl FileManager {
 						};
 					}
 					Key::Named(Named::F5) => return self.load_directory(),
+					Key::Named(Named::F2) => return self.update_browser(Message::Rename),
 					Key::Named(Named::Enter) => return self.open_selected(),
 					Key::Named(Named::ArrowLeft) if modifiers.alt() => {
 						return self.update_browser(Message::GoBack);

@@ -130,8 +130,7 @@ pub(crate) struct FileManager {
 	pub(crate) loading: bool,
 	pub(crate) request_id: u64,
 	pub(crate) error: Option<String>,
-	pub(crate) folder_name: Option<String>,
-	pub(crate) creating_folder: bool,
+	pub(crate) editing: browser::editing::State,
 	pub(crate) tags: Option<TagStore>,
 	pub(crate) tag_problem: Option<String>,
 	pub(crate) tag_busy: bool,
@@ -176,8 +175,7 @@ impl FileManager {
 			loading: false,
 			request_id: 0,
 			error: None,
-			folder_name: None,
-			creating_folder: false,
+			editing: browser::editing::State::default(),
 			tags: None,
 			tag_problem: None,
 			tag_busy: true,
@@ -252,6 +250,12 @@ impl FileManager {
 					.map(|now| browser::drag::Message::Tick(now).into()),
 			);
 		}
+		if self.editing.toast.is_some() {
+			subscriptions.push(
+				iced::time::every(std::time::Duration::from_millis(100))
+					.map(|now| browser::Message::ToastTick(now).into()),
+			);
+		}
 		Subscription::batch(subscriptions)
 	}
 
@@ -260,6 +264,16 @@ impl FileManager {
 		if (self.dialogs.blocked() || self.transfers.blocked()) && message.is_parent_interaction() {
 			return Task::none();
 		}
+		if (self.editing.editor.is_some() || self.editing.pending.is_some())
+			&& matches!(
+				&message,
+				Message::Transfers(crate::transfers::Message::ShowHistory(_))
+					| Message::Trash(crate::trash::Message::Show)
+					| Message::Tags(tags::Message::TagFilter(_) | tags::Message::EditTag(_))
+			) {
+			return self.finish_edit_before(message);
+		}
+
 		match message {
 			Message::Appearance(event) => self.appearance.update(event),
 			Message::Drives(message) => return self.update_drives(message),
@@ -283,6 +297,11 @@ impl FileManager {
 				if id != self.host {
 					return Task::none();
 				}
+				self.editing.pending = None;
+				if !self.editing.busy {
+					self.editing.editor = None;
+				}
+
 				let close = self.cancel_dialog_for_shutdown();
 				self.transfers.cancel();
 				self.trash_state.cancel_waiting();
@@ -311,7 +330,7 @@ impl FileManager {
 		if self.dialogs.deleting.is_some()
 			|| self.drives.busy.is_some()
 			|| self.tag_busy
-			|| self.creating_folder
+			|| self.editing.busy
 			|| self.favorites.running()
 			|| self.transfers.busy
 			|| self.trash_state.busy

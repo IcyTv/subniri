@@ -26,7 +26,7 @@ impl Message {
 					| browser::Message::PathSuggestionsDue(..)
 					| browser::Message::PathSuggestionsLoaded(..)
 					| browser::Message::StorageLoaded(..)
-					| browser::Message::FolderCreated(..)
+					| browser::Message::EditFinished(..)
 					| browser::Message::OperationFinished(..)
 			),
 			Self::Tags(message) => !matches!(

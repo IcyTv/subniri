@@ -77,7 +77,8 @@ impl From<Message> for crate::Message {
 
 impl FileManager {
 	pub(crate) fn trash_mutation_blocked(&self) -> bool {
-		self.trash_state.busy
+		self.editing.busy
+			|| self.trash_state.busy
 			|| self.transfers.busy
 			|| self.transfers.blocked()
 			|| self.dialogs.blocked()

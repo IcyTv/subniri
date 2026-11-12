@@ -13,9 +13,7 @@ impl FileManager {
 						self.tag_problem = None;
 						self.tag_editor = None;
 						self.reconcile_selection();
-						if self.closing.is_some()
-							&& !self.creating_folder
-							&& !self.favorites.running()
+						if self.closing.is_some() && !self.editing.busy && !self.favorites.running()
 						{
 							return self.finish_pending_close();
 						}
@@ -44,7 +42,6 @@ impl FileManager {
 			}
 			Message::EditTag(id) => {
 				self.typeahead.clear();
-				self.folder_name = None;
 				if self.tag_busy {
 					return Task::none();
 				}
