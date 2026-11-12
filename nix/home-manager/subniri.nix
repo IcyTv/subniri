@@ -229,13 +229,22 @@
           ]
         ))
       ]
-      ++ lib.optionals (settings.fileberg.favorites != [] || settings.fileberg.transfer_durability != "auto") [
+      ++ lib.optionals (settings.fileberg.favorites != [] || settings.fileberg.roots != [] || settings.fileberg.transfer_durability != "auto") [
         (plain "fileberg" (
           lib.optionals (settings.fileberg.transfer_durability != "auto") [
             (leaf "transfer_durability" settings.fileberg.transfer_durability)
           ]
           ++ lib.optionals (settings.fileberg.favorites != []) [
             (node "favorites" settings.fileberg.favorites [])
+          ]
+          ++ lib.optionals (settings.fileberg.roots != []) [
+            (plain "roots" (map (root:
+              plain "root" [
+                (leaf "path" root.path)
+                (leaf "label" root.label)
+                (leaf "icon" root.icon)
+              ])
+            settings.fileberg.roots))
           ]
         ))
       ]
@@ -449,6 +458,28 @@ in {
             buffered never explicitly flushes and may lose completed transfers on
             power loss or unsafe removal.
           '';
+        };
+
+        fileberg.roots = mkOption {
+          type = types.listOf (types.submodule {
+            options = {
+              path = mkOption {
+                type = types.str;
+                description = "Absolute or ~/ folder path.";
+              };
+              label = mkOption {
+                type = types.str;
+                description = "Folder and breadcrumb label.";
+              };
+              icon = mkOption {
+                type = types.str;
+                default = "folder";
+                description = "Built-in Fileberg icon name or absolute/~/ SVG path.";
+              };
+            };
+          });
+          default = [];
+          description = "Custom folder identities; deepest root wins, with custom identities overriding Git and XDG identities at the same path.";
         };
 
         fileberg.favorites = mkOption {

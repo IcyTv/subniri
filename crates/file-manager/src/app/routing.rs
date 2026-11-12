@@ -21,6 +21,10 @@ impl Message {
 			Self::Browser(message) => !matches!(
 				message,
 				browser::Message::Loaded(..)
+					| browser::Message::ListingLoaded(..)
+					| browser::Message::PathValidated(..)
+					| browser::Message::PathSuggestionsDue(..)
+					| browser::Message::PathSuggestionsLoaded(..)
 					| browser::Message::StorageLoaded(..)
 					| browser::Message::FolderCreated(..)
 					| browser::Message::OperationFinished(..)

@@ -114,6 +114,8 @@ pub(crate) struct FileManager {
 	pub(crate) menu: Option<context_menu::Menu>,
 	pub(crate) popups: neo_widgets::popup::Popups<()>,
 	pub(crate) path: PathBuf,
+	pub(crate) location: browser::location::Editor,
+	pub(crate) breadcrumb_root: Option<crate::filesystem::locations::FolderIdentity>,
 	pub(crate) page: browser::Page,
 	pub(crate) history: History,
 	pub(crate) entries: Vec<DirEntry>,
@@ -161,6 +163,8 @@ impl FileManager {
 			popups: neo_widgets::popup::Popups::default(),
 			history: History::new(path.clone()),
 			path,
+			location: browser::location::Editor::default(),
+			breadcrumb_root: None,
 			entries: Vec::new(),
 			selected: None,
 			selection: selection::Selection::default(),
@@ -271,7 +275,8 @@ impl FileManager {
 			Message::PreferencesChanged => {
 				let favorites = self.update_context_menu(ContextMenuMessage::FavoritesReload);
 				let transfers = self.update_transfers(crate::transfers::Message::Load);
-				return Task::batch([favorites, transfers]);
+				let listing = self.load_directory();
+				return Task::batch([favorites, transfers, listing]);
 			}
 			Message::WindowEvent(id, event) => return self.route_window_event(id, event),
 			Message::CloseRequested(id) => {

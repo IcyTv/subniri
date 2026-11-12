@@ -15,7 +15,7 @@ use iced::{
 
 pub(crate) fn gate<'a>(
 	content: Element<'a, Message>, active: bool, enabled: bool,
-	entries: Vec<(Id, std::path::PathBuf)>,
+	entries: Vec<(Id, std::path::PathBuf)>, completion_available: bool,
 ) -> Element<'a, Message> {
 	Element::new(Gate {
 		content,
@@ -25,6 +25,7 @@ pub(crate) fn gate<'a>(
 		forward_keys: false,
 		blocked: false,
 		entries,
+		completion_available,
 	})
 }
 
@@ -39,6 +40,7 @@ pub(crate) fn menu_gate<'a>(
 		forward_keys: false,
 		blocked: false,
 		entries: Vec::new(),
+		completion_available: false,
 	})
 }
 
@@ -53,6 +55,7 @@ pub(crate) fn host_gate<'a, R: Renderer + 'a>(
 		forward_keys: popup.is_some(),
 		blocked: false,
 		entries: Vec::new(),
+		completion_available: false,
 	})
 }
 
@@ -68,6 +71,7 @@ pub(crate) fn modal_gate<'a, R: Renderer + 'a>(
 		forward_keys: false,
 		blocked,
 		entries: Vec::new(),
+		completion_available: false,
 	})
 }
 
@@ -79,6 +83,7 @@ struct Gate<'a, R = iced::Renderer> {
 	forward_keys: bool,
 	blocked: bool,
 	entries: Vec<(Id, std::path::PathBuf)>,
+	completion_available: bool,
 }
 
 #[derive(Default)]
@@ -204,6 +209,45 @@ impl<R: Renderer> Widget<Message, iced::Theme, R> for Gate<'_, R> {
 			self.content
 				.as_widget_mut()
 				.operate(child, layout, renderer, &mut focus);
+			if (self.enabled || self.completion_available)
+				&& self.menu.is_none()
+				&& let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = key
+			{
+				use iced::keyboard::{Key, key::Named};
+				let message = if modifiers.control()
+					&& !modifiers.alt()
+					&& !modifiers.logo()
+					&& key.as_ref() == Key::Character("l")
+				{
+					Some(BrowserMessage::EditPath)
+				} else if key.as_ref() == Key::Named(Named::Escape)
+					&& focus.focused.contains(&Id::new("location"))
+				{
+					Some(BrowserMessage::CancelPath)
+				} else if self.completion_available
+					&& modifiers.is_empty()
+					&& focus.focused.contains(&Id::new("location"))
+				{
+					match key.as_ref() {
+						Key::Named(Named::ArrowDown) => {
+							Some(BrowserMessage::MovePathSuggestion(true))
+						}
+						Key::Named(Named::ArrowUp) => {
+							Some(BrowserMessage::MovePathSuggestion(false))
+						}
+						Key::Named(Named::Tab) => Some(BrowserMessage::FillPath(None)),
+						_ => None,
+					}
+				} else {
+					None
+				};
+
+				if let Some(message) = message {
+					shell.publish(message.into());
+					shell.capture_event();
+					return;
+				}
+			}
 			if self.enabled
 				&& !self.entries.is_empty()
 				&& let iced::keyboard::Event::KeyPressed {
@@ -484,6 +528,14 @@ mod tests {
 		content: Element<'_, Message, iced::Theme, ()>, id: &str, active: bool,
 		event: keyboard::Event, menu: Option<window::Id>, entries: Vec<(Id, std::path::PathBuf)>,
 	) -> Vec<Message> {
+		dispatch_completions(content, id, active, event, menu, entries, false)
+	}
+
+	fn dispatch_completions(
+		content: Element<'_, Message, iced::Theme, ()>, id: &str, active: bool,
+		event: keyboard::Event, menu: Option<window::Id>, entries: Vec<(Id, std::path::PathBuf)>,
+		completion_available: bool,
+	) -> Vec<Message> {
 		let mut gate = Gate {
 			content,
 			active,
@@ -492,6 +544,7 @@ mod tests {
 			forward_keys: false,
 			blocked: false,
 			entries,
+			completion_available,
 		};
 		let mut tree = Tree::new(&gate as &dyn Widget<Message, iced::Theme, ()>);
 		gate.diff(&mut tree);
@@ -541,6 +594,182 @@ mod tests {
 			!messages
 				.iter()
 				.any(|m| matches!(m, Message::Browser(BrowserMessage::TypeAhead(_))))
+		);
+	}
+
+	#[test]
+	fn location_shortcut_and_escape_are_captured_before_editor_or_file_actions() {
+		for (key, modifiers, edit) in [
+			(
+				keyboard::Key::Character("l".into()),
+				keyboard::Modifiers::CTRL,
+				true,
+			),
+			(
+				keyboard::Key::Named(keyboard::key::Named::Escape),
+				keyboard::Modifiers::empty(),
+				false,
+			),
+		] {
+			let input = text_input::<Message, iced::Theme>("Path", "/work")
+				.id("location")
+				.on_input(|value| BrowserMessage::PathChanged(value).into());
+
+			let messages = dispatch_files(
+				input.into(),
+				"location",
+				false,
+				typeahead::tests::key(key, None, modifiers),
+				None,
+				Vec::new(),
+			);
+
+			assert!(
+				matches!(
+					messages.as_slice(),
+					[Message::Browser(BrowserMessage::EditPath)]
+				) == edit,
+				"{messages:?}"
+			);
+			assert!(
+				matches!(
+					messages.as_slice(),
+					[Message::Browser(BrowserMessage::CancelPath)]
+				) != edit,
+				"{messages:?}"
+			);
+		}
+	}
+
+	#[test]
+	fn focused_location_routes_completion_keys_before_tab_and_file_navigation() {
+		for (key, expected) in [
+			(
+				keyboard::key::Named::ArrowDown,
+				BrowserMessage::MovePathSuggestion(true),
+			),
+			(
+				keyboard::key::Named::ArrowUp,
+				BrowserMessage::MovePathSuggestion(false),
+			),
+			(keyboard::key::Named::Tab, BrowserMessage::FillPath(None)),
+		] {
+			let input = text_input::<Message, iced::Theme>("Path", "/work")
+				.id("location")
+				.on_input(|value| BrowserMessage::PathChanged(value).into());
+
+			let messages = dispatch_completions(
+				input.into(),
+				"location",
+				false,
+				typeahead::tests::key(
+					keyboard::Key::Named(key),
+					None,
+					keyboard::Modifiers::empty(),
+				),
+				None,
+				vec![(Id::from("file"), "/file".into())],
+				true,
+			);
+
+			assert_eq!(messages.len(), 1, "{messages:?}");
+			assert_eq!(
+				format!("{:?}", messages[0]),
+				format!("{:?}", Message::Browser(expected))
+			);
+		}
+	}
+
+	#[test]
+	fn completion_does_not_capture_caret_keys_or_shift_tab() {
+		for (key, modifiers) in [
+			(
+				keyboard::key::Named::ArrowLeft,
+				keyboard::Modifiers::empty(),
+			),
+			(
+				keyboard::key::Named::ArrowRight,
+				keyboard::Modifiers::empty(),
+			),
+			(keyboard::key::Named::Tab, keyboard::Modifiers::SHIFT),
+		] {
+			let input = text_input::<Message, iced::Theme>("Path", "/work")
+				.id("location")
+				.on_input(|value| BrowserMessage::PathChanged(value).into());
+
+			let messages = dispatch_completions(
+				input.into(),
+				"location",
+				false,
+				typeahead::tests::key(keyboard::Key::Named(key), None, modifiers),
+				None,
+				Vec::new(),
+				true,
+			);
+
+			assert!(!messages.iter().any(|message| matches!(
+				message,
+				Message::Browser(
+					BrowserMessage::MovePathSuggestion(_)
+						| BrowserMessage::FillPath(_)
+						| BrowserMessage::SelectionKey(..)
+				)
+			)));
+		}
+	}
+
+	#[test]
+	fn focused_location_keeps_typing_enter_and_selection_shortcuts() {
+		let input = || {
+			text_input::<Message, iced::Theme>("Path", "/work")
+				.id("location")
+				.on_input(|value| BrowserMessage::PathChanged(value).into())
+				.on_submit(BrowserMessage::SubmitPath.into())
+		};
+
+		let messages = dispatch_files(
+			input().into(),
+			"location",
+			false,
+			typeahead::tests::key(
+				keyboard::Key::Character("a".into()),
+				Some("a"),
+				keyboard::Modifiers::empty(),
+			),
+			None,
+			Vec::new(),
+		);
+
+		assert!(
+			messages
+				.iter()
+				.any(|message| matches!(message, Message::Browser(BrowserMessage::PathChanged(_))))
+		);
+		assert!(
+			!messages
+				.iter()
+				.any(|message| matches!(message, Message::Browser(BrowserMessage::TypeAhead(_))))
+		);
+
+		let messages = dispatch_files(
+			input().into(),
+			"location",
+			false,
+			typeahead::tests::key(
+				keyboard::Key::Named(keyboard::key::Named::Enter),
+				None,
+				keyboard::Modifiers::empty(),
+			),
+			None,
+			Vec::new(),
+		);
+
+		assert!(
+			matches!(
+				messages.as_slice(),
+				[Message::Browser(BrowserMessage::SubmitPath)]
+			),
+			"{messages:?}"
 		);
 	}
 
@@ -785,6 +1014,7 @@ mod tests {
 				(Id::from("file-a"), "/a".into()),
 				(Id::from("file-b"), "/b".into()),
 			],
+			completion_available: false,
 		};
 		let mut tree = Tree::new(&gate as &dyn Widget<Message, iced::Theme, ()>);
 		gate.diff(&mut tree);

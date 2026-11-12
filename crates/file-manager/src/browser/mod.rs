@@ -1,6 +1,7 @@
 //! Directory browsing, selection, navigation, and inline folder creation.
 mod directory;
 pub(crate) mod drag;
+pub(crate) mod location;
 pub(crate) mod navigation;
 pub(crate) mod selection;
 pub(crate) mod typeahead;
@@ -36,6 +37,16 @@ pub enum Message {
 	GoForward,
 	Refresh,
 	Loaded(u64, Result<Vec<DirEntry>, String>),
+	ListingLoaded(u64, Result<location::Listing, String>),
+	EditPath,
+	PathChanged(String),
+	SubmitPath,
+	CancelPath,
+	PathValidated(u64, Result<PathBuf, String>),
+	PathSuggestionsDue(u64),
+	PathSuggestionsLoaded(u64, Vec<crate::filesystem::locations::FolderIdentity>),
+	MovePathSuggestion(bool),
+	FillPath(Option<PathBuf>),
 	StorageLoaded(u64, Option<storage::Usage>),
 	Search(String),
 	View(ViewMode),

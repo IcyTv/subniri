@@ -2,5 +2,6 @@
 pub(crate) mod classification;
 pub(crate) mod disks;
 pub(crate) mod entry;
+pub(crate) mod locations;
 pub(crate) mod storage;
 pub(crate) mod volumes;

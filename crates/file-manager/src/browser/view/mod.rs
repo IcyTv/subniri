@@ -60,6 +60,7 @@ impl FileManager {
 				.iter()
 				.map(|e| (e.id.clone(), e.path.clone()))
 				.collect(),
+			self.path_suggestions_visible(),
 		);
 		let content = crate::browser::drag::widget::gate(
 			content,
@@ -522,7 +523,35 @@ impl FileManager {
 			.snapshot
 			.as_ref()
 			.and_then(|s| s.breadcrumb_root(&self.path));
-		let (anchor, parts): (Element<'_, Message>, _) = if let Some((volume, mount)) = disk {
+		let root = self
+			.breadcrumb_root
+			.as_ref()
+			.filter(|root| disk.is_none_or(|(_, mount)| root.path.starts_with(&mount.path)));
+
+		let (anchor, parts): (Element<'_, Message>, _) = if let Some(root) = root {
+			let anchor = control(
+				row![
+					svg(root.icon.clone())
+						.width(17)
+						.height(17)
+						.style(move |_, _| svg::Style {
+							color: root.symbolic.then_some(colors.text)
+						}),
+					text(root.label.clone()).size(12).weight(font::Weight::Bold),
+				]
+				.spacing(6)
+				.align_y(Alignment::Center),
+				false,
+				colors,
+			)
+			.padding(4)
+			.on_press(BrowserMessage::GoTo(root.path.clone()).into());
+
+			(
+				anchor.into(),
+				navigation::mounted_breadcrumbs(&self.path, &root.path, None),
+			)
+		} else if let Some((volume, mount)) = disk {
 			let anchor = control(
 				row![
 					svg(ui_icon!("hard-drive"))
@@ -588,6 +617,59 @@ impl FileManager {
 				.on_press(BrowserMessage::GoTo(path).into()),
 			);
 		}
+
+		let location: Element<'_, Message> = if let Some(value) = &self.location.value {
+			let input = text_input("Enter a folder path…", value)
+				.id("location")
+				.on_input(|value| BrowserMessage::PathChanged(value).into())
+				.on_submit(BrowserMessage::SubmitPath.into())
+				.style(move |theme, status| style::search_input(theme, status, colors))
+				.padding(4)
+				.size(12);
+
+			let available = self.path_suggestions_visible();
+			let menu = crate::ui::path_completion::menu(
+				&self.location.suggestions,
+				self.location.selected_suggestion,
+				colors,
+			);
+			let input = crate::ui::path_completion::dropdown(input.into(), menu, available);
+
+			let mut editor = column![input].spacing(3);
+			if let Some(error) = &self.location.error {
+				editor = editor.push(text(error).size(11).color(colors.text));
+			}
+
+			editor.width(Length::Fill).into()
+		} else {
+			scrollable(crumbs)
+				.direction(iced::widget::scrollable::Direction::Horizontal(
+					Default::default(),
+				))
+				.width(Length::Fill)
+				.into()
+		};
+
+		let edit = control(
+			svg(if self.location.value.is_some() {
+				ui_icon!("x")
+			} else {
+				ui_icon!("pencil-simple")
+			})
+			.width(17)
+			.height(17)
+			.style(move |_, _| svg::Style {
+				color: Some(colors.text),
+			}),
+			false,
+			colors,
+		)
+		.on_press(if self.location.value.is_some() {
+			BrowserMessage::CancelPath.into()
+		} else {
+			BrowserMessage::EditPath.into()
+		});
+
 		let navigation = row![
 			control(
 				svg(ui_icon!("arrow-left"))
@@ -625,11 +707,8 @@ impl FileManager {
 			)
 			.on_press(BrowserMessage::GoUp.into())
 			.enabled(self.path.parent().is_some()),
-			scrollable(crumbs)
-				.direction(iced::widget::scrollable::Direction::Horizontal(
-					Default::default()
-				))
-				.width(Length::Fill),
+			location,
+			edit,
 			control(
 				svg(ui_icon!("arrow-clockwise"))
 					.width(17)

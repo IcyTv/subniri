@@ -14,16 +14,20 @@ impl FileManager {
 	pub(crate) fn goto(&mut self, path: PathBuf) -> Task<Message> {
 		self.page = super::Page::Files;
 		self.typeahead.clear();
+		self.location.cancel();
 		let selected = self.selection_snapshot();
 		self.history
 			.go_to(path, selected)
 			.map_or_else(Task::none, |visit| self.navigation_changed(visit))
 	}
+
 	pub(crate) fn navigation_changed(&mut self, visit: Visit) -> Task<Message> {
 		self.page = super::Page::Files;
 		let close = self.menu_lifecycle(neo_widgets::popup::Event::CloseAll);
 		self.typeahead.clear();
 		self.path = visit.path;
+		self.location.cancel();
+		self.breadcrumb_root = None;
 		self.pending_selection = visit.selected;
 		self.selected = None;
 		self.selection.clear();
@@ -32,33 +36,49 @@ impl FileManager {
 		self.active_tag = None;
 		self.entries.clear();
 		self.storage = None;
+
 		close.chain(self.load_directory())
 	}
+
 	pub(crate) fn selection_snapshot(&self) -> Option<PathBuf> {
 		self.pending_selection
 			.clone()
 			.or_else(|| self.selected.clone())
 	}
+
 	pub(crate) fn reveal_selection(&self) -> Task<Message> {
 		self.entries
 			.iter()
 			.find(|e| Some(&e.path) == self.selected.as_ref())
 			.map_or_else(Task::none, |e| view::reveal_selection(e.id.clone()))
 	}
+
 	pub(crate) fn load_directory(&mut self) -> Task<Message> {
 		self.request_id += 1;
 		self.loading = true;
 		self.error = None;
+
 		let (id, path) = (self.request_id, self.path.clone());
 		let storage_path = path.clone();
 		let listing = Task::perform(
 			async move {
-				tokio::task::spawn_blocking(move || entry::read_directory(&path))
-					.await
-					.map_err(|e| e.to_string())
-					.and_then(|r| r)
+				tokio::task::spawn_blocking(move || {
+					let roots = config::ConfigFile::load()
+						.map(|(_, config)| config.fileberg.roots)
+						.unwrap_or_default();
+					let locations = crate::filesystem::locations::Locations::new(&roots);
+					let entries = entry::read_directory_with_locations(&path, &locations)?;
+
+					Ok(super::location::Listing {
+						entries,
+						root: locations.breadcrumb_root(&path),
+					})
+				})
+				.await
+				.map_err(|e| e.to_string())
+				.and_then(|r| r)
 			},
-			move |result| BrowserMessage::Loaded(id, result).into(),
+			move |result| BrowserMessage::ListingLoaded(id, result).into(),
 		);
 		let usage = Task::perform(
 			async move {
@@ -69,8 +89,10 @@ impl FileManager {
 			},
 			move |usage| BrowserMessage::StorageLoaded(id, usage).into(),
 		);
+
 		Task::batch([listing, usage])
 	}
+
 	pub(crate) fn open_selected(&mut self) -> Task<Message> {
 		self.typeahead.clear();
 		if self.selection.paths.len() != 1 {
@@ -90,6 +112,7 @@ impl FileManager {
 			Self::open_file(path)
 		}
 	}
+
 	pub(crate) fn visible_entries(&self) -> Vec<&DirEntry> {
 		let query = self.search.to_lowercase();
 		let mut entries: Vec<_> = self
@@ -114,6 +137,7 @@ impl FileManager {
 		}
 		entries
 	}
+
 	pub(crate) fn typeahead_match(&self) -> Option<&DirEntry> {
 		if !self.typeahead.is_active() {
 			return None;
@@ -123,6 +147,7 @@ impl FileManager {
 			.into_iter()
 			.find(|e| e.name.to_lowercase().starts_with(&prefix))
 	}
+
 	pub(crate) fn reconcile_selection(&mut self) {
 		let order = self
 			.visible_entries()

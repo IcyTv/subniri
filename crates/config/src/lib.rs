@@ -121,7 +121,15 @@ pub struct Fileberg {
 	#[config(list_style = children)]
 	#[garde(custom(validate_fileberg_favorites))]
 	pub favorites: Vec<String>,
+
+	/// Named folder roots shared by file icons and breadcrumbs.
+	#[config(default)]
+	#[garde(custom(fileberg_roots::validate))]
+	pub roots: FilebergRoots,
 }
+
+mod fileberg_roots;
+pub use fileberg_roots::{FILEBERG_FOLDER_ICONS, FilebergRoot, FilebergRoots};
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Config, ConfigSerialize)]
 pub enum FilebergDurability {
@@ -502,6 +510,28 @@ impl ConfigFile {
 			&self.fileberg.favorites,
 			&declarative.fileberg.favorites,
 			|values| nix_list(values.iter().map(String::as_str)),
+		);
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.fileberg.roots",
+			&self.fileberg.roots,
+			&declarative.fileberg.roots,
+			|roots| {
+				format!(
+					"[{}]",
+					roots
+						.0
+						.iter()
+						.map(|root| format!(
+							"{{ path = {}; label = {}; icon = {}; }}",
+							nix_string(&root.path),
+							nix_string(&root.label),
+							nix_string(&root.icon)
+						))
+						.collect::<Vec<_>>()
+						.join(" ")
+				)
+			},
 		);
 		out
 	}

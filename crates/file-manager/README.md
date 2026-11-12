@@ -1,6 +1,7 @@
 # Fileberg
 
 Developer orientation: [module map](../../docs/development/fileberg-modules.md).
+Folder identities, custom icons, and path entry: [location guide](../../docs/fileberg-locations.md).
 
 An Iced file browser with a compact yellow identity bar, paper-colored surfaces,
 outlined folders, and blue selection states. It uses embedded Phosphor icons
@@ -31,6 +32,12 @@ cargo run -p file-manager -- /path/to/directory
   item; multi-selection Open is unavailable until tab support is added.
 - Files open with `xdg-open`, using their original OS paths.
 - Home, standard user directories, Root, breadcrumbs, Back, Forward, and Up navigate.
+- Breadcrumbs start at the deepest recognized location, including Git repositories
+  and configured custom roots. Ctrl+L or the pencil button opens direct path entry;
+  Enter navigates and Escape cancels.
+- Path entry suggests matching folders and named roots. Up/Down selects a result;
+  Tab or a click fills it with a trailing slash. Enter opens the selected result,
+  or the typed path when no result is selected. Suggestions do not navigate by themselves.
 - Search filters filenames in the current directory, case-insensitively.
 - Typing outside a text field selects the first visible filename beginning with
   that case-insensitive prefix, without filtering the list (`f` → `faz`, then

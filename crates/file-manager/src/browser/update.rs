@@ -16,6 +16,34 @@ impl FileManager {
 			}
 		}
 		match message {
+			Message::EditPath => return self.edit_path(),
+			Message::PathChanged(value) => return self.change_path(value),
+			Message::PathSuggestionsDue(generation) => {
+				return self.request_path_suggestions(generation);
+			}
+			Message::PathSuggestionsLoaded(generation, suggestions) => {
+				self.path_suggestions_loaded(generation, suggestions)
+			}
+			Message::MovePathSuggestion(down) => return self.move_path_suggestion(down),
+			Message::FillPath(path) => return self.fill_path(path),
+			Message::SubmitPath => return self.submit_path(),
+			Message::CancelPath => {
+				self.location.cancel();
+				return self.reveal_selection();
+			}
+			Message::PathValidated(id, result) => return self.path_validated(id, result),
+			Message::ListingLoaded(id, result) => {
+				if id != self.request_id {
+					return Task::none();
+				}
+
+				let result = result.map(|listing| {
+					self.breadcrumb_root = listing.root;
+					listing.entries
+				});
+
+				return self.update_browser(Message::Loaded(id, result));
+			}
 			Message::TypeAhead(edit) => {
 				if self.menu.is_some() {
 					return Task::none();
@@ -182,6 +210,18 @@ impl FileManager {
 			Message::DismissError => self.error = None,
 			Message::ToggleInfo => self.show_info = !self.show_info,
 			Message::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+				if modifiers.control()
+					&& !modifiers.alt()
+					&& !modifiers.logo()
+					&& key.as_ref() == Key::Character("l")
+				{
+					return self.edit_path();
+				}
+				if key.as_ref() == Key::Named(Named::Escape) && self.location.value.is_some() {
+					self.location.cancel();
+					return self.reveal_selection();
+				}
+
 				if modifiers.control()
 					&& !modifiers.shift()
 					&& !modifiers.alt()

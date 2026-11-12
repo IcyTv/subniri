@@ -16,14 +16,23 @@ pub struct DirEntry {
 	pub thumbnail: Option<Handle>,
 	pub is_dir: bool,
 	pub is_hidden: bool,
+	pub is_symlink: bool,
+	pub unresolved_link: bool,
+	pub folder_identity: Option<super::locations::FolderIdentity>,
 }
 
 impl DirEntry {
 	pub fn from_path(db: &SharedMimeInfo, path: PathBuf) -> Result<Self, String> {
-		let metadata = fs::metadata(&path)
-			.or_else(|_| fs::symlink_metadata(&path))
-			.map_err(|e| format!("{}: {e}", path.display()))?;
+		let link_metadata =
+			fs::symlink_metadata(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+		let is_symlink = link_metadata.is_symlink();
+		let target_metadata = is_symlink.then(|| fs::metadata(&path));
+		let unresolved_link = target_metadata.as_ref().is_some_and(Result::is_err);
+		let metadata = target_metadata
+			.and_then(Result::ok)
+			.unwrap_or(link_metadata);
 		let is_dir = metadata.is_dir();
+
 		let name = path
 			.file_name()
 			.unwrap_or_default()
@@ -31,7 +40,10 @@ impl DirEntry {
 			.into_owned();
 		let is_hidden = name.starts_with('.');
 
-		let kind = file_kind(&path, db);
+		let target_path = (is_symlink && !unresolved_link)
+			.then(|| fs::canonicalize(&path).ok())
+			.flatten();
+		let kind = file_kind(target_path.as_deref().unwrap_or(&path), db);
 		let thumbnail = if !is_dir && kind == FileKind::Image {
 			thumbnail(&path)
 		} else {
@@ -47,25 +59,48 @@ impl DirEntry {
 			thumbnail,
 			is_dir,
 			is_hidden,
+			is_symlink,
+			unresolved_link,
+			folder_identity: None,
 		})
 	}
 }
 
+#[cfg(test)]
 pub fn read_directory(path: &Path) -> Result<Vec<DirEntry>, String> {
+	read_directory_with_locations(path, &super::locations::Locations::new(&Default::default()))
+}
+
+pub(crate) fn read_directory_with_locations(
+	path: &Path, locations: &super::locations::Locations,
+) -> Result<Vec<DirEntry>, String> {
 	let db = SharedMimeInfo::new();
 	let read = fs::read_dir(path).map_err(|e| format!("Cannot read {}: {e}", path.display()))?;
 	let mut entries = read
 		.map(|result| {
 			let entry =
 				result.map_err(|e| format!("Cannot read an entry in {}: {e}", path.display()))?;
-			DirEntry::from_path(&db, entry.path())
+			let mut entry = DirEntry::from_path(&db, entry.path())?;
+			if entry.is_dir {
+				entry.folder_identity = locations.folder(&entry.path).or_else(|| {
+					entry
+						.is_symlink
+						.then(|| fs::canonicalize(&entry.path).ok())
+						.flatten()
+						.and_then(|target| locations.folder(&target))
+				});
+			}
+
+			Ok::<_, String>(entry)
 		})
 		.collect::<Result<Vec<_>, _>>()?;
+
 	entries.sort_by(|a, b| {
 		b.is_dir
 			.cmp(&a.is_dir)
 			.then_with(|| a.path.file_name().cmp(&b.path.file_name()))
 	});
+
 	Ok(entries)
 }
 
@@ -101,6 +136,13 @@ pub enum FileKind {
 	Audio,
 	Video,
 	Document,
+	WordProcessing,
+	Spreadsheet,
+	Presentation,
+	Config,
+	Font,
+	Executable,
+	Book,
 }
 
 fn file_kind(path: &Path, db: &SharedMimeInfo) -> FileKind {
@@ -111,15 +153,37 @@ fn file_kind(path: &Path, db: &SharedMimeInfo) -> FileKind {
 
 	if let Some(ref ext) = ext {
 		match ext.as_str() {
+			"doc" | "docx" | "odt" | "rtf" => return FileKind::WordProcessing,
+			"xls" | "xlsx" | "ods" | "csv" | "tsv" => return FileKind::Spreadsheet,
+			"ppt" | "pptx" | "odp" => return FileKind::Presentation,
+			"ini" | "toml" | "conf" | "cfg" | "json" | "yaml" | "yml" | "kdl" | "xml" => {
+				return FileKind::Config;
+			}
+			"ttf" | "otf" | "woff" | "woff2" => return FileKind::Font,
+			"exe" | "appimage" | "desktop" => return FileKind::Executable,
+			"epub" | "mobi" => return FileKind::Book,
 			"pdf" => return FileKind::Pdf,
-			"zip" | "7z" | "rar" | "tar" | "gz" | "xz" => return FileKind::Archive,
+			"zip" | "7z" | "rar" | "tar" | "gz" | "xz" | "bz2" | "zst" | "tgz" | "deb" | "rpm" => {
+				return FileKind::Archive;
+			}
 			"rs" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "cs" | "js" | "mjs"
 			| "cjs" | "jsx" | "ts" | "mts" | "cts" | "tsx" | "py" | "css" | "scss" | "sass"
-			| "less" | "html" | "htm" | "vue" | "sql" | "md" | "markdown" | "ini" | "toml"
-			| "conf" | "cfg" | "json" | "yaml" | "yml" | "nix" | "sh" => return FileKind::Code,
-			"txt" | "log" | "csv" => return FileKind::Text,
+			| "less" | "html" | "htm" | "vue" | "sql" | "nix" | "sh" | "bash" | "fish" | "go"
+			| "java" | "kt" | "rb" | "php" | "lua" | "swift" | "zig" => return FileKind::Code,
+			"txt" | "log" | "md" | "markdown" | "rst" => return FileKind::Text,
 			"png" | "jpg" | "jpeg" | "svg" | "webp" | "gif" | "avif" => return FileKind::Image,
+			"mp3" | "flac" | "ogg" | "wav" | "m4a" | "opus" | "aac" => return FileKind::Audio,
+			"mp4" | "mkv" | "webm" | "avi" | "mov" | "mpeg" => return FileKind::Video,
 			_ => (),
+		}
+	}
+
+	if let Some(name) = path.file_name().and_then(|name| name.to_str()) {
+		match name.to_ascii_lowercase().as_str() {
+			"dockerfile" | "makefile" | "justfile" => return FileKind::Code,
+			".gitignore" | ".env" | ".editorconfig" => return FileKind::Config,
+			"readme" | "license" | "copying" => return FileKind::Text,
+			_ => {}
 		}
 	}
 
@@ -136,6 +200,9 @@ fn file_kind(path: &Path, db: &SharedMimeInfo) -> FileKind {
 			("application", "pdf") => FileKind::Pdf,
 			("application", "zip" | "gzip" | "x-tar" | "x-7z-compressed" | "x-rar") => {
 				FileKind::Archive
+			}
+			("application", "x-executable" | "x-pie-executable" | "x-sharedlib") => {
+				FileKind::Executable
 			}
 			_ => FileKind::Document,
 		},
@@ -167,6 +234,65 @@ mod tests {
 	#![allow(clippy::unwrap_used)]
 	use super::*;
 	use crate::test_support::TestDir;
+
+	#[test]
+	fn descriptive_formats_ignore_extension_case() {
+		let db = SharedMimeInfo::new();
+
+		for (name, kind) in [
+			("REPORT.DOCX", FileKind::WordProcessing),
+			("budget.XLSX", FileKind::Spreadsheet),
+			("data.csv", FileKind::Spreadsheet),
+			("slides.odp", FileKind::Presentation),
+			("config.kdl", FileKind::Config),
+			("theme.woff2", FileKind::Font),
+			("program.AppImage", FileKind::Executable),
+			("book.epub", FileKind::Book),
+			("README", FileKind::Text),
+			("Dockerfile", FileKind::Code),
+			("song.flac", FileKind::Audio),
+			("movie.mkv", FileKind::Video),
+		] {
+			assert_eq!(file_kind(Path::new(name), &db), kind, "{name}");
+		}
+	}
+
+	#[test]
+	fn symlinks_retain_target_artwork_and_unresolved_identity() {
+		use std::os::unix::fs::symlink;
+		let dir = TestDir::new();
+		let db = SharedMimeInfo::new();
+
+		fs::create_dir(dir.path().join("Downloads")).unwrap();
+		image::RgbImage::from_pixel(2, 2, image::Rgb([1, 2, 3]))
+			.save(dir.path().join("photo.png"))
+			.unwrap();
+
+		symlink("Downloads", dir.path().join("folder-alias")).unwrap();
+		symlink("photo.png", dir.path().join("image-alias")).unwrap();
+		symlink("missing", dir.path().join("broken")).unwrap();
+		symlink("loop", dir.path().join("loop")).unwrap();
+
+		let entries = read_directory(dir.path()).unwrap();
+		let folder = entries
+			.iter()
+			.find(|entry| entry.name == "folder-alias")
+			.unwrap();
+
+		assert!(folder.is_dir && folder.is_symlink && !folder.unresolved_link);
+		assert!(folder.folder_identity.is_some());
+
+		let preview = DirEntry::from_path(&db, dir.path().join("image-alias")).unwrap();
+
+		assert!(preview.is_symlink && preview.thumbnail.is_some());
+		assert_eq!(preview.kind, FileKind::Image);
+
+		for name in ["broken", "loop"] {
+			let entry = entries.iter().find(|entry| entry.name == name).unwrap();
+			assert!(entry.is_symlink && entry.unresolved_link && !entry.is_dir);
+		}
+	}
+
 	#[test]
 	fn reads_real_metadata_and_sorts_folders_first() {
 		let dir = TestDir::new();
