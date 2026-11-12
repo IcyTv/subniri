@@ -83,6 +83,13 @@ impl<'a, Message, Theme, Renderer> NeoScrollable<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn with_colors(mut self, colors: crate::style::Colors) -> Self {
+		self.content_style.surface.background = colors.surface;
+		self.track_style.background = colors.surface;
+		self.handle_style.background = colors.decorative.yellow;
+		self
+	}
+
 	pub fn width(mut self, width: impl Into<Length>) -> Self {
 		self.width = width.into();
 		self

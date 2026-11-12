@@ -47,6 +47,7 @@ impl Harness {
 		let keys = vec![Key(Wifi, 0), Key(Bluetooth, 0)];
 		let targets = baseline.iter().cloned().map(Some).collect();
 		let mut widget = Tiles {
+			colors: neo_widgets::style::LIGHT,
 			editing: true,
 			rows,
 			baseline,

@@ -7,7 +7,7 @@ use iced::{
 use neo_widgets::{
 	icons::{ResolvedIcon, background},
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{neo_button, neo_card, neo_pick_list, neo_text_input},
 };
 
@@ -168,13 +168,19 @@ impl Dialog {
 		}
 	}
 
-	pub fn view(&self) -> Element<'_, Message> {
-		let mut content = column![self.header(), self.operation(), self.identity_view()].spacing(8);
+	pub fn view(&self, colors: Colors) -> Element<'_, Message> {
+		let mut content = column![
+			self.header(colors),
+			self.operation(colors),
+			self.identity_view(colors)
+		]
+		.spacing(8);
 
 		if let Some((generation, prompt, secret)) = &self.prompt {
 			let generation = *generation;
 			content = content.push(
 				neo_text_input(prompt_placeholder(prompt), self.response.as_str())
+					.with_colors(colors)
 					.id(INPUT_ID)
 					.secure(*secret)
 					.size(16)
@@ -187,9 +193,9 @@ impl Dialog {
 		if !self.status.is_empty() {
 			content = content.push(
 				scrollable(text(&self.status).size(13).color(if self.error {
-					COLORS.feedback.danger
+					colors.feedback.danger
 				} else {
-					COLORS.text
+					colors.text
 				}))
 				.height(Length::Fit.max(36))
 				.width(Length::Fill)
@@ -199,9 +205,10 @@ impl Dialog {
 
 		let mut buttons = row![
 			neo_button(text("Cancel").size(15))
+				.with_colors(colors)
 				.padding([6, 10])
-				.background(COLORS.feedback.danger90)
-				.focus_color(COLORS.feedback.danger90)
+				.background(colors.feedback.danger90)
+				.focus_color(colors.feedback.danger90)
 				.on_press(Message::Cancel),
 			space::horizontal(),
 		]
@@ -209,17 +216,19 @@ impl Dialog {
 		if let Some((generation, _, _)) = self.prompt {
 			buttons = buttons.push(
 				neo_button(text("Authenticate").size(15))
+					.with_colors(colors)
 					.padding([6, 10])
-					.background(COLORS.decorative.green90)
-					.focus_color(COLORS.decorative.green90)
+					.background(colors.decorative.green90)
+					.focus_color(colors.decorative.green90)
 					.on_press(Message::Submit(generation)),
 			);
 		} else if self.retry {
 			buttons = buttons.push(
 				neo_button(text("Try again").size(15))
+					.with_colors(colors)
 					.padding([6, 10])
-					.background(COLORS.decorative.green90)
-					.focus_color(COLORS.decorative.green90)
+					.background(colors.decorative.green90)
+					.focus_color(colors.decorative.green90)
 					.on_press(Message::Retry),
 			);
 		}
@@ -231,9 +240,10 @@ impl Dialog {
 			.into()
 	}
 
-	fn header(&self) -> Element<'_, Message> {
+	fn header(&self, colors: Colors) -> Element<'_, Message> {
 		let mut title = column![
 			text("Authentication Required")
+				.color(colors.text)
 				.size(16)
 				.weight(iced::font::Weight::Bold)
 		]
@@ -252,13 +262,13 @@ impl Dialog {
 			);
 		}
 
-		row![self.action_icon(), title]
+		row![self.action_icon(colors), title]
 			.spacing(10)
 			.align_y(iced::Alignment::Center)
 			.into()
 	}
 
-	fn operation(&self) -> Element<'_, Message> {
+	fn operation(&self, colors: Colors) -> Element<'_, Message> {
 		let operation = self.request.presentation.operation(&self.request.message);
 		let mut content = column![
 			neo_card(
@@ -268,10 +278,11 @@ impl Dialog {
 					.wrapping(text::Wrapping::WordOrGlyph)
 					.width(Length::Fill)
 			)
-			.background(COLORS.decorative.blue90)
+			.with_colors(colors)
+			.background(colors.decorative.blue90)
 			.padding(8)
 			.width(Length::Fill),
-			self.context_row(),
+			self.context_row(colors),
 		]
 		.spacing(10)
 		.width(Length::Fill);
@@ -300,7 +311,7 @@ impl Dialog {
 			.into()
 	}
 
-	fn context_row(&self) -> Element<'_, Message> {
+	fn context_row(&self, colors: Colors) -> Element<'_, Message> {
 		let target = self
 			.request
 			.presentation
@@ -320,23 +331,25 @@ impl Dialog {
 				})
 				.size(12)
 			)
+			.with_colors(colors)
 			.padding([3, 6])
 			.shadow_width(2.0)
-			.background(COLORS.body)
-			.focus_color(COLORS.decorative.blue90)
+			.background(colors.body)
+			.focus_color(colors.decorative.blue90)
 			.on_press(Message::ToggleDetails),
 		]
 		.align_y(iced::Alignment::Center)
 		.into()
 	}
 
-	fn identity_view(&self) -> Element<'_, Message> {
+	fn identity_view(&self, colors: Colors) -> Element<'_, Message> {
 		let identity: Element<'_, Message> = if self.has_identity_choice() {
 			neo_pick_list(
 				Some(&self.selected),
 				self.request.identities.as_slice(),
 				|identity| identity.username.clone(),
 			)
+			.with_colors(colors)
 			.on_select(Message::Identity)
 			.width(Length::Fill)
 			.into()
@@ -357,14 +370,22 @@ impl Dialog {
 		self.request.identities.len() > 1
 	}
 
-	fn action_icon(&self) -> Element<'_, Message> {
+	fn action_icon(&self, colors: Colors) -> Element<'_, Message> {
 		let name = &self.request.presentation.icon_name;
 		let icon = if name.trim().is_empty() {
 			None
 		} else {
 			background::try_resolve_icon_name(name, 28, 1)
-		}
-		.unwrap_or_else(|| ResolvedIcon::Svg(phosphor_icon!("lock")));
+		};
+		let Some(icon) = icon else {
+			return svg(phosphor_icon!("lock"))
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text),
+				})
+				.width(28)
+				.height(28)
+				.into();
+		};
 
 		match icon {
 			ResolvedIcon::Svg(handle) => svg(handle).width(28).height(28).into(),

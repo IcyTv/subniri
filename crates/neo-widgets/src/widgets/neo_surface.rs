@@ -3,7 +3,7 @@ use iced::{
 	advanced::{layout, renderer, widget},
 };
 
-use crate::style::COLORS;
+use crate::style::{COLORS, Colors};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NeoSurfaceStyle {
@@ -20,7 +20,28 @@ pub struct NeoContentSurfaceStyle {
 	pub padding: Padding,
 }
 
+impl NeoSurfaceStyle {
+	#[must_use]
+	pub fn with_colors(colors: Colors) -> Self {
+		Self {
+			background: colors.surface,
+			border: colors.border,
+			radius: 3.0,
+			border_width: 2.0,
+			shadow_width: 4.0,
+		}
+	}
+}
+
 impl NeoContentSurfaceStyle {
+	#[must_use]
+	pub fn with_colors(colors: Colors) -> Self {
+		Self {
+			surface: NeoSurfaceStyle::with_colors(colors),
+			padding: 8.0.into(),
+		}
+	}
+
 	/// Space reserved around content, including the offset hard shadow.
 	#[must_use]
 	pub fn inset(self) -> Size {

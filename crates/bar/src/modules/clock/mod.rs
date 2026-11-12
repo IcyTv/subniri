@@ -8,7 +8,7 @@ use iced::{
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, neo_button, neo_card},
 };
 
@@ -94,53 +94,66 @@ impl Clock {
 		Subscription::batch([tick, tray, calendar])
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		neo_button(
 			row![
 				svg(phosphor_icon!("calendar", "bold"))
 					.width(Length::Shrink)
-					.height(ICON_HEIGHT),
-				Self::text(&self.date),
+					.height(ICON_HEIGHT)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.on_accent),
+					}),
+				Self::text(&self.date, colors),
 				svg(phosphor_icon!("clock", "bold"))
 					.width(Length::Shrink)
-					.height(ICON_HEIGHT),
-				Self::text(&self.time),
+					.height(ICON_HEIGHT)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.on_accent),
+					}),
+				Self::text(&self.time, colors),
 			]
 			.spacing(5.)
 			.align_y(Vertical::Center),
 		)
+		.with_colors(colors)
 		.on_press(Message::Pressed)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(COLORS.decorative.purple)
+		.background(colors.decorative.purple)
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		neo_card(
 			column![
 				// neo_card(
-				container(text(&self.time_secs).size(38).weight(font::Weight::Bold),)
-					.center_x(Length::Fill)
-					.padding(10),
+				container(
+					text(&self.time_secs)
+						.size(38)
+						.weight(font::Weight::Bold)
+						.color(colors.text),
+				)
+				.center_x(Length::Fill)
+				.padding(10),
 				// )
-				rule::horizontal(2).style(|_| rule::Style {
-					color: COLORS.black,
+				rule::horizontal(2).style(move |_| rule::Style {
+					color: colors.black,
 					radius: 0.0.into(),
 					fill_mode: rule::FillMode::Full,
 					snap: false,
 				}),
-				self.tray.view().map(Message::Tray),
-				rule::horizontal(2).style(|_| rule::Style {
-					color: COLORS.black,
+				self.tray.view(colors).map(Message::Tray),
+				rule::horizontal(2).style(move |_| rule::Style {
+					color: colors.black,
 					radius: 0.0.into(),
 					fill_mode: rule::FillMode::Full,
 					snap: false,
 				}),
-				self.calendar.view().map(Message::Calendar),
+				self.calendar.view(colors).map(Message::Calendar),
 			]
 			.spacing(10),
 		)
-		.background(COLORS.decorative.purple)
+		.with_colors(colors)
+		.background(colors.body)
 		.width(400.0)
 		.into()
 	}
@@ -154,20 +167,24 @@ impl Clock {
 			.update(tray::Message::ContextMenuAt { service, x, y });
 	}
 
-	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {
-		self.tray.view_context_menu(depth).map(Message::Tray)
+	pub fn view_context_menu(&self, depth: usize, colors: Colors) -> Element<'_, Message> {
+		self.tray
+			.view_context_menu(depth, colors)
+			.map(Message::Tray)
 	}
 
-	fn text(label: &str) -> Element<'_, Message> {
-		text(label)
-			.font(Font {
-				weight: font::Weight::Bold,
-				..Font::DEFAULT
-			})
-			.color(COLORS.text)
-			.size(18)
-			.align_y(Vertical::Center)
-			.into()
+	fn text(label: &str, colors: Colors) -> Element<'_, Message> {
+		super::module_label(
+			text(label)
+				.font(Font {
+					weight: font::Weight::Bold,
+					..Font::DEFAULT
+				})
+				.color(colors.on_accent)
+				.size(18)
+				.align_y(Vertical::Center),
+		)
+		.into()
 	}
 }
 

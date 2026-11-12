@@ -34,6 +34,7 @@ enum Message {
 	Exit,
 	Frame(std::time::Instant),
 	IconsUpdated,
+	ProbeButton,
 }
 struct Probe {
 	module: system_menu::SystemMenu,
@@ -184,7 +185,7 @@ impl Probe {
 					self.contexts.get(depth - 1).copied()
 				};
 				if let Some(parent) = parent {
-					self.module.open_context_menu(menu, depth);
+					self.module.open_context_menu(menu, depth, bounds);
 					self.contexts.truncate(depth);
 					let id = Id::unique();
 					self.contexts.push(id);
@@ -233,6 +234,23 @@ impl Probe {
 				window,
 				content_updated_at,
 			}) => self.module.popup_presented(window, content_updated_at),
+			Message::Shell(iced_wayland_subscriber::shell::ShellEvent::PopupConfigured {
+				window,
+				geometry,
+			}) => {
+				if let Some(depth) = self.contexts.iter().position(|id| *id == window) {
+					eprintln!("CONTEXT_GEOMETRY {depth} {geometry:?}");
+					self.module.context_configured(
+						depth,
+						iced::Rectangle {
+							x: geometry.x as f32,
+							y: geometry.y as f32,
+							width: geometry.width as f32,
+							height: geometry.height as f32,
+						},
+					);
+				}
+			}
 			Message::Menu(system_menu::Message::Dismiss) => {
 				if let Some(id) = self.popup.take() {
 					eprintln!("MENU_DISMISSED");
@@ -262,12 +280,44 @@ impl Probe {
 	}
 	fn view(&self, id: Id) -> Element<'_, Message> {
 		if let Some(depth) = self.contexts.iter().position(|candidate| *candidate == id) {
-			self.module.view_context_menu(depth).map(Message::Menu)
+			self.module
+				.view_context_menu(depth, neo_widgets::style::LIGHT)
+				.map(Message::Menu)
 		} else if self.popup == Some(id) {
-			let (view, name) = self.clock.as_ref().map_or_else(
-				|| (self.module.view_popup().map(Message::Menu), "system-menu"),
-				|clock| (clock.view_popup().map(Message::Clock), "clock"),
-			);
+			let (view, name) = if std::env::var("PROBE_BUTTON").as_deref() == Ok("1") {
+				(
+					neo_widgets::widgets::neo_card(
+						neo_button(text("Press and hold"))
+							.background(neo_widgets::style::LIGHT.decorative.pink)
+							.width(200)
+							.height(80)
+							.on_press(Message::ProbeButton),
+					)
+					.padding(24)
+					.width(260)
+					.into(),
+					"button",
+				)
+			} else {
+				self.clock.as_ref().map_or_else(
+					|| {
+						(
+							self.module
+								.view_popup(neo_widgets::style::LIGHT)
+								.map(Message::Menu),
+							"system-menu",
+						)
+					},
+					|clock| {
+						(
+							clock
+								.view_popup(neo_widgets::style::LIGHT)
+								.map(Message::Clock),
+							"clock",
+						)
+					},
+				)
+			};
 			let view = if let Ok(ms) = std::env::var("PROBE_ENTER_MS")
 				&& std::env::var("PROBE_VISUALS").as_deref() != Ok("1")
 			{
@@ -301,7 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		|| std::fs::read_to_string(runtime.join("quick-tiles.marker"))?
 			!= "isolated quick tiles input"
 	{
-		return Err("launch with scripts/test-quick-tiles.py".into());
+		return Err("launch only through an isolated quick-tile compositor harness".into());
 	}
 	if std::env::var("SUBNIRI_LOG_BACKEND").as_deref() == Ok("console") {
 		log::try_init("iced_exwlshell::multi_window=debug")?;
@@ -314,6 +364,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Probe::view,
 	)
 	.theme(neo_widgets::style::neo_theme())
+	.scale_factor(|_: &Probe, _| {
+		std::env::var("PROBE_APP_SCALE")
+			.ok()
+			.and_then(|scale| scale.parse::<f32>().ok())
+			.unwrap_or(1.0)
+	})
 	.style(|_: &Probe, _: &iced::Theme| iced::theme::Style {
 		background_color: iced::Color::TRANSPARENT,
 		text_color: neo_widgets::style::COLORS.text,

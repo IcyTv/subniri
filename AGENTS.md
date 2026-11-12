@@ -22,6 +22,7 @@ nix build . --no-link
 - Nix flake builds only see Git-tracked source paths. Newly created source/assets must be included in the build input before a Nix build can validate them; Cargo seeing them is not sufficient.
 
 ## Dependencies and Nix packaging
+- Updating existing forked dependencies is authorized; ask for approval only when creating a new fork. Use the existing checkouts under `~/projects/<name>` and preserve their unrelated work.
 - Fork checkouts are available locally, e.g. `~/projects/iced` and `~/projects/exwlshelleventloop`. Local dependency patches are fine during iteration. A fork change is not complete until it is pushed and this repository's pinned revision/lockfile is updated; do not ship local path overrides.
 - Keep `Cargo.lock` and generated `Cargo.nix` synchronized after dependency changes. Regenerate with `cargo2nix --locked --overwrite`; never hand-edit or format `Cargo.nix`. Nix formatting excludes it: `alejandra --check -e ./Cargo.nix .`.
 - All patched wgpu-family crates (including naga) must use the same fork revision in root `Cargo.toml`; mixing registry/git sources duplicates shared types.

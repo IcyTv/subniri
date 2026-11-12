@@ -6,7 +6,7 @@ use std::sync::{
 };
 
 use iced::{Element, Event as IcedEvent, Size, Subscription, Task, Theme, keyboard, window};
-use neo_widgets::style::COLORS;
+use neo_widgets::appearance::{Appearance, Event as AppearanceEvent};
 
 use crate::{
 	dialog::{self, Dialog},
@@ -15,6 +15,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 enum Message {
+	Appearance(AppearanceEvent),
 	Backend(Event),
 	Dialog(RequestId, dialog::Message),
 	Dismiss(window::Id),
@@ -23,6 +24,7 @@ enum Message {
 }
 
 pub struct App {
+	appearance: Appearance,
 	dialog: Option<Dialog>,
 	window: Option<window::Id>,
 	exit_code: Arc<AtomicU8>,
@@ -34,6 +36,7 @@ impl App {
 			move || {
 				(
 					Self {
+						appearance: Appearance::default(),
 						dialog: None,
 						window: None,
 						exit_code: exit_code.clone(),
@@ -45,10 +48,10 @@ impl App {
 			Self::view,
 		)
 		.title("Authentication — thawth")
-		.theme(|_: &Self, _| theme())
-		.style(|_, _: &Theme| iced::theme::Style {
-			background_color: COLORS.body,
-			text_color: COLORS.text,
+		.theme(|app: &Self, _| app.appearance.colors().iced_theme())
+		.style(|app: &Self, _: &Theme| iced::theme::Style {
+			background_color: app.appearance.colors().body,
+			text_color: app.appearance.colors().text,
 		})
 		.subscription(Self::subscription)
 		.run()
@@ -56,6 +59,10 @@ impl App {
 
 	fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
+			Message::Appearance(event) => {
+				self.appearance.update(event);
+				Task::none()
+			}
 			Message::IconsUpdated => Task::none(),
 			Message::Backend(Event::Started(request, commands)) => {
 				self.dialog = Dialog::new(request, commands);
@@ -122,6 +129,10 @@ impl App {
 		let events = iced::event::listen_with(|event, _, id| {
 			is_dismissal(&event).then_some(Message::Dismiss(id))
 		});
+		let events = Subscription::batch([
+			events,
+			self.appearance.subscription().map(Message::Appearance),
+		]);
 		if self
 			.dialog
 			.as_ref()
@@ -145,7 +156,7 @@ impl App {
 			Some(dialog) => {
 				let id = dialog.request.id;
 				dialog
-					.view()
+					.view(self.appearance.colors())
 					.map(move |message| Message::Dialog(id, message))
 			}
 			None => iced::widget::text("").into(),
@@ -162,21 +173,6 @@ fn is_dismissal(event: &IcedEvent) -> bool {
 				..
 			})
 		)
-}
-
-fn theme() -> Theme {
-	// Keep native hover/selection fallbacks neutral without changing the shell's palette.
-	Theme::custom(
-		"Thawth Neo",
-		iced::theme::palette::Seed {
-			background: COLORS.body,
-			text: COLORS.text,
-			primary: COLORS.decorative.blue,
-			success: COLORS.feedback.success,
-			warning: COLORS.feedback.warning,
-			danger: COLORS.feedback.danger,
-		},
-	)
 }
 
 fn prompt_settings() -> window::Settings {

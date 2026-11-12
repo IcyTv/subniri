@@ -7,6 +7,14 @@ use zbus::{
 
 pub mod calendar;
 
+mod appearance;
+pub use appearance::*;
+
+pub const APPEARANCE_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Appearance");
+pub const APPEARANCE_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked(AppearanceProperties::INTERFACE_NAME);
+
 mod nightlight;
 pub use nightlight::*;
 

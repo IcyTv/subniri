@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 
 use iced::{Animation, Length, Subscription, Task};
-use neo_widgets::{phosphor_icon, style::COLORS, widgets::NeoButton};
+use neo_widgets::{phosphor_icon, style::Colors, widgets::NeoButton};
 use nmrs::{DeviceState, NetworkManager};
 
 #[derive(Debug, Clone)]
@@ -146,15 +146,13 @@ impl Wifi {
 		self.wired_connected = state.wired_connected;
 	}
 
-	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
+	pub fn view_tile(&self, size: iced::Size, colors: Colors) -> NeoButton<'_, Message> {
 		let icon_color =
 			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
-		let background =
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
+				.interpolate(colors.surface, colors.decorative.green, Instant::now());
 
-		neo_widgets::widgets::neo_tile(
+		neo_widgets::widgets::neo_tile_with_colors(
+			colors,
 			phosphor_icon!("wifi-high"),
 			"Wifi",
 			self.subtitle(),
@@ -162,7 +160,6 @@ impl Wifi {
 			Some(icon_color),
 			size,
 		)
-		.background(background)
 		.on_press(Message::Toggle)
 		.enabled(self.async_data.is_some() && self.pending.is_none())
 		.width(Length::Fill)
@@ -198,7 +195,7 @@ impl Wifi {
 		} else if self.enabled.value() {
 			"Not connected".to_string()
 		} else {
-			"Disabled".to_string()
+			String::new()
 		}
 	}
 }

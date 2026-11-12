@@ -10,7 +10,7 @@ use iced::{
 	window,
 };
 
-use crate::style::COLORS;
+use crate::style::{COLORS, Colors};
 
 use super::neo_surface::{self, NeoContentSurfaceStyle};
 
@@ -26,6 +26,7 @@ pub fn neo_text_input<'a, Message: Clone + 'a>(
 pub struct NeoTextInput<'a, Message> {
 	input: TextInput<'a, Message>,
 	width: Length,
+	colors: Option<Colors>,
 }
 
 impl<'a, Message: Clone + 'a> NeoTextInput<'a, Message> {
@@ -36,7 +37,16 @@ impl<'a, Message: Clone + 'a> NeoTextInput<'a, Message> {
 		Self {
 			input: TextInput::new(placeholder, value).style(input_style),
 			width: Length::Fill,
+			colors: None,
 		}
+	}
+
+	pub fn with_colors(mut self, colors: Colors) -> Self {
+		self.input = self
+			.input
+			.style(move |_theme, _status| input_style_with_colors(colors));
+		self.colors = Some(colors);
+		self
 	}
 
 	pub fn id(mut self, id: impl Into<Id>) -> Self {
@@ -77,21 +87,33 @@ impl<'a, Message: Clone + 'a> NeoTextInput<'a, Message> {
 
 impl<'a, Message: Clone + 'a> From<NeoTextInput<'a, Message>> for Element<'a, Message> {
 	fn from(input: NeoTextInput<'a, Message>) -> Self {
-		Element::new(NeoField::new(input.input, input.width, false))
+		let field = NeoField::new(input.input, input.width, false);
+
+		Element::new(match input.colors {
+			Some(colors) => field.with_colors(colors),
+			None => field,
+		})
 	}
 }
 
 fn input_style(_theme: &iced::Theme, _status: text_input::Status) -> text_input::Style {
+	input_style_with_colors(Colors {
+		selection: COLORS.decorative.blue90,
+		..COLORS
+	})
+}
+
+fn input_style_with_colors(colors: Colors) -> text_input::Style {
 	text_input::Style {
 		background: Color::TRANSPARENT.into(),
 		border: iced::Border {
-			color: COLORS.black,
+			color: colors.border,
 			width: 0.0,
 			radius: 0.0.into(),
 		},
-		placeholder: COLORS.secondary,
-		value: COLORS.black,
-		selection: COLORS.decorative.blue90,
+		placeholder: colors.secondary,
+		value: colors.text,
+		selection: colors.selection,
 	}
 }
 
@@ -116,6 +138,14 @@ impl<'a, Message: 'a> NeoField<'a, Message> {
 				..Default::default()
 			},
 		}
+	}
+
+	pub(crate) fn with_colors(mut self, colors: Colors) -> Self {
+		self.style = NeoContentSurfaceStyle {
+			padding: self.style.padding,
+			..NeoContentSurfaceStyle::with_colors(colors)
+		};
+		self
 	}
 }
 
@@ -434,6 +464,24 @@ mod tests {
 			assert_eq!(style.value, COLORS.black);
 			assert_eq!(style.selection, COLORS.decorative.blue90);
 		}
+	}
+
+	#[test]
+	fn explicit_dark_colors_style_input_and_preserve_field_padding() {
+		let colors = crate::style::DARK;
+		let input = neo_text_input::<()>("Placeholder", "Value").with_colors(colors);
+		let style = input_style_with_colors(colors);
+		let field = NeoField::new(input.input, input.width, false).with_colors(colors);
+
+		assert_eq!(input.colors, Some(colors));
+		assert_eq!(style.value, colors.text);
+		assert_eq!(style.placeholder, colors.secondary);
+		assert_eq!(style.selection, colors.selection);
+		assert_eq!(style.border.color, colors.border);
+		assert_eq!(style.background, Color::TRANSPARENT.into());
+		assert_eq!(field.style.surface.background, colors.surface);
+		assert_eq!(field.style.surface.border, colors.border);
+		assert_eq!(field.style.padding, Padding::from(2.0));
 	}
 
 	#[test]

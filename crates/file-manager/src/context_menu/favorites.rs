@@ -61,6 +61,7 @@ impl Favorites {
 		}
 		self.start_next()
 	}
+
 	fn start_next(&mut self) -> Task<Message> {
 		if self.running() {
 			return Task::none();
@@ -73,10 +74,12 @@ impl Favorites {
 			async move {
 				let saved = order.clone();
 				let result = tokio::task::spawn_blocking(move || {
-					let (mut doc, mut config) =
-						config::ConfigFile::load().map_err(|e| e.to_string())?;
-					config.fileberg.favorites = order.iter().map(|c| c.id().to_owned()).collect();
-					config.write(&mut doc).map_err(|e| e.to_string())
+					config::ConfigFile::update(|config| {
+						config.fileberg.favorites =
+							order.iter().map(|c| c.id().to_owned()).collect();
+					})
+					.map(|_| ())
+					.map_err(|e| e.to_string())
 				})
 				.await
 				.map_err(|e| e.to_string())

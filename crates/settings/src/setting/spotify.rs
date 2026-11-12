@@ -2,12 +2,12 @@ use config::ConfigFile;
 use daemon_common::{SpotifyPairing, SpotifyProxy, SpotifyStatus};
 use iced::{
 	Alignment, Border, Color, Element, Length, Task, font,
-	widget::{Svg, button, column, container, grid, row, space, svg, text},
+	widget::{Svg, column, container, grid, row, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
-	widgets::{neo_card, neo_toggle, neo_toggle_button},
+	style::Colors,
+	widgets::{neo_button, neo_card, neo_toggle, neo_toggle_button_with_colors},
 };
 
 use crate::setting::{InputCardOptions, input_card};
@@ -180,21 +180,22 @@ impl Spotify {
 		}
 	}
 
-	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
+	pub fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
 		let poll_interval = self.poll_interval.parse::<u64>().ok();
 		let poll_interval_valid =
 			poll_interval.is_some_and(|seconds| (60..=3600).contains(&seconds));
+
 		column![
 			neo_card(
 				row![
 					container(Self::icon())
-						.width(58)
-						.height(58)
-						.padding(12)
-						.style(|_| container::Style {
-							background: Some(iced::Background::Color(COLORS.white)),
+						.width(crate::sizing::HEADER_ICON)
+						.height(crate::sizing::HEADER_ICON)
+						.padding(crate::sizing::HEADER_ICON_PADDING)
+						.style(move |_| container::Style {
+							background: Some(iced::Background::Color(colors.white)),
 							border: Border {
-								color: COLORS.border,
+								color: colors.border,
 								width: 2.0,
 								radius: 3.into(),
 							},
@@ -203,20 +204,21 @@ impl Spotify {
 					column![
 						text("SPOTIFY")
 							.width(Length::Fill)
-							.color(COLORS.text)
-							.size(34)
+							.color(colors.on_accent)
+							.size(crate::sizing::HEADER_TITLE)
 							.weight(font::Weight::Bold)
 							.stretch(font::Stretch::ExtraExpanded)
 							.wrapping(text::Wrapping::WordOrGlyph),
 						text("Feel your music")
 							.width(Length::Fill)
-							.color(COLORS.text.scale_alpha(0.76))
+							.color(colors.on_accent.scale_alpha(0.76))
 							.size(14)
 							.weight(font::Weight::Bold),
 					]
 					.spacing(4),
 					space::horizontal(),
 					neo_toggle()
+						.with_colors(colors)
 						.width(40)
 						.height(18)
 						.toggled(config.spotify.enabled)
@@ -225,37 +227,40 @@ impl Spotify {
 				.align_y(Alignment::Center)
 				.spacing(16)
 			)
+			.with_colors(colors)
 			.width(Length::Fill)
-			.height(116)
-			.background(Self::accent_color())
-			.padding(18),
+			.height(crate::sizing::HEADER_HEIGHT)
+			.background(Self::accent_color(colors))
+			.padding(crate::sizing::HEADER_PADDING),
 			grid![
-				neo_toggle_button(
+				neo_toggle_button_with_colors(
+					colors,
 					phosphor_icon!("user"),
 					"Pair Spotify",
 					&self.status,
 					self.is_authenticated(),
-					Some(COLORS.decorative.green)
+					Some(colors.decorative.green)
 				)
+				.with_colors(colors)
 				.enabled(self.auth_enabled && config.spotify.enabled)
-				.padding(16)
+				.padding(crate::sizing::CARD_PADDING)
 				.width(Length::Fill)
-				.height(112)
+				.height(crate::sizing::CARD_HEIGHT)
 				.on_press(Message::StartAuthFlow),
-				poll_interval_card(&self.poll_interval, poll_interval_valid),
+				poll_interval_card(&self.poll_interval, poll_interval_valid, colors),
 			]
 			.height(Length::Shrink)
 			.columns(2)
 			.spacing(14),
-			poll_interval_note(poll_interval_valid),
-			self.pairing_view(),
+			poll_interval_note(poll_interval_valid, colors),
+			self.pairing_view(colors),
 		]
 		.spacing(16)
 		.into()
 	}
 
-	pub const fn accent_color() -> Color {
-		COLORS.decorative.green
+	pub fn accent_color(colors: Colors) -> Color {
+		colors.decorative.green
 	}
 
 	pub fn icon<'a>() -> Svg<'a> {
@@ -266,55 +271,61 @@ impl Spotify {
 		self.authenticated
 	}
 
-	fn pairing_view(&self) -> Element<'_, Message> {
+	fn pairing_view(&self, colors: Colors) -> Element<'_, Message> {
 		if let Some(pairing) = &self.pairing {
 			neo_card(
 				column![
-					text("Enter this code at spotify.com/pair"),
-					text(&pairing.user_code).size(32),
+					text("Enter this code at spotify.com/pair").color(colors.text),
+					text(&pairing.user_code).color(colors.text).size(32),
 					row![
-						button("Open Spotify").on_press(Message::OpenPairing),
-						button("Cancel").on_press(Message::CancelPairing)
+						neo_button(text("Open Spotify").color(colors.text))
+							.with_colors(colors)
+							.on_press(Message::OpenPairing),
+						neo_button(text("Cancel").color(colors.text))
+							.with_colors(colors)
+							.on_press(Message::CancelPairing)
 					]
 					.spacing(12)
 				]
 				.spacing(12),
 			)
+			.with_colors(colors)
 			.padding(16)
 			.into()
 		} else {
 			text(
 				"Pair once; credentials refresh automatically. No developer account or client ID needed.",
 			)
+			.color(colors.text)
 			.into()
 		}
 	}
 }
 
-fn poll_interval_card(value: &str, valid: bool) -> Element<'_, Message> {
+fn poll_interval_card(value: &str, valid: bool, colors: Colors) -> Element<'_, Message> {
 	input_card(
-		InputCardOptions::<_, &str, _, _>::new(value, Message::PollIntervalChanged)
-			.background(COLORS.decorative.yellow90)
+		InputCardOptions::<_, &str, _, _>::new(value, Message::PollIntervalChanged, colors)
+			.background(colors.surface)
 			.border(if valid {
-				COLORS.border
+				colors.border
 			} else {
-				COLORS.feedback.danger
+				colors.feedback.danger
 			})
 			.display("RECOVERY REFRESH (SECONDS)")
 			.placeholder("60"),
 	)
 }
 
-fn poll_interval_note(valid: bool) -> Element<'static, Message> {
+fn poll_interval_note(valid: bool, colors: Colors) -> Element<'static, Message> {
 	text(if valid {
 		"Saved tracks update live. This interval is used only while reconnecting; Spotify cooldowns take precedence."
 	} else {
 		"Recovery interval must be between 60 and 3600 seconds."
 	})
 	.color(if !valid {
-		COLORS.feedback.danger
+		colors.feedback.danger
 	} else {
-		COLORS.text.scale_alpha(0.76)
+		colors.text.scale_alpha(0.76)
 	})
 	.size(13)
 	.into()

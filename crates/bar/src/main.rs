@@ -15,10 +15,7 @@ use iced_exwlshell::reexport::{
 use iced_exwlshell::settings::{LayerShellSettings, StartMode};
 use iced_exwlshell::{Settings, daemon, to_layer_message};
 use iced_wayland_subscriber::shell::{ShellEvent, ShellReceiver};
-use neo_widgets::{
-	style::{COLORS, neo_theme},
-	widgets::{neo_card, popup_grow},
-};
+use neo_widgets::widgets::{neo_card, popup_grow};
 use niri_ipc::{Reply, Request, Response, socket::SOCKET_PATH_ENV};
 use tokio::{
 	io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -57,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Bar::update,
 		Bar::view,
 	)
-	.theme(neo_theme())
+	.theme(|bar: &Bar, _| bar.appearance.colors().iced_theme())
 	.style(Bar::style)
 	.scale_factor(Bar::scale_factor)
 	.subscription(Bar::subscription)
@@ -69,8 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		..Default::default()
 	})
 	.layer_settings(LayerShellSettings {
-		size: LayerSize::fill_width(BASE_BAR_HEIGHT),
-		exclusive_zone: BASE_BAR_HEIGHT.cast_signed(),
+		size: LayerSize::fill_width(BAR_HEIGHT),
+		exclusive_zone: BAR_HEIGHT.cast_signed(),
 		anchor: Anchor::Top | Anchor::Left | Anchor::Right,
 		start_mode: StartMode::AllScreens,
 		keyboard_interactivity: KeyboardInteractivity::OnDemand,
@@ -81,25 +78,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 const BASE_BAR_HEIGHT: u32 = 60;
-
-fn scale_for_screen(height: u32) -> f32 {
-	const BASE_SCREEN_HEIGHT: f32 = 1440.0;
-	const SCREEN_SCALE_EXPONENT: f32 = 0.75;
-	if height == 0 {
-		return 1.0;
-	}
-	let linear_scale = height as f32 / BASE_SCREEN_HEIGHT;
-	linear_scale.powf(SCREEN_SCALE_EXPONENT).clamp(0.7, 1.25)
-}
+const BAR_SCALE: f32 = 0.75;
+const BAR_HEIGHT: u32 = (BASE_BAR_HEIGHT as f32 * BAR_SCALE) as u32;
 
 struct Bar {
+	appearance: neo_widgets::appearance::Appearance,
 	left: Vec<Module>,
 	center: Vec<Module>,
 	right: Vec<Module>,
 
 	popups: popups::Popups,
 	layer_heights: HashMap<Id, u32>,
-	window_scales: HashMap<Id, f32>,
 	window_output_names: HashMap<Id, String>,
 	output_sizes: HashMap<Id, iced::Size>,
 	shell_events: ShellReceiver,
@@ -116,6 +105,7 @@ impl Bar {
 		let _ = connection;
 
 		let bar = Self {
+			appearance: neo_widgets::appearance::Appearance::default(),
 			left: vec![Module::system_menu(&config_file), Module::taskbar()],
 			center: vec![Module::media_controls()],
 			right: vec![
@@ -126,7 +116,6 @@ impl Bar {
 			],
 			popups: popups::Popups::default(),
 			layer_heights: HashMap::new(),
-			window_scales: HashMap::new(),
 			window_output_names: HashMap::new(),
 			output_sizes: HashMap::new(),
 			shell_events,
@@ -151,6 +140,16 @@ impl Bar {
 	#[allow(clippy::too_many_lines)]
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
+			BarMessage::Appearance(event) => {
+				self.appearance.update(event);
+				self.broadcast_module_message(ModuleMessage::AppearanceChanged {
+					theme: self.appearance.theme.selected(),
+					connected: self.appearance.connected,
+				})
+			}
+			BarMessage::Module(_, _, _, ModuleMessage::SelectTheme(theme)) => {
+				neo_widgets::appearance::select(theme).map(BarMessage::Appearance)
+			}
 			BarMessage::ConfigUpdated => {
 				let (doc, mut config) = match ConfigFile::load() {
 					Ok(config) => config,
@@ -249,8 +248,6 @@ impl Bar {
 					return Task::batch([close_module_popup, change_kbd]);
 				}
 
-				let scale = source_id.map_or(1.0, |id| self.scale_factor(id));
-				self.window_scales.insert(id, scale);
 				if let Some(size) = source_id.and_then(|id| self.output_sizes.get(&id)).copied() {
 					self.output_sizes.insert(id, size);
 				}
@@ -320,8 +317,6 @@ impl Bar {
 				};
 
 				let retained = route.depth.unwrap_or(0);
-				let scale = self.scale_factor(source_id);
-				self.window_scales.insert(id, scale);
 				let close_descendants = self.apply_popup_change(change);
 
 				let anchor_x = bounds.x.round() as i32;
@@ -426,8 +421,7 @@ impl Bar {
 							window,
 							iced::Size::new(width.max(1) as f32, height.max(1) as f32),
 						);
-						let scale = scale_for_screen(height.max(0).cast_unsigned());
-						self.window_scales.insert(window, scale);
+						let scale = self.scale_factor(window);
 						if let Some(route) = self
 							.popups
 							.route(window)
@@ -443,6 +437,27 @@ impl Bar {
 							}
 						}
 						return self.sync_layer_scale(window);
+					}
+				}
+				Task::none()
+			}
+			BarMessage::ShellEvent(ShellEvent::PopupConfigured { window, geometry }) => {
+				if let Some(route) = self.popups.route(window)
+					&& let Some(depth) = route.depth
+				{
+					let scale = self.scale_factor(window);
+					if let Some(Module::SystemMenu(menu)) =
+						self.module_mut(route.section, route.index)
+					{
+						menu.context_configured(
+							depth,
+							iced::Rectangle {
+								x: geometry.x as f32 / scale,
+								y: geometry.y as f32 / scale,
+								width: geometry.width as f32 / scale,
+								height: geometry.height as f32 / scale,
+							},
+						);
 					}
 				}
 				Task::none()
@@ -480,7 +495,6 @@ impl Bar {
 
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
 		self.layer_heights.remove(&id);
-		self.window_scales.remove(&id);
 		self.window_output_names.remove(&id);
 		self.output_sizes.remove(&id);
 		self.popup_event(popups::Event::Closed(id))
@@ -513,7 +527,6 @@ impl Bar {
 			.fold(Task::none(), |tasks, effect| {
 				let task = match effect {
 					popups::Effect::Close(id) => {
-						self.window_scales.remove(&id);
 						self.layer_heights.remove(&id);
 						self.window_output_names.remove(&id);
 						self.output_sizes.remove(&id);
@@ -540,7 +553,7 @@ impl Bar {
 			return Task::none();
 		}
 
-		let height = Self::bar_height_for_scale(self.scale_factor(id));
+		let height = BAR_HEIGHT;
 		if self.layer_heights.insert(id, height) == Some(height) {
 			return Task::none();
 		}
@@ -558,37 +571,35 @@ impl Bar {
 		])
 	}
 
-	fn scale_factor(&self, id: Id) -> f32 {
-		self.window_scales.get(&id).copied().unwrap_or(1.0)
-	}
-
-	#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-	fn bar_height_for_scale(scale: f32) -> u32 {
-		(BASE_BAR_HEIGHT as f32 * scale).round() as u32
+	fn scale_factor(&self, _id: Id) -> f32 {
+		BAR_SCALE
 	}
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
+		let colors = self.appearance.colors();
 		if let Some(popup) = self.popups.route(id).filter(|route| route.depth.is_some()) {
 			let depth = popup.depth.unwrap_or(0);
 			if let Some(module) = self.module(popup.section, popup.index) {
-				module.view_context_menu(depth).map(move |message| {
+				module.view_context_menu(depth, colors).map(move |message| {
 					BarMessage::Module(Some(id), popup.section, popup.index, message)
 				})
 			} else {
-				neo_card(text("Context menu unavailable").color(COLORS.text))
+				neo_card(text("Context menu unavailable").color(colors.text))
+					.with_colors(colors)
 					.padding(8)
-					.background(COLORS.white)
+					.background(colors.surface)
 					.into()
 			}
 		} else if let Some(popups::Route { section, index, .. }) = self.popups.route(id) {
 			let content: Element<'_, BarMessage> = if let Some(module) = self.module(section, index)
 			{
 				module
-					.view_popup()
+					.view_popup(colors)
 					.map(move |message| BarMessage::Module(Some(id), section, index, message))
 			} else {
-				neo_card(text("Something went wrong").color(COLORS.text))
-					.background(COLORS.feedback.danger90)
+				neo_card(text("Something went wrong").color(colors.text))
+					.with_colors(colors)
+					.background(colors.feedback.danger90)
 					.into()
 			};
 
@@ -621,14 +632,14 @@ impl Bar {
 	fn section<'a>(
 		&self, id: Id, section: Section, modules: &'a [Module], output_name: Option<&str>,
 	) -> Element<'a, BarMessage> {
-		let _ = self;
+		let colors = self.appearance.colors();
 		modules
 			.iter()
 			.enumerate()
 			.fold(row![], |row, (index, module)| {
 				row.push(
 					module
-						.view(output_name)
+						.view(output_name, colors)
 						.map(move |message| BarMessage::Module(Some(id), section, index, message)),
 				)
 			})
@@ -679,7 +690,7 @@ impl Bar {
 		iced::theme::Style {
 			// background_color: Color::from_rgba(1.0, 0.0, 0.0, 0.5),
 			background_color: Color::TRANSPARENT,
-			text_color: COLORS.text,
+			text_color: self.appearance.colors().text,
 		}
 	}
 
@@ -733,6 +744,7 @@ impl Bar {
 			});
 
 		let mut subscriptions = vec![
+			self.appearance.subscription().map(BarMessage::Appearance),
 			neo_widgets::icons::background::updates().map(|()| BarMessage::Noop),
 			self.shell_events.listen().filter_map(|event| {
 				if matches!(event, ShellEvent::Presented { .. }) {
@@ -810,6 +822,7 @@ enum Section {
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 enum BarMessage {
+	Appearance(neo_widgets::appearance::Event),
 	ShellEvent(ShellEvent),
 	WindowEvent(Id, iced::window::Event),
 	WindowClosed(Id),
@@ -1018,12 +1031,12 @@ mod tests {
 
 	pub(super) fn empty_bar() -> Bar {
 		Bar {
+			appearance: neo_widgets::appearance::Appearance::new(config::AppearanceMode::Light),
 			left: Vec::new(),
 			center: Vec::new(),
 			right: Vec::new(),
 			popups: popups::Popups::default(),
 			layer_heights: HashMap::new(),
-			window_scales: HashMap::new(),
 			window_output_names: HashMap::new(),
 			output_sizes: HashMap::new(),
 			shell_events: iced_wayland_subscriber::shell::channel().1,
@@ -1034,10 +1047,45 @@ mod tests {
 	}
 
 	#[test]
-	fn system_menu_and_clock_use_the_standard_whole_popup_grow_path() {
+	fn fixed_bar_scale_ignores_output_dimensions_and_starts_with_scaled_height() {
+		let mut bar = empty_bar();
+		assert_eq!(bar.scale_factor(Id::unique()), 0.75);
+		assert_eq!(BAR_HEIGHT, 45);
+
+		for (width, height) in [
+			(1280.0, 720.0),
+			(1920.0, 1080.0),
+			(2560.0, 1440.0),
+			(3840.0, 2160.0),
+		] {
+			let window = Id::unique();
+			bar.output_sizes
+				.insert(window, iced::Size::new(width, height));
+			let _ = bar.sync_layer_scale(window);
+
+			assert_eq!(bar.scale_factor(window), 0.75);
+			assert_eq!(bar.layer_heights.get(&window), Some(&45));
+
+			let _ = bar.update(BarMessage::WindowEvent(
+				window,
+				iced::window::Event::Rescaled(2.0),
+			));
+			assert_eq!(bar.scale_factor(window), 0.75);
+			assert_eq!(bar.layer_heights.get(&window), Some(&45));
+		}
+	}
+
+	#[test]
+	fn root_modules_use_the_standard_whole_popup_grow_path() {
 		let standard: Element<'_, BarMessage> = popup_grow(text("popup")).into();
 		let tag = standard.as_widget().tag();
-		for module in [Module::system_menu(&ConfigFile::default()), Module::clock()] {
+		for module in [
+			Module::system_menu(&ConfigFile::default()),
+			Module::clock(),
+			Module::media_controls(),
+			Module::network(),
+			Module::bluetooth(),
+		] {
 			let mut bar = empty_bar();
 			bar.left.push(module);
 			let id = Id::unique();
@@ -1148,8 +1196,8 @@ mod tests {
 		assert!(
 			matches!(sequence.as_slice(), [(0, first), (0, second), (1, _)] if *first == child && *second == root)
 		);
-		assert!(!bar.window_scales.contains_key(&root));
-		assert!(!bar.window_scales.contains_key(&child));
+		assert!(bar.popups.route(root).is_none());
+		assert!(bar.popups.route(child).is_none());
 		Ok(())
 	}
 
@@ -1158,7 +1206,8 @@ mod tests {
 	-> Result<(), Box<dyn std::error::Error>> {
 		let mut bar = empty_bar();
 		let parent = Id::unique();
-		bar.window_scales.insert(parent, 1.2);
+		bar.output_sizes
+			.insert(parent, iced::Size::new(3840.0, 2160.0));
 		let root = opened_id(bar.update(BarMessage::Module(
 			Some(parent),
 			Section::Left,
@@ -1166,7 +1215,7 @@ mod tests {
 			ModuleMessage::OpenPopup(ModuleKind::SystemMenu, Rectangle::default()),
 		)))
 		.await?;
-		assert_eq!(bar.scale_factor(root), 1.2);
+		assert_eq!(bar.scale_factor(root), BAR_SCALE);
 		let child = opened_id(bar.update(BarMessage::Module(
 			Some(root),
 			Section::Left,
@@ -1174,6 +1223,7 @@ mod tests {
 			ModuleMessage::OpenContextMenu(Rectangle::default()),
 		)))
 		.await?;
+		assert_eq!(bar.scale_factor(child), BAR_SCALE);
 		let _ = bar.popup_unfocused(root);
 		assert!(bar.popups.route(root).is_some());
 		let _ = bar.close_context_descendants(root, Id::unique());
@@ -1190,7 +1240,6 @@ mod tests {
 		assert!(bar.popups.route(root).is_some());
 		let _ = bar.popup_unfocused(root);
 		assert!(bar.popups.route(root).is_none());
-		assert!(!bar.window_scales.contains_key(&root));
 		assert_eq!(bar.window_closed(root).units(), 0);
 		Ok(())
 	}

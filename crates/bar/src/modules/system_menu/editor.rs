@@ -10,7 +10,7 @@ use iced::{
 	keyboard::{self, key::Named},
 	window,
 };
-use neo_widgets::{animation::geometry::RectangleMotion, style::COLORS};
+use neo_widgets::{animation::geometry::RectangleMotion, style::Colors};
 use std::time::Instant;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -19,7 +19,7 @@ struct Key(SystemMenuWidgets, usize);
 pub(super) fn grid<'a>(
 	editing: bool, rows: &[MenuRow], baseline: &[PlacedTile], enabled: &[bool],
 	entries: Vec<(SystemMenuWidgets, Option<PlacedTile>, Element<'a, Message>)>, size: Size,
-	maximum: Size, ready: bool,
+	maximum: Size, ready: bool, colors: Colors,
 ) -> Element<'a, Message> {
 	let mut keys = Vec::new();
 	let mut targets = Vec::new();
@@ -40,6 +40,7 @@ pub(super) fn grid<'a>(
 		size,
 		maximum,
 		ready,
+		colors,
 		enabled: enabled.to_vec(),
 	})
 }
@@ -54,6 +55,7 @@ struct Tiles<'a, Renderer: iced::advanced::Renderer = iced::Renderer> {
 	size: Size,
 	maximum: Size,
 	ready: bool,
+	colors: Colors,
 	enabled: Vec<bool>,
 }
 
@@ -238,9 +240,11 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 	fn tag(&self) -> tree::Tag {
 		tree::Tag::of::<State>()
 	}
+
 	fn state(&self) -> tree::State {
 		tree::State::new(State::default())
 	}
+
 	fn diff(&mut self, tree: &mut Tree) {
 		let state = tree.state.downcast_mut::<State>();
 		let committed_order = self
@@ -312,12 +316,14 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 		state.initialized = true;
 		tree.diff_children(&mut self.children);
 	}
+
 	fn size(&self) -> Size<Length> {
 		Size::new(
 			Length::Fixed(self.size.width),
 			Length::Fixed(self.size.height),
 		)
 	}
+
 	fn layout(
 		&mut self, tree: &mut Tree, renderer: &Renderer, _limits: &layout::Limits,
 	) -> layout::Node {
@@ -355,6 +361,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 			.collect();
 		layout::Node::with_children(self.size, nodes)
 	}
+
 	fn update(
 		&mut self, tree: &mut Tree, event: &Event, layout: Layout<'_>, cursor: mouse::Cursor,
 		renderer: &Renderer, shell: &mut Shell<'_, Message>, viewport: &Rectangle,
@@ -498,11 +505,13 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 			}
 		}
 	}
+
 	fn draw(
 		&self, tree: &Tree, renderer: &mut Renderer, theme: &iced::Theme, style: &renderer::Style,
 		layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
 	) {
 		let state = tree.state.downcast_ref::<State>();
+		let colors = self.colors;
 		let source = state
 			.press
 			.as_ref()
@@ -575,13 +584,13 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 						renderer::Quad {
 							bounds: action,
 							border: Border {
-								color: COLORS.black,
+								color: colors.black,
 								width: 1.0,
 								..Default::default()
 							},
 							..Default::default()
 						},
-						COLORS.white,
+						colors.surface,
 					);
 					renderer.fill_quad(
 						renderer::Quad {
@@ -591,7 +600,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 							),
 							..Default::default()
 						},
-						COLORS.black,
+						colors.text,
 					);
 					if self.enabled.get(index) == Some(&false) {
 						renderer.fill_quad(
@@ -602,7 +611,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 								),
 								..Default::default()
 							},
-							COLORS.black,
+							colors.text,
 						);
 					}
 					let h = handle(visual);
@@ -621,7 +630,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 									border: Border::default(),
 									..Default::default()
 								},
-								COLORS.black,
+								colors.text,
 							);
 						}
 					}
@@ -638,13 +647,13 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 							Size::new(layout.bounds().width, spatial::SPACING),
 						),
 						border: Border {
-							color: COLORS.decorative.purple,
+							color: colors.black,
 							width: 1.0,
 							..Default::default()
 						},
 						..Default::default()
 					},
-					COLORS.decorative.purple90,
+					colors.decorative.purple90,
 				);
 				let x = layout.bounds().center_x();
 				for bounds in [
@@ -656,12 +665,13 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 							bounds,
 							..Default::default()
 						},
-						COLORS.black,
+						colors.on_accent,
 					);
 				}
 			});
 		}
 	}
+
 	fn mouse_interaction(
 		&self, tree: &Tree, layout: Layout<'_>, cursor: mouse::Cursor, viewport: &Rectangle,
 		renderer: &Renderer,
@@ -710,6 +720,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 			.max()
 			.unwrap_or_default()
 	}
+
 	fn operate(
 		&mut self, tree: &mut Tree, layout: Layout<'_>, renderer: &Renderer,
 		operation: &mut dyn iced::advanced::widget::Operation,
@@ -731,6 +742,7 @@ impl<Renderer: iced::advanced::Renderer> Widget<Message, iced::Theme, Renderer>
 			}
 		}
 	}
+
 	fn overlay<'a>(
 		&'a mut self, tree: &'a mut Tree, layout: Layout<'a>, renderer: &Renderer,
 		viewport: &Rectangle, offset: Vector,

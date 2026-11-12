@@ -13,15 +13,28 @@ use iced::{
 
 impl FileManager {
 	pub(crate) fn tag_sidebar(&self, compact: bool) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let mut tree = column![].spacing(5);
-		let add = control(svg(ui_icon!("plus")).width(15).height(15), false)
-			.background(style::SIDEBAR)
-			.on_press(TagMessage::EditTag(None).into())
-			.enabled(self.tags.is_some() && !self.tag_busy);
+		let add = control(
+			svg(ui_icon!("plus"))
+				.width(15)
+				.height(15)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text),
+				}),
+			false,
+			colors,
+		)
+		.background(colors.body)
+		.on_press(TagMessage::EditTag(None).into())
+		.enabled(self.tags.is_some() && !self.tag_busy);
 		if !compact {
 			tree = tree.push(
 				row![
-					text("TAGS").size(10).font(style::MONO).color(style::MUTED),
+					text("TAGS")
+						.size(10)
+						.font(style::MONO)
+						.color(colors.secondary),
 					Space::new().width(Length::Fill),
 					add
 				]
@@ -42,6 +55,7 @@ impl FileManager {
 				key.reverse();
 				key
 			});
+
 			for (id, depth) in ordered {
 				let Some(tag) = store.data.tags.get(&id) else {
 					continue;
@@ -51,12 +65,15 @@ impl FileManager {
 				} else {
 					ui_icon!("tag")
 				};
-				let color = if tag.name == "Starred" {
-					style::INK
+				let active = self.active_tag == Some(id);
+				let color = if active {
+					colors.text_on(colors.decorative.yellow)
+				} else if tag.name == "Starred" {
+					colors.text
 				} else if store.data.label(id).starts_with("Work") {
-					neo_widgets::style::rgb(0x886_91b)
+					colors.decorative.yellow
 				} else {
-					neo_widgets::style::rgb(0x557_4a5)
+					colors.decorative.blue
 				};
 				let mut label = row![
 					svg(symbol)
@@ -70,15 +87,20 @@ impl FileManager {
 					label = label.width(Length::Fill).push(
 						text(&tag.name)
 							.size(12)
+							.color(if active {
+								colors.text_on(colors.decorative.yellow)
+							} else {
+								colors.text
+							})
 							.wrapping(text::Wrapping::None)
 							.ellipsis(iced::advanced::text::Ellipsis::End),
 					);
 				}
-				let filter = control(label, self.active_tag == Some(id))
-					.background(if self.active_tag == Some(id) {
-						style::YELLOW
+				let filter = control(label, active, colors)
+					.background(if active {
+						colors.decorative.yellow
 					} else {
-						style::SIDEBAR
+						colors.body
 					})
 					.padding([7, 10])
 					.shadow_width(0.0)
@@ -96,20 +118,21 @@ impl FileManager {
 						filter,
 						store.data.label(id),
 						true,
+						colors,
 					));
 				} else {
 					let item = row![
 						filter,
 						control(
-							svg(ui_icon!("pencil-simple"))
-								.width(12)
-								.height(12)
-								.style(|_, _| svg::Style {
-									color: Some(style::MUTED)
-								}),
-							false
+							svg(ui_icon!("pencil-simple")).width(12).height(12).style(
+								move |_, _| svg::Style {
+									color: Some(colors.secondary)
+								}
+							),
+							false,
+							colors
 						)
-						.background(style::SIDEBAR)
+						.background(colors.body)
 						.padding(4)
 						.on_press(TagMessage::EditTag(Some(id)).into())
 						.enabled(!self.tag_busy)
@@ -123,7 +146,7 @@ impl FileManager {
 							row![
 								iced::widget::Space::new().width((depth.min(5) * 20) as f32),
 								container(iced::widget::Space::new().width(1).height(32))
-									.style(|_| style::panel(neo_widgets::style::rgb(0xc6c_8bb))),
+									.style(move |_| style::panel(colors.separator)),
 								item
 							]
 							.spacing(8),
@@ -132,6 +155,7 @@ impl FileManager {
 				}
 			}
 		}
+
 		if self.tag_busy && !compact {
 			tree = tree.push(
 				text(if self.tags.is_some() {
@@ -140,7 +164,7 @@ impl FileManager {
 					"Loading tags…"
 				})
 				.size(11)
-				.color(style::MUTED),
+				.color(colors.secondary),
 			);
 		}
 		if let Some(problem) = &self.tag_problem {
@@ -149,7 +173,7 @@ impl FileManager {
 			}
 			if self.tags.is_none() {
 				tree = tree.push(
-					control(text("Retry").size(11), false)
+					control(text("Retry").size(11), false, colors)
 						.on_press(TagMessage::RetryTags.into())
 						.enabled(!self.tag_busy),
 				);
@@ -159,6 +183,7 @@ impl FileManager {
 	}
 
 	pub(crate) fn tag_form(&self) -> Option<Element<'_, Message>> {
+		let colors = self.appearance.colors();
 		let editor = self.tag_editor.as_ref()?;
 		let store = self.tags.as_ref()?;
 		let mut choices = vec![self.tag_choice(None)];
@@ -174,6 +199,7 @@ impl FileManager {
 				})
 				.map(|(id, _)| self.tag_choice(Some(id))),
 		);
+
 		let form = column![
 			text(if editor.id.is_some() {
 				"EDIT TAG"
@@ -181,9 +207,9 @@ impl FileManager {
 				"NEW TAG"
 			})
 			.size(10)
-			.color(style::MUTED),
+			.color(colors.secondary),
 			text_input("Tag name", &editor.name)
-				.style(style::input)
+				.style(move |theme, status| style::input(theme, status, colors))
 				.id("tag-name")
 				.on_input(|name| TagMessage::TagName(name).into())
 				.on_submit(TagMessage::SaveTag.into())
@@ -192,7 +218,7 @@ impl FileManager {
 			row![
 				text("Parent").size(12),
 				pick_list(Some(editor.parent.clone()), choices, ToString::to_string)
-					.style(style::pick_list)
+					.style(move |theme, status| style::pick_list(theme, status, colors))
 					.on_select(|parent| TagMessage::TagParent(parent).into())
 					.text_size(12)
 					.width(Length::Fill)
@@ -207,10 +233,13 @@ impl FileManager {
 						"Save tag"
 					})
 					.size(12)
+					.color(colors.text_on(colors.decorative.yellow)),
+					colors
 				)
 				.on_press(TagMessage::SaveTag.into())
 				.enabled(!self.tag_busy),
-				control(text("Cancel").size(12), false).on_press(TagMessage::CancelTag.into())
+				control(text("Cancel").size(12), false, colors)
+					.on_press(TagMessage::CancelTag.into())
 			]
 			.spacing(8),
 		]
@@ -219,16 +248,28 @@ impl FileManager {
 			container(form)
 				.padding(14)
 				.width(Length::Fill)
-				.style(|_| style::panel(style::SIDEBAR))
+				.style(move |_| container::Style {
+					text_color: Some(colors.text),
+					..style::panel(colors.body)
+				})
 				.into(),
 		)
 	}
 
 	pub(crate) fn selected_tags(&self, entry: &DirEntry) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let mut content = column![
 			row![
-				svg(ui_icon!("tag")).width(15).height(15),
-				text("TAGS").font(style::MONO).size(10).color(style::MUTED)
+				svg(ui_icon!("tag"))
+					.width(15)
+					.height(15)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.secondary),
+					}),
+				text("TAGS")
+					.font(style::MONO)
+					.size(10)
+					.color(colors.secondary)
 			]
 			.spacing(7)
 		]
@@ -236,27 +277,36 @@ impl FileManager {
 		if let Some(store) = &self.tags {
 			let assigned = store.data.assigned(&entry.path);
 			let mut chips = row![].spacing(7);
+			let chip_foreground = colors.text_on(colors.decorative.blue90);
+
 			for &id in &assigned {
 				chips = chips.push(
 					control(
 						row![
-							svg(ui_icon!("tag")).width(13),
-							text(store.data.label(id)).size(11),
-							svg(ui_icon!("x")).width(12)
+							svg(ui_icon!("tag"))
+								.width(13)
+								.style(move |_, _| svg::Style {
+									color: Some(chip_foreground),
+								}),
+							text(store.data.label(id)).size(11).color(chip_foreground),
+							svg(ui_icon!("x")).width(12).style(move |_, _| svg::Style {
+								color: Some(chip_foreground),
+							})
 						]
 						.spacing(6)
 						.align_y(Alignment::Center),
 						true,
+						colors,
 					)
 					.shadow_width(0.0)
-					.background(neo_widgets::style::rgb(0xe2e_8f5))
+					.background(colors.decorative.blue90)
 					.padding([4, 7])
 					.on_press(TagMessage::RemoveTag(id).into())
 					.enabled(!self.tag_busy),
 				);
 			}
 			if assigned.is_empty() {
-				chips = chips.push(text("No tags").size(12).color(style::MUTED));
+				chips = chips.push(text("No tags").size(12).color(colors.secondary));
 			}
 			let choices: Vec<TagChoice> = store
 				.data
@@ -268,7 +318,7 @@ impl FileManager {
 			if !self.tag_busy && !choices.is_empty() {
 				chips = chips.push(
 					pick_list(None::<TagChoice>, choices, ToString::to_string)
-						.style(style::pick_list)
+						.style(move |theme, status| style::pick_list(theme, status, colors))
 						.on_select(|choice| TagMessage::AssignTag(choice).into())
 						.placeholder("+ Add tag")
 						.text_size(12),
@@ -278,37 +328,51 @@ impl FileManager {
 		} else {
 			content = content.push(text("Tag storage is unavailable.").size(12));
 		}
+
 		container(content)
 			.padding([12, 14])
 			.width(Length::Fill)
-			.style(|_| container::Style {
+			.style(move |_| container::Style {
 				border: iced::Border {
-					color: style::INK,
+					color: colors.text,
 					width: 1.5,
 					radius: 0.0.into(),
 				},
-				..style::panel(style::SIDEBAR)
+				text_color: Some(colors.text),
+				..style::panel(colors.body)
 			})
 			.into()
 	}
 
 	pub(crate) fn tag_filter_label(&self) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		if let Some(id) = self.active_tag {
 			let name = self
 				.tags
 				.as_ref()
 				.map_or_else(String::new, |s| s.data.label(id));
 			row![
-				text("IN THIS FOLDER").size(10).color(style::MUTED),
-				primary(row![text(name).size(11), svg(ui_icon!("x")).width(12)].spacing(8))
-					.shadow_width(0.0)
-					.on_press(TagMessage::TagFilter(None).into())
+				text("IN THIS FOLDER").size(10).color(colors.secondary),
+				primary(
+					row![
+						text(name)
+							.size(11)
+							.color(colors.text_on(colors.decorative.yellow)),
+						svg(ui_icon!("x")).width(12).style(move |_, _| svg::Style {
+							color: Some(colors.text_on(colors.decorative.yellow)),
+						})
+					]
+					.spacing(8),
+					colors
+				)
+				.shadow_width(0.0)
+				.on_press(TagMessage::TagFilter(None).into())
 			]
 			.spacing(9)
 			.align_y(Alignment::Center)
 			.into()
 		} else {
-			text("FILES").size(10).color(style::MUTED).into()
+			text("FILES").size(10).color(colors.secondary).into()
 		}
 	}
 }

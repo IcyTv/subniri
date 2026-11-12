@@ -1,5 +1,5 @@
 //! Real-renderer, real-Wayland test of the production popup sizing utilities.
-//! Launch only with scripts/test-popup-resize.py, never against the desktop socket.
+//! Launch only through an isolated compositor harness, never against the desktop socket.
 use iced::advanced::Renderer as _;
 use iced::{
 	Element, Length, Rectangle, Size, Subscription, Task,
@@ -334,7 +334,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 			!= "isolated popup resize probe"
 		|| !runtime.starts_with("/tmp/opencode")
 	{
-		return Err("launch with scripts/test-popup-resize.py on its private compositor".into());
+		return Err("launch only through an isolated popup-resize compositor harness".into());
 	}
 	let bottom = std::env::var("PROBE_EDGE").as_deref() == Ok("bottom-right");
 	let (shell_broadcast, shell_events) = iced_wayland_subscriber::shell::channel();

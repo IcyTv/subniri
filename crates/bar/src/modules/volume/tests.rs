@@ -40,6 +40,86 @@ context.objects = [
 type Error = Box<dyn std::error::Error>;
 
 #[test]
+#[ignore = "requires private PipeWire and a headless graphics renderer"]
+fn audio_popup_layout() -> Result<(), Error> {
+	run_private("modules::volume::tests::popup_layout_child")
+}
+
+#[tokio::test]
+#[ignore = "private PipeWire subprocess helper"]
+async fn popup_layout_child() -> Result<(), Error> {
+	use crate::modules::layout_tests;
+
+	require_child()?;
+	let mut volume = Volume::new()?;
+	receive_until(&mut volume, |volume| {
+		volume
+			.devices
+			.values()
+			.any(|node| node.name.as_deref() == Some(SINK))
+	})
+	.await?;
+	let _ = volume.update(Message::PwEvent(PwEvent::DefaultSinkChanged(SINK.into())));
+	let mut renderer = layout_tests::renderer().await?;
+	for (theme, colors) in [
+		("light", neo_widgets::style::LIGHT),
+		("dark", neo_widgets::style::DARK),
+	] {
+		let popup = layout_tests::capture(
+			volume.view_popup(colors),
+			&mut renderer,
+			colors,
+			&format!("audio-{theme}"),
+		)?;
+		assert_eq!(popup.nodes.first().ok_or("missing popup")?.width, 320.0);
+		assert!(popup.texts.contains_key("Input"));
+		assert!(popup.texts.contains_key("Read-only"));
+		let sliders = popup
+			.nodes
+			.iter()
+			.filter(|bounds| bounds.height == 18.0 && bounds.width > 50.0)
+			.collect::<Vec<_>>();
+		assert_eq!(
+			sliders.len(),
+			2,
+			"both output and microphone sliders must be present"
+		);
+		let output_value = format!(
+			"{:.0}%",
+			volume
+				.devices
+				.get(&volume.default_sink.ok_or("missing sink")?)
+				.ok_or("missing sink device")?
+				.volume
+				.percentage()
+		);
+		for (slider, value) in sliders.iter().zip([output_value.as_str(), "—"]) {
+			let label = popup.texts.get(value).ok_or("missing volume label")?;
+			assert!(
+				(slider.center_y() - label.center_y()).abs() < 0.01,
+				"slider and value must share a vertical center"
+			);
+		}
+		assert_eq!(sliders[0].width, sliders[1].width);
+
+		let button = layout_tests::capture(
+			volume.view(colors).into(),
+			&mut renderer,
+			colors,
+			&format!("bar-audio-{theme}"),
+		)?;
+		assert_eq!(
+			button.nodes.first().ok_or("missing button")?.height,
+			MODULE_HEIGHT
+		);
+		for bounds in button.texts.values() {
+			assert!((bounds.center_y() - 23.0).abs() < 0.01);
+		}
+	}
+	Ok(())
+}
+
+#[test]
 fn volume_properties_round_trip_and_mute_omits_channels()
 -> Result<(), pipewire_native_spa::pod::Error> {
 	let channels = [0.125, 0.421875];
@@ -162,6 +242,139 @@ async fn receive_until(volume: &mut Volume, ready: impl Fn(&Volume) -> bool) -> 
 #[ignore = "requires pipewire and pw-cli; creates only a private null sink"]
 fn virtual_sink_remains_writable_after_external_update() -> Result<(), Error> {
 	run_private("modules::volume::tests::virtual_sink_child")
+}
+
+#[test]
+#[ignore = "requires private PipeWire; measures mute dispatch under proxy contention"]
+fn mute_dispatch_does_not_block_ui() -> Result<(), Error> {
+	run_private("modules::volume::tests::mute_dispatch_child")
+}
+
+#[tokio::test]
+#[ignore = "private PipeWire subprocess helper"]
+async fn mute_dispatch_child() -> Result<(), Error> {
+	require_child()?;
+	let mut volume = Volume::new()?;
+	receive_until(&mut volume, |volume| {
+		volume.devices.values().any(|node| {
+			node.name.as_deref() == Some(SINK) && !node.volume.channel_volums.is_empty()
+		})
+	})
+	.await?;
+	let _ = volume.update(Message::PwEvent(PwEvent::DefaultSinkChanged(SINK.into())));
+	let id = volume.default_sink.ok_or("missing sink")?;
+
+	let started = Instant::now();
+	let _ = volume.update(Message::DefaultSinkMuteToggleRequest);
+	let idle_dispatch = started.elapsed();
+	receive_until(&mut volume, |volume| {
+		volume.devices.get(&id).is_some_and(|node| node.volume.mute)
+	})
+	.await?;
+	let idle_readback = started.elapsed();
+
+	// Exercise the real dependency's method lock, not a substitute UI mutex.
+	// POD serialization runs under that lock; another caller holds it for 200ms.
+	let proxy = volume
+		.node_proxies
+		.get(&id)
+		.ok_or("missing sink proxy")?
+		.clone();
+	let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(0);
+	let holder = std::thread::spawn(move || {
+		proxy.set_param(
+			ParamType::Props,
+			ObjectType::Props,
+			0,
+			Box::new(move |builder| {
+				let _ = ready_tx.send(());
+				std::thread::sleep(Duration::from_millis(200));
+				volume_props(builder, None, Some(true))
+			}),
+		)
+	});
+	ready_rx.recv_timeout(Duration::from_secs(2))?;
+
+	let started = Instant::now();
+	let _ = volume.update(Message::DefaultSinkMuteToggleRequest);
+	let contended_dispatch = started.elapsed();
+	holder.join().map_err(|_| "proxy holder panicked")??;
+	receive_until(&mut volume, |volume| {
+		volume
+			.devices
+			.get(&id)
+			.is_some_and(|node| !node.volume.mute)
+	})
+	.await?;
+	eprintln!(
+		"mute timings: idle dispatch={idle_dispatch:?}, idle readback={idle_readback:?}, contended dispatch={contended_dispatch:?}"
+	);
+	if let Ok(path) = std::env::var("SUBNIRI_MUTE_TIMINGS_FILE") {
+		std::fs::write(
+			path,
+			serde_json::to_vec_pretty(&serde_json::json!({
+				"idle_dispatch_us": idle_dispatch.as_secs_f64() * 1_000_000.0,
+				"idle_readback_us": idle_readback.as_secs_f64() * 1_000_000.0,
+				"contended_dispatch_us": contended_dispatch.as_secs_f64() * 1_000_000.0,
+				"injected_proxy_contention_ms": 200,
+			}))?,
+		)?;
+	}
+	assert!(
+		contended_dispatch < Duration::from_millis(40),
+		"mute must not wait for PipeWire's proxy lock on the UI thread: {contended_dispatch:?}"
+	);
+
+	volume.sink_writer.invalidate();
+	let stale_failure = volume.update(Message::PwEvent(PwEvent::SinkWriteFailed {
+		generation: 0,
+		error: "old connection failed".into(),
+		connection_error: true,
+	}));
+	assert_eq!(stale_failure.units(), 0);
+	assert!(
+		volume.connection.is_some(),
+		"stale write failures must not disconnect the current session"
+	);
+
+	let connection = volume.connection.as_ref().ok_or("missing connection")?;
+	let session = Arc::downgrade(&connection.session);
+	let (started, waiting) = std::sync::mpsc::channel();
+	let (release, blocked) = std::sync::mpsc::channel();
+	volume.sink_writer.submit(
+		writer::Target::Probe(Box::new(move || {
+			started.send(()).map_err(std::io::Error::other)?;
+			blocked
+				.recv_timeout(Duration::from_secs(2))
+				.map_err(std::io::Error::other)
+		})),
+		None,
+		None,
+		Some(connection.clone()),
+	)?;
+	waiting.recv_timeout(Duration::from_secs(2))?;
+	drop(volume.connection.take());
+	assert!(
+		session.upgrade().is_some(),
+		"in-flight writes must retain their PipeWire context"
+	);
+
+	release.send(())?;
+	let (finished, done) = std::sync::mpsc::channel();
+	volume.sink_writer.submit(
+		writer::Target::Probe(Box::new(move || {
+			finished.send(()).map_err(std::io::Error::other)
+		})),
+		None,
+		None,
+		None,
+	)?;
+	done.recv_timeout(Duration::from_secs(2))?;
+	assert!(
+		session.upgrade().is_none(),
+		"the final write must release its connection after orderly loop shutdown"
+	);
+	Ok(())
 }
 
 #[tokio::test]

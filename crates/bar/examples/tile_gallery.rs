@@ -91,7 +91,7 @@ impl Gallery {
 			unreachable!()
 		};
 		let child = menu
-			.view_widget(&config::SystemMenuWidgets::Nightlight, size)
+			.view_widget(&config::SystemMenuWidgets::Nightlight, size, COLORS)
 			.map(modules::ModuleMessage::SystemMenu);
 		let audited = Element::new(AuditTile {
 			child,
@@ -379,7 +379,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		|| std::fs::read_to_string(runtime.join("tile-gallery.marker"))?
 			!= "isolated production tile gallery"
 	{
-		return Err("launch with scripts/test-tile-gallery.py".into());
+		return Err("launch only through an isolated tile-gallery compositor harness".into());
 	}
 	let (shell_broadcast, shell_events) = iced_wayland_subscriber::shell::channel();
 	daemon(

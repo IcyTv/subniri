@@ -22,6 +22,11 @@ async fn main() -> Result<(), Error> {
 		.name(DEFAULT_BUS_NAME)?
 		.build()
 		.await?;
+	let appearance = daemon::appearance::AppearanceService::register(
+		connection.clone(),
+		config.appearance.theme,
+	)
+	.await?;
 	let db = setup_db().await?;
 	let spotify = spotify::SpotifyDbus::register(connection.clone(), config.spotify.clone())
 		.await
@@ -95,6 +100,7 @@ async fn main() -> Result<(), Error> {
 					match ConfigFile::load() {
 						Ok((_doc, new_config)) => {
 							log::info!("Reloading config");
+							appearance.reconfigure();
 							if new_config.nightlight != config.nightlight {
 								let _ = nightlight_config_tx.send(new_config.nightlight.clone());
 							}

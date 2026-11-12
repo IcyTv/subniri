@@ -9,11 +9,15 @@ use std::{
 use async_channel::{Receiver, Sender};
 use futures::{StreamExt, future::join_all};
 use iced::{
-	Alignment, Animation, Border, Color, Element, Font, Length, Subscription, Task, Theme, font,
-	keyboard,
+	Alignment, Animation, Border, Color, Element, Font, Length, Padding, Subscription, Task, Theme,
+	font, keyboard,
 	theme::Style,
 	time,
-	widget::{column, container, image, row, space, svg, text, text::Rich, text_input},
+	widget::{
+		column, container, image, row, space, svg, text,
+		text::{Rich, Span},
+		text_input,
+	},
 	window::Id,
 };
 use iced_exwlshell::{
@@ -23,9 +27,10 @@ use iced_exwlshell::{
 	to_layer_message,
 };
 use neo_widgets::{
+	appearance::{Appearance, Event},
 	icons::ResolvedIcon,
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{neo_button, neo_card, neo_scrollable, spinner},
 };
 use utilities::Hashable;
@@ -33,9 +38,9 @@ use utilities::Hashable;
 use crate::{
 	dbus::DbusListener,
 	providers::{
-		Activation, ActivationKey, Candidate, CandidateId, PreviewModel, Provider, ProviderContext,
-		ProviderEvent, ProviderId, ProviderStatus, Query, Revision, SessionHandle, SessionId,
-		compare_candidates,
+		Activation, ActivationKey, Candidate, CandidateId, CandidateKind, PreviewModel, Provider,
+		ProviderContext, ProviderEvent, ProviderId, ProviderStatus, Query, Revision, SessionHandle,
+		SessionId, compare_candidates,
 	},
 	utils::follow_focus,
 };
@@ -43,6 +48,7 @@ use crate::{
 #[to_layer_message(multi)]
 #[derive(Debug, Clone)]
 pub enum Message {
+	Appearance(Event),
 	Open,
 	Close,
 	Exit,
@@ -65,6 +71,7 @@ pub enum Message {
 }
 
 pub struct Launcher {
+	pub appearance: Appearance,
 	providers: Hashable<[Arc<dyn Provider>]>,
 	open: Option<Id>,
 	conn: Option<zbus::Connection>,
@@ -97,6 +104,7 @@ impl Launcher {
 
 		(
 			Self {
+				appearance: Appearance::default(),
 				providers: Hashable::from_arc(providers),
 				open: None,
 				dbus_rx: Hashable::new(dbus_rx),
@@ -199,6 +207,7 @@ impl Launcher {
 		let frames = iced::window::frames().map(Message::Redraw);
 
 		Subscription::batch([
+			self.appearance.subscription().map(Message::Appearance),
 			keyboard,
 			event,
 			dbus,
@@ -213,6 +222,10 @@ impl Launcher {
 	#[allow(clippy::needless_pass_by_value)]
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
+			Message::Appearance(event) => {
+				self.appearance.update(event);
+				Task::none()
+			}
 			Message::Resumed => Task::future(async {
 				tokio::time::sleep(Duration::from_millis(500)).await;
 				Message::RestartAfterResume
@@ -459,7 +472,8 @@ impl Launcher {
 			return "".into();
 		}
 
-		let input = self.search_row();
+		let colors = self.appearance.colors();
+		let input = self.search_row(colors);
 
 		let mut content = column![].height(Length::Fill);
 
@@ -472,7 +486,16 @@ impl Launcher {
 			if let Some(icon) = &cand.icon {
 				let icon: Element<'_, Message> = match icon {
 					ResolvedIcon::Svg(handle) => {
-						svg(handle.clone()).height(20).width(Length::Shrink).into()
+						let icon = svg(handle.clone()).height(20).width(Length::Shrink);
+
+						if matches!(cand.kind, CandidateKind::Calc) {
+							icon.style(move |_, _| svg::Style {
+								color: Some(colors.text),
+							})
+							.into()
+						} else {
+							icon.into()
+						}
 					}
 					ResolvedIcon::Image(handle) => {
 						image(handle).height(20).width(Length::Shrink).into()
@@ -482,16 +505,16 @@ impl Launcher {
 			}
 
 			let title_text: Element<'_, Message> = if let Some(title_spans) = &cand.title_spans {
-				Rich::<'_, (), Message>::with_spans(title_spans)
+				Rich::<'_, (), Message>::with_spans(themed_spans(title_spans, colors))
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Default::default()
 					})
-					.color(COLORS.text)
+					.color(colors.text)
 					.into()
 			} else {
 				text(cand.title.as_ref())
-					.color(COLORS.text)
+					.color(colors.text)
 					.weight(font::Weight::Bold)
 					.into()
 			};
@@ -500,9 +523,9 @@ impl Launcher {
 
 			if let Some(subtitle) = &cand.subtitle {
 				title = title.push(
-					Rich::<'_, (), Message>::with_spans(subtitle)
+					Rich::<'_, (), Message>::with_spans(themed_spans(subtitle, colors))
 						.size(14)
-						.color(COLORS.text.scale_alpha(0.8)),
+						.color(colors.text.scale_alpha(0.8)),
 				);
 			}
 
@@ -515,9 +538,15 @@ impl Launcher {
 			}
 
 			let display = neo_button(display)
-				.background(COLORS.body)
+				.with_colors(colors)
+				.background(colors.body)
 				.focusable(true)
-				.focus_color(COLORS.decorative.pink)
+				.focus_color(colors.raised)
+				.focus_marker(colors.decorative.pink)
+				.padding(Padding {
+					left: 16.0,
+					..Padding::new(8.0)
+				})
 				.on_press(Message::Activate(
 					cand.provider,
 					cand.id.clone(),
@@ -529,48 +558,67 @@ impl Launcher {
 			content = content.push(display);
 		}
 
+		if !self.loading.is_empty() {
+			content = content.push(
+				row![
+					spinner().bar_color(colors.feedback.info).size(20.0),
+					text("Loading…").color(colors.secondary),
+				]
+				.spacing(10)
+				.padding(8),
+			);
+		}
+
 		let content = neo_scrollable(content)
+			.with_colors(colors)
 			.width(Length::Fill)
 			.height(Length::Fill)
 			.id(self.scrollable_id.clone());
 
 		let content = column![input, content].height(Length::Fill);
 
-		let height = self.has_candidates.interpolate(60.0, 480.0, Instant::now());
+		let height = if self.loading.is_empty() {
+			self.has_candidates.interpolate(60.0, 480.0, Instant::now())
+		} else {
+			480.0
+		};
 		// let height = 480.0;
 
-		let content = neo_card(content).width(640).height(height).radius(8.0);
+		let content = neo_card(content)
+			.with_colors(colors)
+			.width(640)
+			.height(height)
+			.radius(8.0);
 
 		container(content)
 			.width(Length::Fill)
 			.height(Length::Fill)
 			.align_x(Alignment::Center)
 			.align_y(Alignment::Center)
-			.style(|_| container::Style {
-				background: Some(iced::Background::Color(COLORS.black.scale_alpha(0.4))),
+			.style(move |_| container::Style {
+				background: Some(iced::Background::Color(colors.black.scale_alpha(0.4))),
 				..Default::default()
 			})
 			.into()
 	}
 
-	fn search_row(&self) -> Element<'_, Message> {
-		let mut search_row = row![
+	fn search_row(&self, colors: Colors) -> Element<'_, Message> {
+		let search_row = row![
 			svg(phosphor_icon!("magnifying-glass"))
 				.height(20)
-				.width(Length::Shrink),
-			self.search_box(),
+				.width(Length::Shrink)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
+			self.search_box(colors),
 		]
 		.align_y(Alignment::Center)
 		.spacing(10);
 
-		if !self.loading.is_empty() {
-			search_row = search_row.push(spinner().size(20.0));
-		}
-
 		search_row.into()
 	}
 
-	fn search_box(&self) -> Element<'_, Message> {
+	fn search_box(&self, colors: Colors) -> Element<'_, Message> {
 		text_input("Search", &self.search)
 			.id(self.input_id.clone())
 			.width(Length::Fill)
@@ -579,12 +627,12 @@ impl Launcher {
 				..Default::default()
 			})
 			.size(20)
-			.style(|_, _| text_input::Style {
-				background: iced::Background::Color(COLORS.white),
+			.style(move |_, _| text_input::Style {
+				background: iced::Background::Color(colors.surface),
 				border: Border::default().width(0),
-				value: COLORS.text,
-				selection: COLORS.decorative.pink,
-				placeholder: COLORS.text.scale_alpha(0.7),
+				value: colors.text,
+				selection: colors.selection,
+				placeholder: colors.text.scale_alpha(0.7),
 			})
 			.on_input(Message::SearchChanged)
 			.on_submit(Message::ActivateIndex(0))
@@ -592,11 +640,9 @@ impl Launcher {
 	}
 
 	pub fn style(&self, _theme: &Theme) -> Style {
-		let _ = self;
-
 		Style {
 			background_color: Color::TRANSPARENT,
-			text_color: COLORS.text,
+			text_color: self.appearance.colors().text,
 		}
 	}
 
@@ -608,14 +654,36 @@ impl Launcher {
 	}
 }
 
+fn themed_spans(spans: &[Span<'static, ()>], colors: Colors) -> Vec<Span<'static, ()>> {
+	spans
+		.iter()
+		.cloned()
+		.map(|mut span| {
+			// Bold marks matched fragments without caching a concrete palette color.
+			if span
+				.font
+				.is_some_and(|font| font.weight == font::Weight::Bold)
+			{
+				span.color = Some(colors.decorative.purple);
+			}
+
+			span
+		})
+		.collect()
+}
+
 struct DummyCtx;
 
 #[async_trait::async_trait]
 impl ProviderContext for DummyCtx {
 	async fn hide(&self) {}
+
 	async fn close(&self) {}
+
 	async fn set_input(&self, _input: String) {}
+
 	async fn set_preview(&self, _preview: PreviewModel) {}
+
 	async fn set_response(&self, _response: String) {}
 }
 
@@ -724,4 +792,30 @@ fn running_under_systemd_service() -> bool {
 			path.split('/').any(|part| part.ends_with(".service"))
 		})
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use iced::widget::span;
+	use neo_widgets::style::{DARK, LIGHT};
+
+	#[test]
+	fn cached_highlights_follow_the_current_palette() {
+		let spans = [
+			span("match").font(Font {
+				weight: font::Weight::Bold,
+				..Default::default()
+			}),
+			span(" normal"),
+		];
+
+		let light = themed_spans(&spans, LIGHT);
+		let dark = themed_spans(&spans, DARK);
+
+		assert_eq!(light[0].color, Some(LIGHT.decorative.purple));
+		assert_eq!(dark[0].color, Some(DARK.decorative.purple));
+		assert_eq!(dark[1].color, None);
+		assert_eq!(spans[0].color, None);
+	}
 }

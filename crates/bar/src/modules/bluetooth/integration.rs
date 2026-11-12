@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use iced::{Element, Rectangle, Subscription, Task};
-use neo_widgets::style::COLORS;
+use neo_widgets::style::Colors;
 use utilities::Hashable;
 
 use super::{Bluetooth, Message as Event};
@@ -89,24 +89,32 @@ impl Integration {
 		}
 	}
 
-	pub fn view(&self) -> Element<'_, Message> {
+	pub fn view(&self, colors: Colors) -> Element<'_, Message> {
 		match &self.state {
-			State::Connecting => loading(COLORS.decorative.blue),
-			State::Unavailable { error, .. } => {
-				unavailable("Bluetooth unavailable", error, COLORS.decorative.blue)
-			}
+			State::Connecting => loading(colors.decorative.blue, colors),
+			State::Unavailable { error, .. } => unavailable(
+				"Bluetooth unavailable",
+				error,
+				colors.decorative.blue,
+				colors,
+			),
 			State::Ready(bluetooth) => bluetooth
-				.view()
+				.view(colors)
 				.map(Message::Action)
 				.on_press_with_bounds(Message::OpenPopup)
 				.into(),
 		}
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		match &self.state {
-			State::Ready(bluetooth) => bluetooth.view_popup().map(Message::Action),
-			_ => self.view(),
+			State::Ready(bluetooth) => bluetooth.view_popup(colors).map(Message::Action),
+			State::Connecting => super::super::connection_popup("Bluetooth", "Connecting…", colors),
+			State::Unavailable { .. } => super::super::connection_popup(
+				"Bluetooth",
+				"Bluetooth unavailable. Retrying automatically.",
+				colors,
+			),
 		}
 	}
 
@@ -116,6 +124,7 @@ impl Integration {
 			state: State::Ready(bluetooth),
 		}
 	}
+
 	#[cfg(test)]
 	pub(super) fn ready(&self) -> bool {
 		matches!(self.state, State::Ready(_))

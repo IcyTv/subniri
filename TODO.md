@@ -1,0 +1,1 @@
+- [ ] Figure out why the animations in the media popup are so buggy

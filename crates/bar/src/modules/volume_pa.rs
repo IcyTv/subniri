@@ -22,7 +22,7 @@ use libpulse_binding::{
 use libpulse_tokio::TokioMain;
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, neo_button, neo_card},
 };
 use tokio::task::LocalSet;
@@ -153,7 +153,7 @@ impl Volume {
 		}
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		// TODO Icon for no audio device speaker-slash
 
 		let icon = if self.volume < 0.001 || self.muted {
@@ -169,13 +169,18 @@ impl Volume {
 		neo_button(
 			mouse_area(
 				row![
-					svg(icon).width(Length::Shrink).height(ICON_HEIGHT),
+					svg(icon)
+						.width(Length::Shrink)
+						.height(ICON_HEIGHT)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.on_accent),
+						}),
 					text(format!("{:.0}%", self.volume))
 						.font(Font {
 							weight: font::Weight::Bold,
 							..Font::DEFAULT
 						})
-						.color(COLORS.text)
+						.color(colors.on_accent)
 						.size(18)
 						.align_y(Vertical::Center)
 				]
@@ -184,9 +189,10 @@ impl Volume {
 			)
 			.on_scroll(Self::on_scroll),
 		)
+		.with_colors(colors)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(COLORS.decorative.yellow)
+		.background(colors.decorative.yellow)
 		.into()
 	}
 
@@ -206,10 +212,11 @@ impl Volume {
 		}
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		neo_card("")
+			.with_colors(colors)
 			.width(320)
-			.background(COLORS.decorative.yellow)
+			.background(colors.decorative.yellow)
 			.radius(MODULE_RADIUS)
 			.into()
 	}

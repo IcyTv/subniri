@@ -3,6 +3,10 @@
 use std::{
 	collections::HashMap,
 	fmt,
+	sync::{
+		Arc,
+		atomic::{AtomicBool, Ordering},
+	},
 	time::{Duration, Instant},
 };
 
@@ -16,7 +20,7 @@ use iced::{
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, neo_button, neo_card, neo_slider},
 };
 use pipewire_native::{
@@ -50,6 +54,8 @@ use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 #[cfg(test)]
 mod tests;
 
+mod writer;
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	DefaultSinkVolumeChangeRequest(f32),
@@ -82,6 +88,11 @@ pub(crate) enum PwEvent {
 	},
 	CoreSyncDone(u32),
 	ConnectionLost(String),
+	SinkWriteFailed {
+		generation: u64,
+		error: String,
+		connection_error: bool,
+	},
 }
 
 impl fmt::Debug for PwEvent {
@@ -111,16 +122,44 @@ impl fmt::Debug for PwEvent {
 				.finish(),
 			Self::CoreSyncDone(seq) => f.debug_tuple("CoreSyncDone").field(seq).finish(),
 			Self::ConnectionLost(reason) => f.debug_tuple("ConnectionLost").field(reason).finish(),
+			Self::SinkWriteFailed {
+				generation, error, ..
+			} => f
+				.debug_struct("SinkWriteFailed")
+				.field("generation", generation)
+				.field("error", error)
+				.finish(),
 		}
 	}
 }
 
 #[derive(Clone)]
 pub struct PwConnection {
+	session: Arc<PwSession>,
+}
+
+struct PwSession {
 	main_loop: ThreadLoop,
 	context: Context,
 	core: Core,
 	registry: Registry,
+	stopped: AtomicBool,
+}
+
+impl PwSession {
+	fn stop(&self) {
+		if !self.stopped.swap(true, Ordering::AcqRel) {
+			// Finish callbacks while their Context still exists.
+			self.main_loop.quit();
+			self.core.disconnect();
+		}
+	}
+}
+
+impl Drop for PwSession {
+	fn drop(&mut self) {
+		self.stop();
+	}
 }
 
 impl fmt::Debug for PwConnection {
@@ -156,6 +195,7 @@ struct PwDeviceState {
 #[derive(Clone)]
 pub struct Volume {
 	connection: Option<PwConnection>,
+	sink_writer: writer::SinkWriter,
 	event_tx: async_channel::Sender<PwEvent>,
 	event_rx: Hashable<async_channel::Receiver<PwEvent>>,
 
@@ -444,30 +484,34 @@ impl PwConnection {
 		log::trace!("Added global listeners");
 
 		Ok(Self {
-			main_loop,
-			context,
-			core,
-			registry,
+			session: Arc::new(PwSession {
+				main_loop,
+				context,
+				core,
+				registry,
+				stopped: AtomicBool::new(false),
+			}),
 		})
 	}
 
 	fn health_check(&self) -> Result<u32, String> {
-		self.core.sync().map_err(|e| format!("{e}"))
+		self.session.core.sync().map_err(|e| format!("{e}"))
 	}
 
 	fn shutdown(self) {
-		self.core.disconnect();
-		self.main_loop.quit();
+		self.session.stop();
 	}
 }
 
 impl Volume {
 	pub fn new() -> Result<Self, String> {
 		let (event_tx, event_rx) = async_channel::unbounded();
+		let sink_writer = writer::SinkWriter::new(event_tx.clone())?;
 		let connection = PwConnection::connect(event_tx.clone())?;
 
 		Ok(Self {
 			connection: Some(connection),
+			sink_writer,
 			event_tx,
 			event_rx: Hashable::new(event_rx),
 
@@ -559,6 +603,21 @@ impl Volume {
 			Message::PwEvent(PwEvent::ConnectionLost(reason)) => {
 				self.handle_connection_lost(reason)
 			}
+			Message::PwEvent(PwEvent::SinkWriteFailed {
+				generation,
+				error,
+				connection_error,
+			}) => {
+				if self.sink_writer.is_current(generation) {
+					log::warn!("Failed to set default sink properties: {error}");
+					if connection_error {
+						return self.handle_connection_lost(format!(
+							"Failed to set sink properties: {error}"
+						));
+					}
+				}
+				Task::none()
+			}
 			Message::HealthCheck => self.run_health_check(),
 			Message::ReconnectFinished(result) => self.finish_reconnect(result),
 			Message::DefaultSinkVolumeChangeRequest(delta) => {
@@ -613,52 +672,27 @@ impl Volume {
 		let Some(node) = self.devices.get(&sink_id) else {
 			return Task::none();
 		};
-		let result = if let Some(device) = node.device_id.and_then(|id| self.device_routes.get(&id))
+		let target = if let Some(device) = node.device_id.and_then(|id| self.device_routes.get(&id))
 		{
-			let route_props = match build_route_props_pod(channels.as_deref(), mute) {
-				Ok(route_props) => route_props,
-				Err(error) => {
-					log::warn!("Failed to build route properties: {error:?}");
-					return Task::none();
-				}
-			};
-			let route = device.route.clone();
-
-			device.proxy.set_param(
-				ParamType::Route,
-				ObjectType::ParamRoute,
-				0,
-				Box::new(move |builder| {
-					builder
-						.push_property(Route::Index, PropertyFlags::empty(), route.index)
-						.push_property(Route::Device, PropertyFlags::empty(), route.device)
-						.push_property(
-							Route::Direction,
-							PropertyFlags::empty(),
-							SpaPodId(route.direction),
-						)
-						.push_property(Route::Props, PropertyFlags::empty(), route_props)
-				}),
-			)
+			writer::Target::Route(device.clone())
 		} else if let Some(proxy) = self.node_proxies.get(&sink_id) {
 			// Virtual sinks have no physical Device/Route, and hardware routes
 			// can temporarily disappear during a profile change. Node Props
 			// remain the control interface corresponding to our volume reads.
-			proxy.set_param(
-				ParamType::Props,
-				ObjectType::Props,
-				0,
-				Box::new(move |builder| volume_props(builder, channels.as_deref(), mute)),
-			)
+			writer::Target::Node(proxy.clone())
 		} else {
 			log::warn!("No control proxy for default sink {sink_id}");
 			return Task::none();
 		};
-		if let Err(e) = result {
-			log::warn!("Failed to set default sink properties: {e}");
-			if is_connection_error(&e) {
-				return self.handle_connection_lost(format!("Failed to set sink properties: {e}"));
-			}
+
+		let Some(connection) = self.connection.clone() else {
+			return Task::none();
+		};
+		if let Err(error) = self
+			.sink_writer
+			.submit(target, channels, mute, Some(connection))
+		{
+			return self.handle_connection_lost(error);
 		}
 
 		Task::none()
@@ -775,6 +809,7 @@ impl Volume {
 	}
 
 	fn clear_runtime_state(&mut self) {
+		self.sink_writer.invalidate();
 		self.devices.clear();
 		self.node_proxies.clear();
 		self.device_routes.clear();
@@ -784,16 +819,17 @@ impl Volume {
 		self.default_source_name = None;
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		let Some(sink) = self
 			.default_sink
 			.as_ref()
 			.and_then(|id| self.devices.get(id))
 		else {
-			return neo_button("loading")
+			return neo_button(super::module_label(text("loading").color(colors.on_accent)))
+				.with_colors(colors)
 				.height(MODULE_HEIGHT)
 				.radius(MODULE_RADIUS)
-				.background(COLORS.decorative.yellow);
+				.background(colors.decorative.yellow);
 		};
 
 		let volume = sink.volume.normalized();
@@ -809,30 +845,34 @@ impl Volume {
 		};
 
 		neo_button(
-			mouse_area(
-				container(
-					row![
-						svg(icon).width(Length::Shrink).height(ICON_HEIGHT),
+			mouse_area(container(
+				row![
+					svg(icon)
+						.width(Length::Shrink)
+						.height(ICON_HEIGHT)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.on_accent),
+						}),
+					super::module_label(
 						text(format!("{:.0}%", volume * 100.0))
 							.font(Font {
 								weight: font::Weight::Bold,
 								..Font::DEFAULT
 							})
-							.color(COLORS.text)
+							.color(colors.on_accent)
 							.size(18)
-							.align_y(Alignment::Center),
-					]
-					.spacing(5)
-					.align_y(Alignment::Center),
-				)
-				.padding(8),
-			)
+							.align_y(Alignment::Center)
+					),
+				]
+				.spacing(5)
+				.align_y(Alignment::Center),
+			))
 			.on_scroll(Self::on_scroll),
 		)
-		.padding(0)
+		.with_colors(colors)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(COLORS.decorative.yellow)
+		.background(colors.decorative.yellow)
 	}
 
 	fn on_scroll(delta: ScrollDelta) -> Message {
@@ -848,11 +888,17 @@ impl Volume {
 		}
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
+		let sink_available = self
+			.default_sink
+			.is_some_and(|id| self.devices.contains_key(&id));
+		let source_available = self
+			.default_source
+			.is_some_and(|id| self.devices.contains_key(&id));
 		let (sink_name, sink_volume) = self
 			.default_sink
 			.and_then(|id| self.devices.get(&id))
-			.map_or(("<unknown>", PwVolume::default()), |d| {
+			.map_or(("Unavailable", PwVolume::default()), |d| {
 				(d.label.as_str(), d.volume.clone())
 			});
 
@@ -861,33 +907,72 @@ impl Volume {
 		} else {
 			phosphor_icon!("speaker-high")
 		};
+		let mut output_slider = neo_slider(0.0..=1.0, sink_volume.normalized())
+			.with_colors(colors)
+			.enabled(sink_available)
+			.step(sink_volume.step());
+		if sink_available {
+			output_slider = output_slider.on_change_live(Message::DefaultSinkVolumeSetRequest);
+		}
 
-		let output = neo_button(column![
-			row![
-				svg(speaker_icon).width(18).height(18),
-				space::horizontal(),
-				text(sink_name).font(Font {
-					weight: font::Weight::Bold,
-					..Default::default()
-				})
-			],
-			row![
-				neo_slider(0.0..=1.0, sink_volume.normalized())
-					.step(sink_volume.step())
-					.on_change_live(Message::DefaultSinkVolumeSetRequest),
-				text(format!("{:.0}%", sink_volume.percentage()))
-					.size(16)
-					.width(16 * 3)
+		let output = neo_card(
+			column![
+				row![
+					text("Output").color(colors.text).font(Font {
+						weight: font::Weight::Bold,
+						..Default::default()
+					}),
+					space::horizontal(),
+					text(if !sink_available {
+						"Unavailable"
+					} else if sink_volume.mute {
+						"Muted"
+					} else {
+						"Active"
+					})
+					.color(colors.secondary)
+					.size(12),
+				],
+				device_dropdown(sink_name, colors),
+				row![
+					neo_button(svg(speaker_icon).width(18).height(18).style(move |_, _| {
+						svg::Style {
+							color: Some(if sink_volume.mute {
+								colors.on_accent
+							} else {
+								colors.text
+							}),
+						}
+					},))
+					.with_colors(colors)
+					.background(if sink_volume.mute {
+						colors.feedback.danger
+					} else {
+						colors.surface
+					})
+					.on_press(Message::DefaultSinkMuteToggleRequest)
+					.enabled(sink_available)
+					.width(36)
+					.height(36),
+					output_slider,
+					text(format!("{:.0}%", sink_volume.percentage()))
+						.color(colors.text)
+						.size(16)
+						.width(16 * 3)
+				]
+				.spacing(12)
+				.align_y(Alignment::Center)
 			]
-			.spacing(12)
-		])
-		.on_press(Message::DefaultSinkMuteToggleRequest)
+			.spacing(12),
+		)
+		.with_colors(colors)
+		.background(colors.body)
 		.width(Length::Fill);
 
 		let (source_name, source_volume) = self
 			.default_source
 			.and_then(|id| self.devices.get(&id))
-			.map_or(("<unknown>", PwVolume::default()), |d| {
+			.map_or(("Unavailable", PwVolume::default()), |d| {
 				(d.label.as_str(), d.volume.clone())
 			});
 
@@ -897,33 +982,84 @@ impl Volume {
 			phosphor_icon!("microphone")
 		};
 
-		let input = neo_card(column![
-			row![
-				svg(mic_icon).width(18).height(18),
-				space::horizontal(),
-				text(source_name).font(Font {
-					weight: font::Weight::Bold,
-					..Default::default()
-				})
-			],
-			row![
-				neo_slider(0.0..=1.0, source_volume.normalized()).step(source_volume.step()),
-				text(format!("{:.0}%", source_volume.percentage()))
+		let input = neo_card(
+			column![
+				row![
+					text("Input").color(colors.text).font(Font {
+						weight: font::Weight::Bold,
+						..Default::default()
+					}),
+					space::horizontal(),
+					text("Read-only").color(colors.secondary).size(12)
+				],
+				device_dropdown(source_name, colors),
+				row![
+					neo_button(svg(mic_icon).width(18).height(18).style(move |_, _| {
+						svg::Style {
+							color: Some(colors.text),
+						}
+					}))
+					.with_colors(colors)
+					.enabled(false)
+					.width(36)
+					.height(36),
+					neo_slider(0.0..=1.0, source_volume.normalized())
+						.with_colors(colors)
+						.step(source_volume.step())
+						.enabled(false),
+					text(if source_available {
+						format!("{:.0}%", source_volume.percentage())
+					} else {
+						"—".to_string()
+					})
+					.color(colors.text)
 					.size(16)
 					.width(16 * 3)
+				]
+				.spacing(12)
+				.align_y(Alignment::Center)
 			]
-			.spacing(12)
-		])
+			.spacing(12),
+		)
+		.with_colors(colors)
+		.background(colors.body)
 		.width(Length::Fill);
 
-		pub const POPUP_SIZE: (u32, u32) = (320, 240);
+		pub const POPUP_SIZE: (u32, u32) = (320, 360);
 
 		neo_card(column![output, input].spacing(12))
+			.with_colors(colors)
 			.width(POPUP_SIZE.0 as f32)
-			.background(COLORS.decorative.yellow)
+			.background(colors.body)
 			.radius(MODULE_RADIUS)
 			.into()
 	}
+}
+
+/// Device switching is deferred; keep its dropdown affordance visible but inert.
+fn device_dropdown(label: &str, colors: Colors) -> Element<'_, Message> {
+	neo_button(
+		row![
+			text(label)
+				.size(14)
+				.color(colors.text)
+				.wrapping(text::Wrapping::None)
+				.ellipsis(text::Ellipsis::End)
+				.width(Length::Fill),
+			svg(phosphor_icon!("caret-down", "bold"))
+				.width(14)
+				.height(14)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.secondary)
+				}),
+		]
+		.spacing(8)
+		.align_y(Alignment::Center),
+	)
+	.with_colors(colors)
+	.enabled(false)
+	.width(Length::Fill)
+	.into()
 }
 
 #[derive(Debug, Default, Clone)]

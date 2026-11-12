@@ -12,7 +12,7 @@ use async_channel::{Receiver, Sender};
 use daemon_common::{DEFAULT_BUS_NAME, SpotifyProxy, SpotifyTrackProxy};
 use futures::{Stream, StreamExt};
 use iced::{
-	Animation, ContentFit, Element, Font, Length, Padding, Subscription, Task,
+	Animation, ContentFit, Element, Font, Length, Subscription, Task,
 	alignment::{Horizontal, Vertical},
 	font,
 	widget::{column, container, image, row, space, svg, text},
@@ -24,7 +24,7 @@ use mprizzle::{
 use neo_widgets::{
 	icons::{ResolvedIcon, background::resolve_icon},
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, neo_button, neo_card, neo_slider, spinner},
 };
 use reqwest::{Client, IntoUrl, redirect};
@@ -51,6 +51,14 @@ pub enum Message {
 	Redraw,
 	FocusPlayer,
 	ToggleSpotifySaved,
+	CycleRepeat,
+	ToggleShuffle,
+	ModeWritten {
+		identity: PlayerIdentity,
+		generation: u64,
+		action: ModeAction,
+		result: Result<ModeAction, String>,
+	},
 	SpotifySavedChanged {
 		track_id: String,
 		generation: u64,
@@ -68,6 +76,17 @@ enum PlayerCommand {
 	PlayPause,
 	SkipPrevious,
 	SkipNext,
+	SetMode {
+		identity: PlayerIdentity,
+		generation: u64,
+		action: ModeAction,
+	},
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ModeAction {
+	Repeat(LoopStatus),
+	Shuffle(bool),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -91,6 +110,9 @@ pub struct MediaControls {
 	saved_track: SavedTrack,
 	cmd_rx: Hashable<Receiver<PlayerCommand>>,
 	cmd_tx: Sender<PlayerCommand>,
+	mode_generation: u64,
+	repeat_pending: bool,
+	shuffle_pending: bool,
 }
 
 impl fmt::Debug for MediaControls {
@@ -112,6 +134,9 @@ impl MediaControls {
 			saved_track: SavedTrack::default(),
 			cmd_rx: Hashable::new(cmd_rx),
 			cmd_tx,
+			mode_generation: 0,
+			repeat_pending: false,
+			shuffle_pending: false,
 		}
 	}
 
@@ -138,6 +163,7 @@ impl MediaControls {
 	pub fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
 			Message::PlayerChanged(identity, snapshot) => {
+				self.reset_modes();
 				let art_url = snapshot.art_url.clone();
 				let url = snapshot.url.clone();
 				let spotify_track_id = spotify_track_id(url.as_deref());
@@ -164,6 +190,7 @@ impl MediaControls {
 			Message::PlayerDetached(identity)
 				if self.active_player.as_ref().is_some_and(|p| p.0 == identity) =>
 			{
+				self.reset_modes();
 				self.active_player = None;
 				let spotify_task = self.set_spotify_track(None);
 				self.active_player_position = 0.0;
@@ -171,6 +198,7 @@ impl MediaControls {
 				return spotify_task;
 			}
 			Message::MprisDisconnected => {
+				self.reset_modes();
 				self.active_player = None;
 				let spotify_task = self.set_spotify_track(None);
 				self.active_player_position = 0.0;
@@ -227,6 +255,68 @@ impl MediaControls {
 			}
 			Message::SkipNext => {
 				let _ = self.cmd_tx.send_blocking(PlayerCommand::SkipNext);
+			}
+			Message::CycleRepeat | Message::ToggleShuffle => {
+				let Some((identity, snapshot)) = &self.active_player else {
+					return Task::none();
+				};
+				if !snapshot.can_control {
+					return Task::none();
+				}
+
+				let action = match message {
+					Message::CycleRepeat if !self.repeat_pending => snapshot
+						.loop_status
+						.map(|status| ModeAction::Repeat(next_repeat(status))),
+					Message::ToggleShuffle if !self.shuffle_pending => snapshot
+						.shuffle
+						.map(|shuffle| ModeAction::Shuffle(!shuffle)),
+					_ => None,
+				};
+				if let Some(action) = action {
+					let command = PlayerCommand::SetMode {
+						identity: identity.clone(),
+						generation: self.mode_generation,
+						action,
+					};
+					if self.cmd_tx.send_blocking(command).is_ok() {
+						match action {
+							ModeAction::Repeat(_) => self.repeat_pending = true,
+							ModeAction::Shuffle(_) => self.shuffle_pending = true,
+						}
+					}
+				}
+			}
+			Message::ModeWritten {
+				identity,
+				generation,
+				action,
+				result,
+			} => {
+				if generation != self.mode_generation
+					|| !self
+						.active_player
+						.as_ref()
+						.is_some_and(|(active, _)| *active == identity)
+				{
+					return Task::none();
+				}
+
+				match action {
+					ModeAction::Repeat(_) => self.repeat_pending = false,
+					ModeAction::Shuffle(_) => self.shuffle_pending = false,
+				}
+				match result {
+					Ok(confirmed) => {
+						if let Some((_, snapshot)) = &mut self.active_player {
+							match confirmed {
+								ModeAction::Repeat(status) => snapshot.loop_status = Some(status),
+								ModeAction::Shuffle(shuffle) => snapshot.shuffle = Some(shuffle),
+							}
+						}
+					}
+					Err(error) => log::warn!("Failed to change MPRIS mode: {error}"),
+				}
 			}
 			Message::FocusPlayer => {
 				let Some((player_id, player)) = self.active_player.as_ref() else {
@@ -296,9 +386,22 @@ impl MediaControls {
 		Task::none()
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	fn reset_modes(&mut self) {
+		self.mode_generation = self.mode_generation.wrapping_add(1);
+		self.repeat_pending = false;
+		self.shuffle_pending = false;
+	}
+
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
+		let background = self.is_playing.interpolate(
+			colors.decorative.pink70,
+			colors.decorative.pink,
+			Instant::now(),
+		);
+		let foreground = colors.text_on(background);
+
 		// let icon = phosphor_icon!("spotify-logo");
-		const ICON_SIZE: u32 = 32;
+		const ICON_SIZE: u32 = super::ICON_HEIGHT as u32;
 		let icon: Element<'_, ()> = if let Some(active_player) = &self.active_player {
 			match resolve_icon(&active_player.1.desktop_entry, 32, 2) {
 				ResolvedIcon::Svg(img) => svg(img).width(ICON_SIZE).height(ICON_SIZE).into(),
@@ -309,6 +412,9 @@ impl MediaControls {
 			}
 		} else {
 			svg(phosphor_icon!("play-pause"))
+				.style(move |_, _| svg::Style {
+					color: Some(foreground),
+				})
 				.width(Length::Shrink)
 				.height(ICON_SIZE)
 				.into()
@@ -318,50 +424,49 @@ impl MediaControls {
 			container(
 				row![
 					icon.map(|()| Message::Noop),
-					text(
-						self.active_player
-							.as_ref()
-							.map_or("<nothing>", |p| p.1.title.as_str())
-							.to_string()
+					super::module_label(
+						text(
+							self.active_player
+								.as_ref()
+								.map_or("<nothing>", |p| p.1.title.as_str())
+								.to_string()
+						)
+						.font(Font {
+							weight: font::Weight::Bold,
+							..Font::DEFAULT
+						})
+						.color(foreground)
+						.size(18)
+						.align_y(Vertical::Center)
+						.ellipsis(text::Ellipsis::End)
+						.wrapping(text::Wrapping::None)
 					)
-					.font(Font {
-						weight: font::Weight::Bold,
-						..Font::DEFAULT
-					})
-					.color(COLORS.text)
-					.size(18)
-					.align_y(Vertical::Center)
-					.ellipsis(text::Ellipsis::End)
-					.wrapping(text::Wrapping::None)
 				]
 				.spacing(5.)
 				.align_y(Vertical::Center),
 			)
 			.width(Length::Shrink.max(300)),
 		)
-		.padding(Padding {
-			left: 8.0,
-			right: 12.0,
-			top: 2.0,
-			bottom: 2.0,
-		})
+		.with_colors(colors)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(self.is_playing.interpolate(
-			COLORS.decorative.pink70,
-			COLORS.decorative.pink,
-			Instant::now(),
-		))
+		.background(background)
 	}
 
 	#[allow(clippy::too_many_lines)]
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
+		let icon_style = move |_: &iced::Theme, _| svg::Style {
+			color: Some(colors.text),
+		};
+
 		let mut actions = column![
-			neo_button(svg(phosphor_icon!("arrows-down-up")))
+			neo_button(svg(phosphor_icon!("arrows-down-up")).style(icon_style))
+				.with_colors(colors)
 				.width(40)
 				.height(40)
 				.on_press(Message::CyclePlayer),
-			neo_button(svg(phosphor_icon!("arrow-square-in")))
+			neo_button(svg(phosphor_icon!("arrow-square-in")).style(icon_style))
+				.with_colors(colors)
 				.width(40)
 				.height(40)
 				.on_press(Message::FocusPlayer)
@@ -371,22 +476,34 @@ impl MediaControls {
 		.spacing(8);
 
 		if self.saved_track.observation().is_some() {
+			let saved = self.saved_track.saved() == Some(true);
+			let background = if saved {
+				colors.decorative.pink
+			} else {
+				colors.surface
+			};
 			let icon = if self.saved_track.saved() == Some(true) {
 				phosphor_icon!("heart", "fill")
 			} else {
 				phosphor_icon!("heart")
 			};
 			actions = actions.push(
-				neo_button(svg(icon))
-					.width(40)
-					.height(40)
-					.enabled(self.saved_track.saved().is_some() && !self.saved_track.pending())
-					.on_press(Message::ToggleSpotifySaved),
+				neo_button(svg(icon).style(move |_, _| svg::Style {
+					color: Some(colors.text_on(background)),
+				}))
+				.with_colors(colors)
+				.background(background)
+				.width(40)
+				.height(40)
+				.enabled(self.saved_track.saved().is_some() && !self.saved_track.pending())
+				.on_press(Message::ToggleSpotifySaved),
 			);
+		} else {
+			actions = actions.push(space().width(40).height(40));
 		}
 
-		let art_row =
-			row![space::horizontal(), self.get_thumbnail(), actions].align_y(Vertical::Center);
+		let art_row = row![space::horizontal(), self.get_thumbnail(colors), actions]
+			.align_y(Vertical::Center);
 
 		let title = if let Some(title) = self.active_player.as_ref().map(|p| p.1.title.clone()) {
 			text(title)
@@ -399,7 +516,7 @@ impl MediaControls {
 				..Default::default()
 			})
 			.size(24)
-			.color(COLORS.text)
+			.color(colors.text)
 			.wrapping(text::Wrapping::WordOrGlyph)
 			.width(Length::Shrink);
 
@@ -414,7 +531,7 @@ impl MediaControls {
 						..Default::default()
 					})
 					.size(16)
-					.color(COLORS.text.scale_alpha(0.7))
+					.color(colors.secondary)
 					.wrapping(text::Wrapping::WordOrGlyph)
 					.width(Length::Shrink),
 			);
@@ -426,6 +543,7 @@ impl MediaControls {
 		{
 			content = content.push(
 				neo_slider(0.0..=snap.length.as_secs_f32(), self.active_player_position)
+					.with_colors(colors)
 					.step(0.01_f32)
 					.on_change(|_| Message::Noop),
 			);
@@ -436,14 +554,14 @@ impl MediaControls {
 				self.active_player_position as u32 / 60,
 				self.active_player_position as u32 % 60
 			))
-			.color(COLORS.text)
+			.color(colors.text)
 			.size(12);
 			let length_text = text(format!(
 				"{:0>2}:{:0>2}",
 				snap.length.as_secs() / 60,
 				(snap.length.as_millis() * 1000) % 60
 			))
-			.color(COLORS.text)
+			.color(colors.text)
 			.size(12);
 
 			content = content.push(row![position_text, space::horizontal(), length_text]);
@@ -455,11 +573,41 @@ impl MediaControls {
 		if let Some((_id, snap)) = &self.active_player
 			&& snap.can_control
 		{
-			let repeat = neo_button(svg(phosphor_icon!("repeat")))
-				.height(48)
-				.width(48)
-				.enabled(snap.loop_status.is_some());
-			let skip_prev = neo_button(svg(phosphor_icon!("skip-back")))
+			let repeat_background = if matches!(
+				snap.loop_status,
+				Some(LoopStatus::Playlist | LoopStatus::Track)
+			) {
+				colors.decorative.purple
+			} else {
+				colors.surface
+			};
+			let repeat_icon = if snap.loop_status == Some(LoopStatus::Track) {
+				phosphor_icon!("repeat-once")
+			} else {
+				phosphor_icon!("repeat")
+			};
+			let repeat = neo_button(svg(repeat_icon).style(move |_, _| svg::Style {
+				color: Some(colors.text_on(repeat_background)),
+			}))
+			.with_colors(colors)
+			.background(repeat_background)
+			.height(48)
+			.width(48)
+			.enabled(snap.loop_status.is_some() && !self.repeat_pending)
+			.on_press(Message::CycleRepeat);
+			let repeat_label = match snap.loop_status {
+				Some(LoopStatus::None) => "Repeat off",
+				Some(LoopStatus::Playlist) => "Repeat all",
+				Some(LoopStatus::Track) => "Repeat one",
+				None => "Repeat unavailable",
+			};
+			let repeat = iced::widget::tooltip(
+				repeat,
+				text(repeat_label).color(colors.text),
+				iced::widget::tooltip::Position::Top,
+			);
+			let skip_prev = neo_button(svg(phosphor_icon!("skip-back")).style(icon_style))
+				.with_colors(colors)
 				.height(48)
 				.width(48)
 				.enabled(snap.can_previous)
@@ -471,20 +619,35 @@ impl MediaControls {
 			};
 			let pp_enabled =
 				(snap.is_playing && snap.can_pause) || (!snap.is_playing && snap.can_play);
-			let play_pause = neo_button(svg(pp_icon))
+			let play_pause = neo_button(svg(pp_icon).style(icon_style))
+				.with_colors(colors)
 				.height(48)
 				.width(48)
 				.enabled(pp_enabled)
 				.on_press(Message::PlayPause);
-			let skip_next = neo_button(svg(phosphor_icon!("skip-forward")))
+			let skip_next = neo_button(svg(phosphor_icon!("skip-forward")).style(icon_style))
+				.with_colors(colors)
 				.height(48)
 				.width(48)
 				.enabled(snap.can_skip)
 				.on_press(Message::SkipNext);
-			let shuffle = neo_button(svg(phosphor_icon!("shuffle")))
+			let shuffle_background = if snap.shuffle == Some(true) {
+				colors.decorative.green
+			} else {
+				colors.surface
+			};
+			let shuffle =
+				neo_button(
+					svg(phosphor_icon!("shuffle")).style(move |_, _| svg::Style {
+						color: Some(colors.text_on(shuffle_background)),
+					}),
+				)
+				.with_colors(colors)
+				.background(shuffle_background)
 				.height(48)
 				.width(48)
-				.enabled(snap.shuffle.is_some());
+				.enabled(snap.shuffle.is_some() && !self.shuffle_pending)
+				.on_press(Message::ToggleShuffle);
 
 			content = content.push(
 				row![
@@ -501,17 +664,14 @@ impl MediaControls {
 		}
 
 		neo_card(content)
+			.with_colors(colors)
 			.width(400)
-			.background(self.is_playing.interpolate(
-				COLORS.decorative.pink70,
-				COLORS.decorative.pink,
-				Instant::now(),
-			))
+			.background(colors.body)
 			.radius(MODULE_RADIUS)
 			.into()
 	}
 
-	fn get_thumbnail(&self) -> Element<'_, Message> {
+	fn get_thumbnail(&self, colors: Colors) -> Element<'_, Message> {
 		let content: Element<Message> = if let Some((_, snap)) = &self.active_player {
 			let ck = ThumbnailCacheKey::from((snap.art_url.clone(), snap.url.clone()));
 			if let Some(tn) = self.thumbnail_cache.borrow_mut().get(&ck) {
@@ -526,7 +686,7 @@ impl MediaControls {
 					space().into()
 				}
 			} else {
-				container(spinner().bar_color(COLORS.black).size(40.0))
+				container(spinner().bar_color(colors.text).size(40.0))
 					.align_x(Horizontal::Center)
 					.align_y(Vertical::Center)
 					.width(Length::Fill)
@@ -535,7 +695,7 @@ impl MediaControls {
 			}
 		} else {
 			text("No active player")
-				.color(COLORS.text)
+				.color(colors.text)
 				.font(Font {
 					weight: font::Weight::Bold,
 					..Default::default()
@@ -543,7 +703,20 @@ impl MediaControls {
 				.into()
 		};
 
-		neo_card(content).width(150).height(150).padding(2).into()
+		neo_card(content)
+			.with_colors(colors)
+			.width(150)
+			.height(150)
+			.padding(2)
+			.into()
+	}
+}
+
+fn next_repeat(status: LoopStatus) -> LoopStatus {
+	match status {
+		LoopStatus::None => LoopStatus::Playlist,
+		LoopStatus::Playlist => LoopStatus::Track,
+		LoopStatus::Track => LoopStatus::None,
 	}
 }
 
@@ -626,6 +799,54 @@ async fn handle_player_command(
 	};
 
 	match command {
+		PlayerCommand::SetMode {
+			identity,
+			generation,
+			action,
+		} => {
+			let write = async {
+				if current_player.as_ref() != Some(&identity) {
+					return Err("Player selection changed".to_string());
+				}
+				let player = players
+					.get_mut(&identity)
+					.ok_or_else(|| "Player disappeared".to_string())?;
+				match action {
+					ModeAction::Repeat(status) => {
+						player
+							.set_loop_status(status)
+							.await
+							.map_err(|error| error.to_string())?;
+						player
+							.loop_status()
+							.await
+							.map(ModeAction::Repeat)
+							.map_err(|error| error.to_string())
+					}
+					ModeAction::Shuffle(shuffle) => {
+						player
+							.set_shuffle(shuffle)
+							.await
+							.map_err(|error| error.to_string())?;
+						player
+							.shuffle()
+							.await
+							.map(ModeAction::Shuffle)
+							.map_err(|error| error.to_string())
+					}
+				}
+			};
+			let result = tokio::time::timeout(Duration::from_secs(5), write)
+				.await
+				.unwrap_or_else(|_| Err("MPRIS mode write timed out".to_string()));
+
+			Some(Message::ModeWritten {
+				identity,
+				generation,
+				action,
+				result,
+			})
+		}
 		PlayerCommand::CyclePlayer => {
 			log::trace!("Cycling {} players", players.len());
 			if players.is_empty() {
@@ -676,6 +897,7 @@ async fn handle_player_command(
 				PlayerCommand::SkipNext => player.next().await,
 				// TODO: Maybe turn these into PlayerActions or sth?
 				PlayerCommand::CyclePlayer => unreachable!(),
+				PlayerCommand::SetMode { .. } => unreachable!(),
 			};
 
 			if let Err(e) = res {
@@ -1066,7 +1288,245 @@ fn spotify_saved_message(
 
 #[cfg(test)]
 mod tests {
+	use super::{
+		LoopStatus, ModeAction, PlayerCommand, PlayerIdentity, PlayerSnapshot, next_repeat,
+	};
 	use super::{MediaControls, Message, SpotifySavedSource};
+
+	#[tokio::test]
+	#[ignore = "requires a headless graphics renderer"]
+	async fn media_action_positions_survive_heart_visibility()
+	-> Result<(), super::super::layout_tests::Error> {
+		use super::super::layout_tests;
+
+		let mut renderer = layout_tests::renderer().await?;
+		for (theme, colors) in [
+			("light", neo_widgets::style::LIGHT),
+			("dark", neo_widgets::style::DARK),
+		] {
+			let mut controls = MediaControls::new();
+			let absent = layout_tests::capture(
+				controls.view_popup(colors),
+				&mut renderer,
+				colors,
+				&format!("media-no-heart-{theme}"),
+			)?;
+			controls.saved_track.set_track(Some("test-track".into()));
+			let present = layout_tests::capture(
+				controls.view_popup(colors),
+				&mut renderer,
+				colors,
+				&format!("media-heart-{theme}"),
+			)?;
+
+			let slots = |snapshot: &layout_tests::Snapshot| {
+				snapshot
+					.nodes
+					.iter()
+					.copied()
+					.filter(|bounds| bounds.width == 40.0 && bounds.height == 40.0)
+					.collect::<Vec<_>>()
+			};
+			assert_eq!(
+				slots(&absent),
+				slots(&present),
+				"action slots must stay fixed when the heart appears"
+			);
+		}
+		Ok(())
+	}
+
+	#[test]
+	fn repeat_cycles_off_playlist_track_off() {
+		let playlist = next_repeat(LoopStatus::None);
+		let track = next_repeat(playlist);
+
+		assert_eq!(playlist, LoopStatus::Playlist);
+		assert_eq!(track, LoopStatus::Track);
+		assert_eq!(next_repeat(track), LoopStatus::None);
+	}
+
+	#[derive(Default)]
+	struct ModePlayer {
+		repeat: String,
+		shuffle: bool,
+		reject: bool,
+	}
+
+	#[zbus::interface(name = "org.mpris.MediaPlayer2.Player")]
+	impl ModePlayer {
+		#[zbus(property)]
+		fn can_control(&self) -> bool {
+			true
+		}
+
+		#[zbus(property)]
+		fn loop_status(&self) -> &str {
+			&self.repeat
+		}
+
+		#[zbus(property)]
+		fn set_loop_status(&mut self, status: String) -> zbus::fdo::Result<()> {
+			if self.reject {
+				return Err(zbus::fdo::Error::NotSupported("read-only repeat".into()));
+			}
+			self.repeat = status;
+			Ok(())
+		}
+
+		#[zbus(property)]
+		fn shuffle(&self) -> bool {
+			self.shuffle
+		}
+
+		#[zbus(property)]
+		fn set_shuffle(&mut self, shuffle: bool) -> zbus::fdo::Result<()> {
+			if self.reject {
+				return Err(zbus::fdo::Error::NotSupported("read-only shuffle".into()));
+			}
+			self.shuffle = shuffle;
+			Ok(())
+		}
+	}
+
+	#[tokio::test]
+	#[ignore = "run explicitly under dbus-run-session with no real players"]
+	async fn mode_commands_write_and_read_back_over_private_mpris()
+	-> Result<(), Box<dyn std::error::Error>> {
+		let bus = "org.mpris.MediaPlayer2.subniri_mode_test";
+		let server = zbus::connection::Builder::session()?
+			.name(bus)?
+			.serve_at(
+				"/org/mpris/MediaPlayer2",
+				ModePlayer {
+					repeat: "None".into(),
+					..Default::default()
+				},
+			)?
+			.build()
+			.await?;
+		let connection = zbus::Connection::session().await?;
+		let identity = PlayerIdentity::new(bus.into())?;
+		let player = super::MprisPlayer::new(&connection, identity.clone()).await?;
+		let mut players = std::collections::HashMap::from([(identity.clone(), player)]);
+		let mut current = Some(identity.clone());
+
+		for action in [
+			ModeAction::Repeat(LoopStatus::Playlist),
+			ModeAction::Repeat(LoopStatus::Track),
+			ModeAction::Repeat(LoopStatus::None),
+			ModeAction::Shuffle(true),
+			ModeAction::Shuffle(false),
+		] {
+			let command = PlayerCommand::SetMode {
+				identity: identity.clone(),
+				generation: 1,
+				action,
+			};
+			let reply = super::handle_player_command(Ok(command), &mut players, &mut current).await;
+			let Some(Message::ModeWritten {
+				result: Ok(confirmed),
+				..
+			}) = reply
+			else {
+				panic!("expected confirmed mode, got {reply:?}");
+			};
+			assert_eq!(format!("{confirmed:?}"), format!("{action:?}"));
+		}
+
+		server
+			.object_server()
+			.interface::<_, ModePlayer>("/org/mpris/MediaPlayer2")
+			.await?
+			.get_mut()
+			.await
+			.reject = true;
+		let command = PlayerCommand::SetMode {
+			identity,
+			generation: 1,
+			action: ModeAction::Shuffle(true),
+		};
+		let reply = super::handle_player_command(Ok(command), &mut players, &mut current).await;
+		assert!(matches!(
+			reply,
+			Some(Message::ModeWritten { result: Err(_), .. })
+		));
+		server.close().await?;
+
+		Ok(())
+	}
+
+	#[test]
+	fn modes_require_control_and_readable_state_and_serialize_each_action() {
+		let mut controls = MediaControls::new();
+		let identity =
+			PlayerIdentity::new("org.mpris.MediaPlayer2.test".into()).expect("valid identity");
+		controls.active_player = Some((identity.clone(), PlayerSnapshot::default()));
+
+		let _ = controls.update(Message::CycleRepeat);
+		let _ = controls.update(Message::ToggleShuffle);
+		assert!(controls.cmd_rx.try_recv().is_err());
+
+		let snapshot = &mut controls.active_player.as_mut().expect("player").1;
+		snapshot.can_control = true;
+		snapshot.loop_status = Some(LoopStatus::None);
+		snapshot.shuffle = Some(false);
+		let _ = controls.update(Message::CycleRepeat);
+		let _ = controls.update(Message::CycleRepeat);
+		assert!(controls.repeat_pending);
+		assert!(matches!(
+			controls.cmd_rx.try_recv(),
+			Ok(PlayerCommand::SetMode {
+				action: ModeAction::Repeat(LoopStatus::Playlist),
+				..
+			})
+		));
+		assert!(
+			controls.cmd_rx.try_recv().is_err(),
+			"duplicate pending action must not write"
+		);
+
+		let _ = controls.update(Message::ToggleShuffle);
+		assert!(controls.shuffle_pending);
+		assert!(matches!(
+			controls.cmd_rx.try_recv(),
+			Ok(PlayerCommand::SetMode {
+				action: ModeAction::Shuffle(true),
+				..
+			})
+		));
+
+		let generation = controls.mode_generation;
+		let _ = controls.update(Message::ModeWritten {
+			identity: identity.clone(),
+			generation,
+			action: ModeAction::Repeat(LoopStatus::Playlist),
+			result: Err("rejected".into()),
+		});
+		assert!(!controls.repeat_pending);
+		assert_eq!(
+			controls
+				.active_player
+				.as_ref()
+				.expect("player")
+				.1
+				.loop_status,
+			Some(LoopStatus::None)
+		);
+
+		controls.reset_modes();
+		let _ = controls.update(Message::ModeWritten {
+			identity,
+			generation,
+			action: ModeAction::Shuffle(true),
+			result: Ok(ModeAction::Shuffle(true)),
+		});
+		assert_eq!(
+			controls.active_player.as_ref().expect("player").1.shuffle,
+			Some(false),
+			"late reply cannot update a new player generation"
+		);
+	}
 
 	#[test]
 	fn saved_track_reconciliation_rejects_stale_and_mismatched_results()

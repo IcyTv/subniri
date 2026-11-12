@@ -7,7 +7,7 @@ use neo_widgets::phosphor_icon;
 use neo_widgets::widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_card};
 use neo_widgets::{
 	icons::{ResolvedIcon, background::try_resolve_icon_name},
-	style::COLORS,
+	style::Colors,
 	widgets::neo_button,
 };
 use zbus::{names::OwnedBusName, zvariant::OwnedObjectPath};
@@ -57,12 +57,12 @@ mod lookup_tests {
 				.update(Message::Registered(name.into(), item(name)));
 		}
 		let first = Instant::now();
-		black_box(clock.view_popup());
+		black_box(clock.view_popup(neo_widgets::style::LIGHT));
 		eprintln!("TRAY_VIEW first_us={}", first.elapsed().as_micros());
 		let mut samples = Vec::new();
 		for _ in 0..100 {
 			let start = Instant::now();
-			black_box(clock.view_popup());
+			black_box(clock.view_popup(neo_widgets::style::LIGHT));
 			samples.push(start.elapsed().as_micros());
 		}
 		samples.sort_unstable();
@@ -368,7 +368,7 @@ impl Tray {
 		self.command_tx.try_send(command)
 	}
 
-	pub fn view(&self) -> Element<'_, Message> {
+	pub fn view(&self, colors: Colors) -> Element<'_, Message> {
 		row(self.items.iter().map(|(service, item)| {
 			let size = Length::Fixed(ICON_SIZE as f32);
 			let icon: Element<'_, Message> = match item.icon.resolve(ICON_SIZE as u32) {
@@ -378,20 +378,21 @@ impl Tray {
 			let pressed_service = service.clone();
 			let context_service = service.clone();
 			neo_button(icon)
+				.with_colors(colors)
 				.on_press_started_with_bounds(move |bounds| {
 					Message::Pressed(pressed_service.clone(), bounds)
 				})
 				.on_context_menu_with_bounds(move |bounds| {
 					Message::ContextPressed(context_service.clone(), bounds)
 				})
-				.background(COLORS.decorative.pink)
+				.background(colors.decorative.pink)
 				.into()
 		}))
 		.spacing(4)
 		.into()
 	}
 
-	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {
+	pub fn view_context_menu(&self, depth: usize, colors: Colors) -> Element<'_, Message> {
 		let content = self
 			.open_dbusmenu
 			.as_ref()
@@ -407,39 +408,40 @@ impl Tray {
 			})
 			.map_or_else(
 				|| {
-					container(text("Loading menu...").color(COLORS.text))
+					container(text("Loading menu...").color(colors.text))
 						.padding(12)
 						.into()
 				},
-				|layout| menu(layout, depth),
+				|layout| menu(layout, depth, colors),
 			);
 
 		neo_card(scrollable(content).height(Length::Fill))
+			.with_colors(colors)
 			.padding(5)
 			.radius(8.0)
-			.background(COLORS.white)
+			.background(colors.surface)
 			.width(Length::Fixed(286.0))
 			.into()
 	}
 }
 
-fn menu(layout: &dbusmenu::Layout, depth: usize) -> Element<'_, Message> {
+fn menu(layout: &dbusmenu::Layout, depth: usize, colors: Colors) -> Element<'_, Message> {
 	// Root is not a visible menu entry.
 	column(
 		layout
 			.children
 			.iter()
 			.filter(|child| child.properties.visible)
-			.map(|child| menu_item(child, depth)),
+			.map(|child| menu_item(child, depth, colors)),
 	)
 	.spacing(2)
 	.into()
 }
 
-fn menu_item(layout: &dbusmenu::Layout, depth: usize) -> Element<'_, Message> {
+fn menu_item(layout: &dbusmenu::Layout, depth: usize, colors: Colors) -> Element<'_, Message> {
 	if layout.properties.ty == LayoutItemType::Separator {
-		return container(rule::horizontal(1).style(|_| rule::Style {
-			color: COLORS.separator,
+		return container(rule::horizontal(1).style(move |_| rule::Style {
+			color: colors.separator,
 			radius: 0.0.into(),
 			fill_mode: rule::FillMode::Full,
 			snap: true,
@@ -452,11 +454,11 @@ fn menu_item(layout: &dbusmenu::Layout, depth: usize) -> Element<'_, Message> {
 	let has_submenu =
 		properties.children_display == ChildrenDisplay::Submenu || !layout.children.is_empty();
 	let color = if properties.enabled {
-		COLORS.text
+		colors.text
 	} else {
 		Color {
 			a: 0.42,
-			..COLORS.text
+			..colors.text
 		}
 	};
 	let shortcut = format_shortcut(&properties.shortcut);
@@ -467,18 +469,21 @@ fn menu_item(layout: &dbusmenu::Layout, depth: usize) -> Element<'_, Message> {
 		text(shortcut).size(13).color(Color { a: 0.65, ..color }),
 		if has_submenu {
 			svg(phosphor_icon!("caret-right", "bold"))
+				.style(move |_, _| svg::Style { color: Some(color) })
 				.width(14)
 				.height(14)
 		} else {
 			svg(phosphor_icon!("caret-right", "bold"))
+				.style(move |_, _| svg::Style { color: Some(color) })
 				.width(0)
 				.height(14)
 		},
 	]
 	.spacing(7)
 	.align_y(Alignment::Center);
-	let style = menu_button_style();
+	let style = menu_button_style(colors);
 	let button = neo_button(content)
+		.with_colors(colors)
 		.style(style)
 		.width(Length::Fill)
 		.height(36)
@@ -497,13 +502,13 @@ fn menu_item(layout: &dbusmenu::Layout, depth: usize) -> Element<'_, Message> {
 	}
 }
 
-fn menu_button_style() -> NeoButtonStyle {
+fn menu_button_style(colors: Colors) -> NeoButtonStyle {
 	let surface = NeoSurfaceStyle {
-		background: COLORS.white,
+		background: colors.surface,
 		border_width: 0.0,
 		shadow_width: 0.0,
 		radius: 4.0,
-		..Default::default()
+		..NeoSurfaceStyle::with_colors(colors)
 	};
 	NeoButtonStyle {
 		surface: NeoContentSurfaceStyle {
@@ -511,17 +516,17 @@ fn menu_button_style() -> NeoButtonStyle {
 			padding: Padding::from([6, 8]),
 		},
 		hovered: NeoSurfaceStyle {
-			background: COLORS.decorative.pink90,
+			background: colors.decorative.pink90,
 			..surface
 		},
 		focused: NeoContentSurfaceStyle {
 			surface: NeoSurfaceStyle {
-				background: COLORS.decorative.pink90,
+				background: colors.decorative.pink90,
 				..surface
 			},
 			padding: Padding::from([6, 8]),
 		},
-		disabled_background: COLORS.white,
+		disabled_background: colors.surface,
 	}
 }
 

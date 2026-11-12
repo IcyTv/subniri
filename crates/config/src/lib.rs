@@ -1,8 +1,9 @@
 #![allow(clippy::missing_errors_doc)]
 
 use std::collections::{HashMap, HashSet};
-use std::io;
+use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ const CONFIG_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_OVERRIDE_ENV: &str = "SUBNIRI_CONFIG_OVERRIDE_FILE";
 
 static PROCESS_WRITES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// This is the main configuration file for the subniri desktop shell.
 /// If you want to, you can edit settings from here, and they'll be automatically syncronized to
@@ -32,6 +34,10 @@ static PROCESS_WRITES: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new
 #[derive(Default, Debug, Clone, PartialEq, ConfigFile, ConfigFileSerialize, Validate)]
 #[garde(allow_unvalidated)]
 pub struct ConfigFile {
+	/// Shared appearance selection for all Subniri interfaces.
+	#[config(default)]
+	#[garde(dive)]
+	pub appearance: Appearance,
 	/// Configuration for controlling the behavior of the nightlight.
 	/// Temperature controls the color temperature (like with a light bulb) in [K]elvin. Lower means
 	/// more red.
@@ -158,6 +164,36 @@ impl ConfigFile {
 		Self::load_from_file(Self::path()?)
 	}
 
+	/// Apply a change to freshly loaded settings while serializing cooperating writers.
+	pub fn update(change: impl FnOnce(&mut Self)) -> Result<(KdlDocument, Self), ConfigError> {
+		let _lock = Self::lock_write_target()?;
+		let (mut doc, mut config) = Self::load()?;
+		change(&mut config);
+		config.write(&mut doc)?;
+
+		Ok((doc, config))
+	}
+
+	fn lock_write_target() -> Result<std::fs::File, ConfigError> {
+		let target = Self::override_path().map_or_else(Self::path, Ok)?;
+		let target = absolute_path(target)?;
+		if let Some(parent) = target.parent() {
+			std::fs::create_dir_all(parent)?;
+		}
+		let mut lock_path = target.into_os_string();
+		lock_path.push(".lock");
+		let lock = std::fs::OpenOptions::new()
+			.create(true)
+			.truncate(false)
+			.read(true)
+			.write(true)
+			.open(PathBuf::from(lock_path))?;
+		lock.lock()?;
+
+		// Keep the lock file in place: unlinking it would let writers lock different inodes.
+		Ok(lock)
+	}
+
 	pub fn watch() -> Result<impl Stream<Item = Result<(), ConfigError>>, ConfigError> {
 		let mut paths = vec![Self::path()?];
 		if let Some(override_path) = Self::override_path() {
@@ -194,7 +230,7 @@ impl ConfigFile {
 					std::fs::create_dir_all(parent)?;
 				}
 
-				std::fs::write(file, doc.to_string())?;
+				atomic_write(file, doc.to_string().as_bytes())?;
 
 				Ok((doc, config))
 			}
@@ -221,6 +257,8 @@ impl ConfigFile {
 	}
 
 	pub fn clear_override() -> Result<(KdlDocument, Self), ConfigError> {
+		let _lock = Self::lock_write_target()?;
+		let declarative = Self::load_declarative()?;
 		if let Some(path) = Self::override_path()
 			&& path.exists()
 		{
@@ -228,13 +266,21 @@ impl ConfigFile {
 			record_process_write(&path, String::new())?;
 		}
 
-		Self::load_declarative()
+		Ok(declarative)
 	}
 
 	#[must_use]
 	#[allow(clippy::too_many_lines)]
 	pub fn nix_diff(&self, declarative: &Self) -> String {
 		let mut out = String::new();
+
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.appearance.theme",
+			self.appearance.theme,
+			declarative.appearance.theme,
+			|mode| format!("\"{}\"", mode.as_str()),
+		);
 
 		nix_assignment(
 			&mut out,
@@ -440,17 +486,94 @@ impl ConfigFile {
 
 		self.apply_to_kdl_document(doc)?;
 
-		// TODO: Should we want/need to check for existing edits?
-
 		// TODO: Should we format?
 		doc.autoformat();
 
 		let contents = doc.to_string();
-		std::fs::write(file, &contents)?;
+		atomic_write(file, contents.as_bytes())?;
 		record_process_write(file, contents)?;
 
 		Ok(())
 	}
+}
+
+fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
+	let target = resolve_write_target(path)?;
+	let permissions = match std::fs::metadata(&target) {
+		Ok(metadata) => {
+			// Rename alone only checks the directory permissions. Check the actual target too,
+			// so atomic replacement cannot bypass a declarative file's read-only permissions.
+			std::fs::OpenOptions::new().write(true).open(&target)?;
+			Some(metadata.permissions())
+		}
+		Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+		Err(error) => return Err(error),
+	};
+	let parent = target
+		.parent()
+		.ok_or_else(|| io::Error::other("config path has no parent"))?;
+	std::fs::create_dir_all(parent)?;
+	let name = target
+		.file_name()
+		.ok_or_else(|| io::Error::other("config path has no filename"))?;
+	let (temp_path, mut temp) = loop {
+		let mut temp_name = name.to_os_string();
+		temp_name.push(format!(
+			".{}.{}.tmp",
+			std::process::id(),
+			TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+		));
+		let temp_path = parent.join(temp_name);
+		match std::fs::OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&temp_path)
+		{
+			Ok(temp) => break (temp_path, temp),
+			Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+			Err(error) => return Err(error),
+		}
+	};
+
+	let result = (|| {
+		temp.write_all(contents)?;
+		temp.flush()?;
+		if let Some(permissions) = permissions {
+			temp.set_permissions(permissions)?;
+		}
+		temp.sync_all()?;
+		std::fs::rename(&temp_path, &target)
+	})();
+	if result.is_err() {
+		// create_new succeeded, so this is exclusively our temporary file.
+		let _ = std::fs::remove_file(&temp_path);
+	}
+
+	result
+}
+
+fn resolve_write_target(path: &Path) -> io::Result<PathBuf> {
+	let mut target = absolute_path(path)?;
+	for _ in 0..40 {
+		match std::fs::symlink_metadata(&target) {
+			Ok(metadata) if metadata.file_type().is_symlink() => {
+				let link = std::fs::read_link(&target)?;
+				target = if link.is_absolute() {
+					link
+				} else {
+					target
+						.parent()
+						.ok_or_else(|| io::Error::other("symlink has no parent"))?
+						.join(link)
+				};
+			}
+			Ok(_) => return Ok(target),
+			Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(target),
+			Err(error) => return Err(error),
+		}
+	}
+
+	Err(io::Error::other("too many config symlinks"))
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -504,6 +627,7 @@ fn system_menu_widget_name<'a>(widget: &'a SystemMenuWidgets) -> &'a str {
 		SystemMenuWidgets::Microphone => "microphone",
 		SystemMenuWidgets::Vpn => "vpn",
 		SystemMenuWidgets::Nightlight => "nightlight",
+		SystemMenuWidgets::DarkMode => "dark-mode",
 		SystemMenuWidgets::Homeassistant(entity_id) => entity_id,
 	}
 }
@@ -825,6 +949,37 @@ impl Default for Spotify {
 	}
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Config, ConfigSerialize, Validate)]
+pub struct Appearance {
+	#[config(default)]
+	#[garde(skip)]
+	pub theme: AppearanceMode,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Config)]
+pub enum AppearanceMode {
+	#[default]
+	Light,
+	Dark,
+}
+
+impl AppearanceMode {
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Light => "light",
+			Self::Dark => "dark",
+		}
+	}
+
+	pub fn from_name(name: &str) -> Option<Self> {
+		match name {
+			"light" => Some(Self::Light),
+			"dark" => Some(Self::Dark),
+			_ => None,
+		}
+	}
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Config, strum::EnumDiscriminants)]
 #[strum_discriminants(derive(strum::VariantArray))]
 pub enum SystemMenuWidgets {
@@ -834,6 +989,7 @@ pub enum SystemMenuWidgets {
 	Microphone,
 	Vpn,
 	Nightlight,
+	DarkMode,
 	#[config(other)]
 	Homeassistant(String),
 }
@@ -846,6 +1002,7 @@ impl SystemMenuWidgets {
 		Self::Microphone,
 		Self::Vpn,
 		Self::Nightlight,
+		Self::DarkMode,
 	];
 }
 
@@ -971,6 +1128,44 @@ mod tests {
 
 	use super::*;
 
+	#[test]
+	fn appearance_defaults_and_round_trips() {
+		let (_, defaults) = ConfigFile::parse_validated("").unwrap();
+		assert_eq!(defaults.appearance.theme, AppearanceMode::Light);
+
+		let (_, dark) = ConfigFile::parse_validated("appearance { theme \"dark\"; }").unwrap();
+		let mut doc = KdlDocument::new();
+		dark.apply_to_kdl_document(&mut doc).unwrap();
+		let (_, restored) = ConfigFile::parse_validated(&doc.to_string()).unwrap();
+
+		assert_eq!(restored.appearance.theme, AppearanceMode::Dark);
+		assert!(
+			dark.nix_diff(&defaults)
+				.contains("appearance.theme = \"dark\";")
+		);
+		assert!(ConfigFile::parse_validated("appearance { theme \"unknown\"; }").is_err());
+	}
+
+	#[test]
+	fn dark_mode_tile_round_trips_without_changing_default_layout() {
+		let (_, defaults) = ConfigFile::parse_validated("").unwrap();
+
+		assert!(defaults.system_menu.widgets.is_empty());
+		assert!(defaults.system_menu.rows.is_empty());
+		assert!(SystemMenuWidgets::VARIANTS.contains(&SystemMenuWidgets::DarkMode));
+
+		let (_, configured) = ConfigFile::parse_validated(
+			"system_menu { row { widget \"dark-mode\" width=2 height=1; }; }",
+		)
+		.unwrap();
+		let mut doc = KdlDocument::new();
+		configured.apply_to_kdl_document(&mut doc).unwrap();
+		let (_, restored) = ConfigFile::parse_validated(&doc.to_string()).unwrap();
+
+		assert_eq!(restored.system_menu, configured.system_menu);
+		assert!(configured.nix_diff(&defaults).contains("dark-mode"));
+	}
+
 	static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 	struct TestEnvironment {
@@ -1024,6 +1219,180 @@ mod tests {
 			}
 			let _ = std::fs::remove_dir_all(&self.root);
 		}
+	}
+
+	#[test]
+	fn update_preserves_fresh_fields_and_comments() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("transaction");
+		let base = ConfigFile::path().unwrap();
+		std::fs::write(&base, "// keep this comment\nspotify { enabled; }\n").unwrap();
+
+		ConfigFile::update(|config| config.nightlight.day.temperature = 5300).unwrap();
+		let (doc, config) = ConfigFile::update(|config| {
+			config.fileberg.favorites = vec!["copy".into()];
+		})
+		.unwrap();
+
+		assert!(config.spotify.enabled);
+		assert_eq!(config.nightlight.day.temperature, 5300);
+		assert_eq!(config.fileberg.favorites, ["copy"]);
+		assert!(doc.to_string().contains("// keep this comment"));
+		assert_eq!(ConfigFile::load().unwrap().1, config);
+		assert!(
+			std::fs::read_to_string(base)
+				.unwrap()
+				.contains("// keep this comment")
+		);
+	}
+
+	#[test]
+	fn update_without_override_creates_parent_and_base_lock() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let environment = TestEnvironment::new("base-transaction");
+		let path = environment.root.join("nested/config.kdl");
+		// ENV_LOCK excludes other tests while these process globals are changed.
+		unsafe {
+			std::env::remove_var(CONFIG_OVERRIDE_ENV);
+			std::env::set_var("SUBNIRI_CONFIG_FILE", &path);
+		}
+
+		let (_, config) = ConfigFile::update(|config| config.spotify.enabled = true).unwrap();
+
+		assert!(config.spotify.enabled);
+		assert_eq!(ConfigFile::load().unwrap().1, config);
+		assert!(path.with_file_name("config.kdl.lock").exists());
+	}
+
+	#[test]
+	fn update_serializes_separate_lock_handles() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("serialization");
+		let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+		let (release_tx, release_rx) = std::sync::mpsc::channel();
+		let (second_tx, second_rx) = std::sync::mpsc::channel();
+
+		std::thread::scope(|scope| {
+			let first = scope.spawn(move || {
+				ConfigFile::update(|config| {
+					entered_tx.send(()).unwrap();
+					release_rx.recv().unwrap();
+					config.spotify.enabled = true;
+				})
+				.unwrap();
+			});
+			entered_rx.recv().unwrap();
+			let second = scope.spawn(move || {
+				ConfigFile::update(|config| {
+					second_tx.send(()).unwrap();
+					config.fileberg.favorites = vec!["copy".into()];
+				})
+				.unwrap();
+			});
+
+			let blocked = second_rx.recv_timeout(Duration::from_millis(100)).is_err();
+			release_tx.send(()).unwrap();
+			first.join().unwrap();
+			second.join().unwrap();
+			assert!(blocked);
+		});
+
+		let (_, config) = ConfigFile::load().unwrap();
+		assert!(config.spotify.enabled);
+		assert_eq!(config.fileberg.favorites, ["copy"]);
+	}
+
+	#[test]
+	fn atomic_writes_keep_readers_on_complete_documents() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let environment = TestEnvironment::new("atomic-readers");
+		let path = environment.root.join("atomic.kdl");
+		let mut config = ConfigFile::default();
+		let mut doc = KdlDocument::new();
+		config.write_to_file(&mut doc, &path).unwrap();
+		let done = std::sync::atomic::AtomicBool::new(false);
+		let ready = std::sync::Barrier::new(2);
+
+		std::thread::scope(|scope| {
+			let reader = scope.spawn(|| {
+				ConfigFile::parse_validated(&std::fs::read_to_string(&path).unwrap()).unwrap();
+				ready.wait();
+				while !done.load(Ordering::Acquire) {
+					let contents = std::fs::read_to_string(&path).unwrap();
+					assert!(!contents.is_empty());
+					ConfigFile::parse_validated(&contents).unwrap();
+				}
+			});
+			ready.wait();
+			for index in 0..30 {
+				config.spotify.enabled = index % 2 == 0;
+				config.write_to_file(&mut doc, &path).unwrap();
+			}
+			done.store(true, Ordering::Release);
+			reader.join().unwrap();
+		});
+	}
+
+	#[test]
+	fn clear_override_preserves_override_when_declarative_is_invalid() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("clear-invalid");
+		ConfigFile::update(|config| config.spotify.enabled = true).unwrap();
+		let path = ConfigFile::override_path().unwrap();
+		let contents = std::fs::read_to_string(&path).unwrap();
+		std::fs::write(ConfigFile::path().unwrap(), "invalid {").unwrap();
+
+		assert!(ConfigFile::clear_override().is_err());
+		assert_eq!(std::fs::read_to_string(path).unwrap(), contents);
+	}
+
+	#[cfg(unix)]
+	#[test]
+	fn atomic_writes_preserve_symlinks_permissions_and_readonly_targets() {
+		use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let environment = TestEnvironment::new("symlink");
+		let target = environment.root.join("target.kdl");
+		let link = environment.root.join("link.kdl");
+		std::fs::write(&target, "// original\n").unwrap();
+		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o640)).unwrap();
+		symlink("target.kdl", &link).unwrap();
+		let mut doc = KdlDocument::new();
+
+		ConfigFile::default()
+			.write_to_file(&mut doc, &link)
+			.unwrap();
+
+		assert!(
+			std::fs::symlink_metadata(&link)
+				.unwrap()
+				.file_type()
+				.is_symlink()
+		);
+		assert_eq!(
+			std::fs::metadata(&target).unwrap().permissions().mode() & 0o777,
+			0o640
+		);
+		assert_eq!(
+			ConfigFile::load_from_file(&target).unwrap().1,
+			ConfigFile::default()
+		);
+		std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o440)).unwrap();
+		let contents = std::fs::read_to_string(&target).unwrap();
+
+		assert!(
+			ConfigFile::default()
+				.write_to_file(&mut doc, &link)
+				.is_err()
+		);
+		assert_eq!(std::fs::read_to_string(&target).unwrap(), contents);
+		assert!(
+			std::fs::symlink_metadata(&link)
+				.unwrap()
+				.file_type()
+				.is_symlink()
+		);
 	}
 
 	#[test]

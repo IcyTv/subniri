@@ -7,12 +7,12 @@ use iced::{
 	advanced::graphics::futures::MaybeSend,
 	alignment::Vertical,
 	font,
-	widget::{column, row, svg, text},
+	widget::{column, row, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
-	widgets::{NeoButton, neo_button, neo_card},
+	style::Colors,
+	widgets::{NeoButton, neo_button, neo_card, neo_scrollable},
 };
 
 use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
@@ -23,6 +23,7 @@ pub(super) mod integration;
 #[derive(Debug, Clone)]
 pub enum Message {
 	DeviceConnected(BtDevice),
+	DevicesUpdated(Vec<BtDevice>),
 	DeviceDisconnected(Address),
 	AdapterFound,
 	AdapterLost,
@@ -88,7 +89,11 @@ impl Bluetooth {
 
 	pub fn update(&mut self, message: Message) {
 		match message {
-			Message::DeviceConnected(device) => self.devices.push(device),
+			Message::DeviceConnected(device) => {
+				self.devices.retain(|existing| existing.addr != device.addr);
+				self.devices.push(device);
+			}
+			Message::DevicesUpdated(devices) => self.devices = devices,
 			Message::DeviceDisconnected(addr) => self.devices.retain(|d| d.addr != addr),
 			Message::AdapterFound => {
 				log::trace!("Adapter found");
@@ -97,6 +102,7 @@ impl Bluetooth {
 			Message::AdapterLost => {
 				log::trace!("Adapter lost");
 				self.has_adapter = false;
+				self.devices.clear();
 			}
 			Message::Power(is_on) => {
 				println!("Power state changed {is_on}");
@@ -106,7 +112,7 @@ impl Bluetooth {
 		}
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		let icon = if self.has_adapter && self.powered_on {
 			phosphor_icon!("bluetooth", "bold")
 		} else {
@@ -115,41 +121,135 @@ impl Bluetooth {
 
 		neo_button(
 			row![
-				svg(icon).width(Length::Shrink).height(ICON_HEIGHT),
-				text(format!("{}", self.devices.len()))
+				svg(icon)
+					.width(Length::Shrink)
+					.height(ICON_HEIGHT)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.on_accent),
+					}),
+				super::module_label(
+					text(format!(
+						"{}",
+						self.devices
+							.iter()
+							.filter(|device| device.connected)
+							.count()
+					))
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Font::DEFAULT
 					})
-					.color(COLORS.text)
+					.color(colors.on_accent)
 					.size(18)
 					.align_y(Vertical::Center)
+				)
 			]
 			.spacing(5.)
 			.align_y(Vertical::Center),
 		)
+		.with_colors(colors)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(COLORS.decorative.blue)
+		.background(colors.decorative.blue)
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
-		let mut col = column![];
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
+		let status = if !self.has_adapter {
+			"No adapter"
+		} else if self.powered_on {
+			"On"
+		} else {
+			"Off"
+		};
+		let header = row![
+			svg(phosphor_icon!("bluetooth", "bold"))
+				.width(24)
+				.height(24)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
+			text("Bluetooth")
+				.size(20)
+				.color(colors.text)
+				.weight(font::Weight::Bold),
+			space::horizontal(),
+			text(status).size(12).color(colors.secondary),
+		]
+		.spacing(12)
+		.align_y(Vertical::Center);
+
+		let mut devices = column![].spacing(8);
 
 		for device in &self.devices {
-			let content = neo_button(text(device.name.as_deref().unwrap_or("<No name>")));
+			let content = neo_card(
+				row![
+					svg(phosphor_icon!("bluetooth", "bold"))
+						.width(20)
+						.height(20)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.text)
+						}),
+					column![
+						text(device.name.as_deref().unwrap_or("Unnamed device"))
+							.color(colors.text)
+							.size(16)
+							.wrapping(text::Wrapping::None)
+							.ellipsis(text::Ellipsis::End),
+						text(if device.connected {
+							"Connected"
+						} else {
+							"Paired"
+						})
+						.color(colors.secondary)
+						.size(12),
+					]
+					.spacing(4)
+					.width(Length::Fill),
+				]
+				.spacing(12)
+				.align_y(Vertical::Center),
+			)
+			.with_colors(colors)
+			.background(if device.connected {
+				colors.selection
+			} else {
+				colors.surface
+			})
+			.width(Length::Fill);
 
-			col = col.push(content);
+			devices = devices.push(content);
 		}
 
-		if !self.powered_on || !self.has_adapter {
-			col = col.push(text("No adapter"));
+		if !self.has_adapter {
+			devices = devices.push(
+				text("No Bluetooth adapter available")
+					.color(colors.secondary)
+					.size(14),
+			);
+		} else if !self.powered_on {
+			devices = devices.push(
+				text("Bluetooth is turned off")
+					.color(colors.secondary)
+					.size(14),
+			);
+		} else if self.devices.is_empty() {
+			devices = devices.push(text("No paired devices").color(colors.secondary).size(14));
 		}
 
-		neo_card(col)
-			.width(200)
-			.background(COLORS.decorative.blue)
-			.into()
+		neo_card(
+			column![
+				header,
+				neo_scrollable(devices)
+					.with_colors(colors)
+					.height(Length::Shrink.max(300)),
+			]
+			.spacing(16),
+		)
+		.with_colors(colors)
+		.width(320)
+		.radius(MODULE_RADIUS)
+		.background(colors.body)
+		.into()
 	}
 }
 
@@ -259,9 +359,18 @@ fn device_events(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend
 				}
 			};
 			let mut adapter_stream = pin!(adapter_events);
+			let mut refresh = tokio::time::interval(Duration::from_secs(3));
+			refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
 			loop {
 				tokio::select! {
+					_ = refresh.tick() => {
+						match tokio::time::timeout(Duration::from_secs(2), device_snapshot(adapter)).await {
+							Ok(Ok(devices)) => yield Message::DevicesUpdated(devices),
+							Ok(Err(error)) => log::warn!("Failed to refresh Bluetooth devices: {error}"),
+							Err(_) => log::warn!("Bluetooth device refresh timed out"),
+						}
+					}
 					new_maybe_adapter = session_stream.next() => {
 						maybe_adapter = new_maybe_adapter;
 						break;
@@ -285,13 +394,15 @@ fn device_events(data: BluetoothData) -> impl Stream<Item = Message> + MaybeSend
 									}
 								};
 								let is_connected = device.is_connected().await.unwrap_or_default();
-								if !is_connected {
+								let is_paired = device.is_paired().await.unwrap_or_default();
+								if !is_connected && !is_paired {
 									continue;
 								}
 
 								let bt_device = BtDevice {
 									addr,
 									name,
+									connected: is_connected,
 								};
 
 								yield Message::DeviceConnected(bt_device);
@@ -322,6 +433,29 @@ async fn get_default_adapter(session: &Session) -> bluer::Result<Option<Adapter>
 	}
 }
 
+async fn device_snapshot(adapter: &Adapter) -> bluer::Result<Vec<BtDevice>> {
+	let mut devices = Vec::new();
+	for addr in adapter.device_addresses().await? {
+		let device = adapter.device(addr)?;
+		let connected = device.is_connected().await?;
+		if connected || device.is_paired().await? {
+			devices.push(BtDevice {
+				addr,
+				name: device.name().await?,
+				connected,
+			});
+		}
+	}
+	devices.sort_by(|left, right| {
+		right
+			.connected
+			.cmp(&left.connected)
+			.then_with(|| left.name.cmp(&right.name))
+	});
+
+	Ok(devices)
+}
+
 #[derive(Clone, Debug)]
 struct BluetoothData {
 	watcher: Hashable<zbus::Connection>,
@@ -346,6 +480,7 @@ impl Hash for BluetoothData {
 pub(crate) struct BtDevice {
 	addr: Address,
 	name: Option<String>,
+	connected: bool,
 }
 
 #[cfg(test)]
@@ -370,6 +505,73 @@ mod tests {
 			.serve_at("/org/bluez/hci0", TestAdapter)?
 			.build()
 			.await?)
+	}
+
+	#[test]
+	#[ignore = "requires a private D-Bus and headless graphics renderer"]
+	fn bluetooth_popup_layout() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::bluetooth::tests::popup_layout_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn popup_layout_child() -> Result<(), test_bus::Error> {
+		use crate::modules::layout_tests;
+
+		test_bus::require_child()?;
+		let _service = bluez().await?;
+		let mut bluetooth = Bluetooth::new().await?;
+		let mut renderer = layout_tests::renderer().await?;
+		for (theme, colors) in [
+			("light", neo_widgets::style::LIGHT),
+			("dark", neo_widgets::style::DARK),
+		] {
+			for (state, adapter, powered, count) in [
+				("empty", true, true, 0),
+				("off", true, false, 0),
+				("no-adapter", false, false, 0),
+				("devices", true, true, 12),
+			] {
+				bluetooth.has_adapter = adapter;
+				bluetooth.powered_on = powered;
+				bluetooth.devices = (0..count)
+					.map(|index| BtDevice {
+						addr: Address::new([0, 0, 0, 0, 0, index]),
+						name: Some(if index == 0 {
+							"Headphones with a deliberately long Bluetooth device name".into()
+						} else {
+							format!("Device {index}")
+						}),
+						connected: index == 0,
+					})
+					.collect();
+
+				let popup = layout_tests::capture(
+					bluetooth.view_popup(colors),
+					&mut renderer,
+					colors,
+					&format!("bluetooth-{state}-{theme}"),
+				)?;
+				let bounds = popup.nodes.first().ok_or("missing popup")?;
+				assert_eq!(bounds.width, 320.0);
+				assert!(bounds.height <= 380.0);
+				assert!(popup.texts.contains_key("Bluetooth"));
+				let button = layout_tests::capture(
+					bluetooth.view(colors).into(),
+					&mut renderer,
+					colors,
+					&format!("bar-bluetooth-{state}-{theme}"),
+				)?;
+				assert_eq!(
+					button.nodes.first().ok_or("missing button")?.height,
+					MODULE_HEIGHT
+				);
+				for bounds in button.texts.values() {
+					assert!((bounds.center_y() - 23.0).abs() < 0.01);
+				}
+			}
+		}
+		Ok(())
 	}
 
 	#[test]

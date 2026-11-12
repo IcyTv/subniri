@@ -10,8 +10,8 @@ use iced::{
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
-	widgets::{neo_card, neo_toggle, neo_toggle_button},
+	style::Colors,
+	widgets::{neo_card, neo_toggle, neo_toggle_button_with_colors},
 };
 
 use crate::{
@@ -187,20 +187,20 @@ impl Homeassistant {
 		}
 	}
 
-	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
+	pub fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
 		let url_valid = self.url.is_empty() || config.homeassistant.url.is_some();
 
 		let mut main = column![
 			neo_card(
 				row![
 					container(Self::icon())
-						.width(58)
-						.height(58)
-						.padding(12)
-						.style(|_| container::Style {
-							background: Some(iced::Background::Color(COLORS.white)),
+						.width(crate::sizing::HEADER_ICON)
+						.height(crate::sizing::HEADER_ICON)
+						.padding(crate::sizing::HEADER_ICON_PADDING)
+						.style(move |_| container::Style {
+							background: Some(iced::Background::Color(colors.white)),
 							border: Border {
-								color: COLORS.border,
+								color: colors.border,
 								width: 2.0,
 								radius: 3.into(),
 							},
@@ -209,20 +209,21 @@ impl Homeassistant {
 					column![
 						text("HOMEASSISTANT")
 							.width(Length::Fill)
-							.color(COLORS.text)
-							.size(34)
+							.color(colors.on_accent)
+							.size(crate::sizing::HEADER_TITLE)
 							.weight(font::Weight::Bold)
 							.stretch(font::Stretch::ExtraExpanded)
 							.wrapping(text::Wrapping::WordOrGlyph),
 						text("Control real life")
 							.width(Length::Fill)
-							.color(COLORS.text.scale_alpha(0.76))
+							.color(colors.on_accent.scale_alpha(0.76))
 							.size(14)
 							.weight(font::Weight::Bold),
 					]
 					.spacing(4),
 					space::horizontal(),
 					neo_toggle()
+						.with_colors(colors)
 						.width(40)
 						.height(18)
 						.toggled(config.homeassistant.enabled)
@@ -231,33 +232,40 @@ impl Homeassistant {
 				.align_y(Alignment::Center)
 				.spacing(16)
 			)
+			.with_colors(colors)
 			.width(Length::Fill)
-			.height(116)
-			.background(Self::accent_color())
-			.padding(18),
+			.height(crate::sizing::HEADER_HEIGHT)
+			.background(Self::accent_color(colors))
+			.padding(crate::sizing::HEADER_PADDING),
 			grid![
 				input_card(
-					InputCardOptions::<_, &str, _, _>::new(&self.url, Message::OnUrlChanged)
-						.background(COLORS.decorative.green50)
-						.border(if url_valid {
-							COLORS.border
-						} else {
-							COLORS.feedback.danger
-						})
-						.display("Homeassistant URL")
-						.placeholder("http://homeassistant.local:8123")
+					InputCardOptions::<_, &str, _, _>::new(
+						&self.url,
+						Message::OnUrlChanged,
+						colors
+					)
+					.background(colors.surface)
+					.border(if url_valid {
+						colors.border
+					} else {
+						colors.feedback.danger
+					})
+					.display("Homeassistant URL")
+					.placeholder("http://homeassistant.local:8123")
 				),
-				neo_toggle_button(
+				neo_toggle_button_with_colors(
+					colors,
 					phosphor_icon!("user"),
 					"Is Authenticated?",
 					self.status.human_string(),
 					self.is_authenticated(),
-					Some(COLORS.decorative.green)
+					Some(colors.decorative.green)
 				)
+				.with_colors(colors)
 				.enabled(self.auth_enabled)
-				.padding(16)
+				.padding(crate::sizing::CARD_PADDING)
 				.width(Length::Fill)
-				.height(112)
+				.height(crate::sizing::CARD_HEIGHT)
 				.on_press(Message::StartAuthFlow),
 			]
 			.height(Length::Shrink)
@@ -273,6 +281,7 @@ impl Homeassistant {
 			main = main.push(view_entities(
 				entities,
 				&config.homeassistant.tracked_devices,
+				colors,
 			));
 		}
 
@@ -283,8 +292,8 @@ impl Homeassistant {
 		self.authenticated
 	}
 
-	pub fn accent_color() -> Color {
-		COLORS.decorative.blue
+	pub fn accent_color(colors: Colors) -> Color {
+		colors.decorative.blue
 	}
 
 	pub fn icon<'a>() -> Svg<'a> {
@@ -376,20 +385,21 @@ async fn list_entities(
 
 // TODO: Add search & filtering
 fn view_entities<'a>(
-	entities: &'a [HomeassistantEntity], tracked_entities: &'a [String],
+	entities: &'a [HomeassistantEntity], tracked_entities: &'a [String], colors: Colors,
 ) -> Element<'a, Message> {
 	neo_card(scrollable(
 		grid(
 			entities
 				.iter()
 				.filter(filter_entities)
-				.map(|entity| view_entity(entity, tracked_entities))
+				.map(|entity| view_entity(entity, tracked_entities, colors))
 				.flatten(),
 		)
 		.columns(2)
 		.spacing(6)
 		.height(Length::Shrink),
 	))
+	.with_colors(colors)
 	.width(Length::Fill)
 	.height(Length::Shrink)
 	.padding(16)
@@ -401,7 +411,7 @@ fn filter_entities(entity: &&HomeassistantEntity) -> bool {
 }
 
 fn view_entity<'a>(
-	entity: &'a HomeassistantEntity, tracked_entities: &'a [String],
+	entity: &'a HomeassistantEntity, tracked_entities: &'a [String], colors: Colors,
 ) -> impl Iterator<Item = Element<'a, Message>> + 'a {
 	let name = if entity.info.friendly_name.is_empty() {
 		&entity.info.entity_id
@@ -411,13 +421,16 @@ fn view_entity<'a>(
 
 	let tracked = tracked_entities.contains(&entity.info.entity_id);
 	let entity_id = entity.info.entity_id.clone();
-	[neo_toggle_button(
+
+	[neo_toggle_button_with_colors(
+		colors,
 		phosphor_icon!("question-mark", "bold"),
 		name,
 		&entity.info.entity_id,
 		tracked,
 		None,
 	)
+	.with_colors(colors)
 	.width(Length::Fill)
 	.on_press(Message::ToggleEntity(entity_id, !tracked))]
 	.into_iter()

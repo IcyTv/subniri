@@ -1,5 +1,4 @@
-//! Native collection-v2 wire contract, independently verified by the isolated
-//! probe. Sources: docs/development/spotify-native-library-research.md.
+//! Native collection-v2 wire contract for saved-track membership and mutations.
 //! No endpoint discovery, authentication, I/O, or retry policy lives here.
 use protobuf::{CodedInputStream, CodedOutputStream, rt::WireType};
 

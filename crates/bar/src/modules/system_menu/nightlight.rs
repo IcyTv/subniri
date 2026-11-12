@@ -9,7 +9,7 @@ use iced::{
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{
 		NeoButton, NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_button, neo_card,
 	},
@@ -34,13 +34,28 @@ pub enum Message {
 	Noop,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContextMenu {
 	Root,
 	Suspend,
 	Preset,
 	Brightness,
 	Temperature,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct PointerPlacement {
+	right: bool,
+	y: f32,
+}
+
+impl PointerPlacement {
+	pub fn from_geometry(anchor: Rectangle, popup: Rectangle) -> Self {
+		Self {
+			right: popup.center_x() < anchor.center_x(),
+			y: anchor.center_y() - popup.y,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -231,45 +246,54 @@ impl Nightlight {
 		Task::none()
 	}
 
-	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
+	pub fn view_tile(&self, size: iced::Size, colors: Colors) -> NeoButton<'_, Message> {
 		let now = Instant::now();
-		neo_widgets::widgets::neo_tile(
+
+		neo_widgets::widgets::neo_tile_with_colors(
+			colors,
 			phosphor_icon!("moon"),
 			"Nightlight",
 			self.subtitle(),
 			Some(self.enabled.value()),
 			Some(
 				self.enabled
-					.interpolate(COLORS.white, COLORS.decorative.green, now),
+					.interpolate(colors.surface, colors.decorative.green, now),
 			),
 			size,
-		)
-		.background(
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green90, now),
 		)
 		.on_press(Message::Toggle)
 	}
 
-	pub fn view_expanded(&self, size: iced::Size) -> Element<'_, super::Message> {
+	pub fn view_expanded(&self, size: iced::Size, colors: Colors) -> Element<'_, super::Message> {
 		use neo_widgets::widgets::{neo_slider, neo_toggle};
-		let inset = neo_widgets::widgets::NeoContentSurfaceStyle::default().inset();
+
+		let inset = NeoContentSurfaceStyle::with_colors(colors).inset();
 		let active = self.enabled.value();
 		let surface = NeoSurfaceStyle {
-			background: COLORS.white,
+			background: colors.surface,
 			border_width: 0.0,
 			shadow_width: 0.0,
-			..Default::default()
+			..NeoSurfaceStyle::with_colors(colors)
 		};
 		let plain = NeoContentSurfaceStyle {
 			surface,
 			padding: 0.0.into(),
 		};
+
 		let header = neo_button(
 			row![
-				svg(phosphor_icon!("moon")).width(24).height(24),
-				text("Nightlight").size(16).width(Length::Fill),
+				svg(phosphor_icon!("moon"))
+					.width(24)
+					.height(24)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text)
+					}),
+				text("Nightlight")
+					.size(16)
+					.color(colors.text)
+					.width(Length::Fill),
 				neo_toggle::<super::Message>()
+					.with_colors(colors)
 					.toggled(active)
 					.width(32)
 					.height(16)
@@ -277,38 +301,52 @@ impl Nightlight {
 			.spacing(8)
 			.align_y(Alignment::Center),
 		)
+		.with_colors(colors)
 		.style(NeoButtonStyle {
 			surface: plain,
 			focused: plain,
 			hovered: surface,
-			disabled_background: COLORS.white,
+			disabled_background: colors.surface,
 		})
 		.on_press(super::Message::Nightlight(Message::Toggle))
 		.width(Length::Fill)
 		.height(28);
+
 		let temperature = column![
-			text("Temperature").size(12),
-			text(format!("{} K", self.temperature)).size(16),
+			text("Temperature").size(12).color(colors.text),
+			text(format!("{} K", self.temperature))
+				.size(16)
+				.color(colors.text),
 			neo_slider(1000..=6500, self.temperature)
+				.with_colors(colors)
 				.on_change_live(super::Message::ChangeTemperature)
 				.enabled(active)
 		]
 		.spacing(4)
 		.width(Length::Fill);
 		let brightness = column![
-			text("Brightness").size(12),
-			text(format!("{} %", (self.brightness * 100.0).round() as u32)).size(16),
+			text("Brightness").size(12).color(colors.text),
+			text(format!("{} %", (self.brightness * 100.0).round() as u32))
+				.size(16)
+				.color(colors.text),
 			neo_slider(0.2..=1.0, self.brightness)
+				.with_colors(colors)
 				.step(0.01)
 				.on_change_live(super::Message::ChangeBrightness)
 				.enabled(active)
 		]
 		.spacing(4)
 		.width(Length::Fill);
+
 		neo_card(neo_widgets::widgets::scale_to_fit(
 			column![
 				header,
-				iced::widget::rule::horizontal(2),
+				iced::widget::rule::horizontal(2).style(move |_| iced::widget::rule::Style {
+					color: colors.separator,
+					radius: 0.0.into(),
+					fill_mode: iced::widget::rule::FillMode::Full,
+					snap: false,
+				}),
 				row![temperature, brightness].spacing(16)
 			]
 			.spacing(6),
@@ -317,31 +355,37 @@ impl Nightlight {
 				(size.height - inset.height).max(1.0),
 			),
 		))
-		.background(COLORS.white)
+		.with_colors(colors)
+		.background(colors.surface)
 		.width(Length::Fill)
 		.height(Length::Fill)
 		.padding(8)
 		.into()
 	}
 
-	pub fn view_context_menu(&self, menu: ContextMenu) -> Element<'_, Message> {
+	pub fn view_context_menu(
+		&self, menu: ContextMenu, child: Option<ContextMenu>, pointer: Option<PointerPlacement>,
+		colors: Colors,
+	) -> Element<'_, Message> {
 		let content = match menu {
 			ContextMenu::Root => column![
-				menu_action("Enabled", self.enabled.value(), Message::Toggle),
-				menu_submenu("Suspend", ContextMenu::Suspend),
-				menu_submenu("Preset", ContextMenu::Preset),
-				menu_submenu("Brightness", ContextMenu::Brightness).enabled(self.enabled.value()),
-				menu_submenu("Temperature", ContextMenu::Temperature).enabled(self.enabled.value()),
+				menu_action("Enabled", self.enabled.value(), Message::Toggle, colors),
+				menu_submenu("Suspend", ContextMenu::Suspend, child, colors),
+				menu_submenu("Preset", ContextMenu::Preset, child, colors),
+				menu_submenu("Brightness", ContextMenu::Brightness, child, colors)
+					.enabled(self.enabled.value()),
+				menu_submenu("Temperature", ContextMenu::Temperature, child, colors)
+					.enabled(self.enabled.value()),
 			],
 			ContextMenu::Suspend => column![
-				menu_action("15 minutes", false, Message::Suspend(15 * 60)),
-				menu_action("30 minutes", false, Message::Suspend(30 * 60)),
-				menu_action("1 hour", false, Message::Suspend(60 * 60)),
-				menu_action("2 hours", false, Message::Suspend(2 * 60 * 60)),
+				menu_action("15 minutes", false, Message::Suspend(15 * 60), colors),
+				menu_action("30 minutes", false, Message::Suspend(30 * 60), colors),
+				menu_action("1 hour", false, Message::Suspend(60 * 60), colors),
+				menu_action("2 hours", false, Message::Suspend(2 * 60 * 60), colors),
 			],
 			ContextMenu::Preset => column![
-				menu_preset("Day", NightlightPreset::Day, self.preset),
-				menu_preset("Night", NightlightPreset::Night, self.preset),
+				menu_preset("Day", NightlightPreset::Day, self.preset, colors),
+				menu_preset("Night", NightlightPreset::Night, self.preset, colors),
 			],
 			ContextMenu::Brightness => {
 				let mut content = column![];
@@ -352,6 +396,7 @@ impl Nightlight {
 							&format!("{percent}%"),
 							(self.brightness - value).abs() < f64::EPSILON,
 							Message::SetBrightness(value),
+							colors,
 						)
 						.enabled(self.enabled.value()),
 					);
@@ -366,6 +411,7 @@ impl Nightlight {
 							&format!("{value} K"),
 							self.temperature == value,
 							Message::SetTemperature(value),
+							colors,
 						)
 						.enabled(self.enabled.value()),
 					);
@@ -374,12 +420,52 @@ impl Nightlight {
 			}
 		};
 
-		neo_card(content.spacing(2))
+		let card = neo_card(content.spacing(2))
+			.with_colors(colors)
 			.padding(5)
 			.radius(8.0)
-			.background(COLORS.white)
-			.width(180.0)
-			.into()
+			.background(colors.surface)
+			.width(220.0);
+		if menu == ContextMenu::Root {
+			return card.into();
+		}
+
+		let rows = match menu {
+			ContextMenu::Suspend => 4,
+			ContextMenu::Preset => 2,
+			_ => 5,
+		};
+		let height = rows as f32 * 36.0 + (rows - 1) as f32 * 2.0 + 14.0;
+		let right = pointer.is_some_and(|pointer| pointer.right);
+		let y = pointer
+			.map_or(height / 2.0, |pointer| pointer.y)
+			.clamp(16.0, height - 16.0);
+		let path = if right {
+			"M0 1 L11 12 L0 23"
+		} else {
+			"M12 1 L1 12 L12 23"
+		};
+		let [r, g, b, _] = colors.surface.into_rgba8();
+		let artwork = format!(
+			"<svg xmlns='http://www.w3.org/2000/svg' width='12' height='24'><path d='{path}' fill='rgb({r},{g},{b})' stroke='black' stroke-width='2'/></svg>"
+		);
+		let tip: Element<'_, Message> = if pointer.is_some() {
+			svg(svg::Handle::from_memory(artwork.into_bytes()))
+				.width(12)
+				.height(24)
+				.into()
+		} else {
+			space().width(12).height(24).into()
+		};
+		let gutter = column![space().height(y - 12.0), tip]
+			.width(12)
+			.height(height);
+
+		if right {
+			row![card, gutter].height(height).into()
+		} else {
+			row![gutter, card].height(height).into()
+		}
 	}
 
 	fn subtitle(&self) -> String {
@@ -414,59 +500,118 @@ fn write_temperature(value: u32) -> Task<Message> {
 	})
 }
 
-fn menu_action(label: &str, checked: bool, message: Message) -> NeoButton<'static, Message> {
-	let indicator = if checked {
-		svg(phosphor_icon!("check", "bold")).width(16).height(16)
+fn menu_action(
+	label: &str, checked: bool, message: Message, colors: Colors,
+) -> NeoButton<'static, Message> {
+	let background = if checked {
+		colors.decorative.green
 	} else {
-		svg(phosphor_icon!("check", "bold")).width(0).height(16)
+		colors.surface
 	};
+	let foreground = colors.text_on(background);
+	let icon = match &message {
+		Message::Toggle => phosphor_icon!("power", "bold"),
+		Message::Suspend(_) => phosphor_icon!("timer", "bold"),
+		Message::SetBrightness(_) => phosphor_icon!("sun", "bold"),
+		Message::SetTemperature(_) => phosphor_icon!("thermometer", "bold"),
+		_ => phosphor_icon!("moon", "bold"),
+	};
+	let indicator = svg(icon)
+		.width(16)
+		.height(16)
+		.style(move |_, _| svg::Style {
+			color: Some(foreground),
+		});
 
 	neo_button(
-		row![indicator, text(label.to_owned()).width(Length::Fill)]
-			.spacing(7)
-			.align_y(Alignment::Center),
+		row![
+			indicator,
+			text(label.to_owned()).color(foreground).width(Length::Fill)
+		]
+		.spacing(7)
+		.align_y(Alignment::Center),
 	)
-	.style(menu_button_style())
+	.with_colors(colors)
+	.style(menu_button_style(colors))
+	.background(background)
 	.width(Length::Fill)
 	.height(36)
 	.on_press(message)
 }
 
-fn menu_submenu(label: &str, menu: ContextMenu) -> NeoButton<'static, Message> {
+fn menu_submenu(
+	label: &str, menu: ContextMenu, child: Option<ContextMenu>, colors: Colors,
+) -> NeoButton<'static, Message> {
+	let icon = match menu {
+		ContextMenu::Suspend => phosphor_icon!("timer", "bold"),
+		ContextMenu::Preset => phosphor_icon!("sun-horizon", "bold"),
+		ContextMenu::Brightness => phosphor_icon!("sun", "bold"),
+		ContextMenu::Temperature => phosphor_icon!("thermometer", "bold"),
+		ContextMenu::Root => phosphor_icon!("moon", "bold"),
+	};
+
 	neo_button(
 		row![
-			space().width(16).height(16),
-			text(label.to_owned()).width(Length::Fill),
+			svg(icon)
+				.width(16)
+				.height(16)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
+			text(label.to_owned())
+				.color(colors.text)
+				.width(Length::Fill),
 			svg(phosphor_icon!("caret-right", "bold"))
 				.width(14)
-				.height(14),
+				.height(14)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
 		]
 		.spacing(7)
 		.align_y(Alignment::Center),
 	)
-	.style(menu_button_style())
+	.with_colors(colors)
+	.style(menu_button_style(colors))
+	.background(if child == Some(menu) {
+		colors.raised
+	} else {
+		colors.surface
+	})
 	.width(Length::Fill)
 	.height(36)
 	.on_press_started_with_bounds(move |bounds| Message::OpenContextMenu(menu, bounds))
 }
 
 fn menu_preset(
-	label: &str, preset: NightlightPreset, selected: NightlightPreset,
+	label: &str, preset: NightlightPreset, selected: NightlightPreset, colors: Colors,
 ) -> Element<'_, Message> {
-	let icon = if preset == selected {
-		phosphor_icon!("circle", "fill")
+	let icon = if preset == NightlightPreset::Day {
+		phosphor_icon!("sun", "bold")
 	} else {
-		phosphor_icon!("circle", "bold")
+		phosphor_icon!("moon", "bold")
 	};
+
 	neo_button(
 		row![
-			svg(icon).width(16).height(16),
-			text(label).width(Length::Fill),
+			svg(icon)
+				.width(16)
+				.height(16)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
+			text(label).color(colors.text).width(Length::Fill),
 		]
 		.spacing(7)
 		.align_y(Alignment::Center),
 	)
-	.style(menu_button_style())
+	.with_colors(colors)
+	.style(menu_button_style(colors))
+	.background(if preset == selected {
+		colors.raised
+	} else {
+		colors.surface
+	})
 	.width(Length::Fill)
 	.height(36)
 	.on_press(Message::SetPreset(preset))
@@ -491,37 +636,70 @@ async fn set_preset(preset: NightlightPreset) -> zbus::Result<()> {
 	proxy.set_preset(preset.as_str()).await
 }
 
-fn menu_button_style() -> NeoButtonStyle {
+fn menu_button_style(colors: Colors) -> NeoButtonStyle {
 	let surface = NeoSurfaceStyle {
-		background: COLORS.white,
+		background: colors.surface,
 		border_width: 0.0,
 		shadow_width: 0.0,
 		radius: 4.0,
-		..Default::default()
+		..NeoSurfaceStyle::with_colors(colors)
 	};
+
 	NeoButtonStyle {
 		surface: NeoContentSurfaceStyle {
 			surface,
 			padding: Padding::from([6, 8]),
 		},
 		hovered: NeoSurfaceStyle {
-			background: COLORS.decorative.pink90,
+			background: colors.raised,
 			..surface
 		},
 		focused: NeoContentSurfaceStyle {
 			surface: NeoSurfaceStyle {
-				background: COLORS.decorative.pink90,
+				background: colors.raised,
 				..surface
 			},
 			padding: Padding::from([6, 8]),
 		},
-		disabled_background: COLORS.white,
+		disabled_background: colors.surface,
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn submenu_pointer_tracks_compositor_flip_and_vertical_slide() {
+		let anchor = Rectangle {
+			x: 10.0,
+			y: 38.0,
+			width: 200.0,
+			height: 36.0,
+		};
+		let right_popup = Rectangle {
+			x: 210.0,
+			y: 20.0,
+			width: 232.0,
+			height: 164.0,
+		};
+
+		let pointer = PointerPlacement::from_geometry(anchor, right_popup);
+		assert!(!pointer.right);
+		assert_eq!(pointer.y, 36.0);
+
+		let flipped = PointerPlacement::from_geometry(
+			anchor,
+			Rectangle {
+				x: -222.0,
+				y: -20.0,
+				..right_popup
+			},
+		);
+		assert!(flipped.right);
+		assert_eq!(flipped.y, 76.0);
+	}
+
 	#[test]
 	fn live_values_coalesce_and_old_signals_do_not_undo_the_preview() {
 		let mut light = Nightlight::new(&ConfigFile::default());

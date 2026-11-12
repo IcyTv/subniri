@@ -24,6 +24,8 @@ pub(crate) use selection::window_point;
 
 impl FileManager {
 	pub fn view(&self, id: iced::window::Id) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+
 		if self.dialogs.owns(id) {
 			return self.confirmation_view(id);
 		}
@@ -41,7 +43,10 @@ impl FileManager {
 			container(iced::widget::responsive(|size| self.layout(size.width)))
 				.width(Length::Fill)
 				.height(Length::Fill)
-				.style(|_| style::panel(style::PAPER))
+				.style(move |_| container::Style {
+					text_color: Some(colors.text),
+					..style::panel(colors.body)
+				})
 				.into(),
 			self.typeahead.is_active(),
 			!self.loading && self.menu.is_none() && self.drives.menu.is_none(),
@@ -51,21 +56,20 @@ impl FileManager {
 				.collect(),
 		);
 		let content = typeahead::host_gate(content, self.popups.topmost());
+
 		// Keep the overlay at a stable tree position across modal transitions.
-		let dim = container(Space::new().width(Length::Fill).height(Length::Fill)).style(|_| {
-			container::Style {
-				background: Some(
-					iced::Color::from_rgba(
-						0.0,
-						0.0,
-						0.0,
-						if self.dialogs.blocked() { 0.28 } else { 0.0 },
-					)
-					.into(),
-				),
-				..Default::default()
-			}
-		});
+		let dim =
+			container(Space::new().width(Length::Fill).height(Length::Fill)).style(move |_| {
+				container::Style {
+					background: Some(
+						colors
+							.black
+							.scale_alpha(if self.dialogs.blocked() { 0.28 } else { 0.0 })
+							.into(),
+					),
+					..Default::default()
+				}
+			});
 		typeahead::modal_gate(
 			iced::widget::stack![content, dim].into(),
 			self.dialogs.blocked(),
@@ -73,15 +77,21 @@ impl FileManager {
 	}
 
 	fn layout(&self, width: f32) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let compact = width <= 800.0;
 		let gutter = if width <= 1100.0 { 20 } else { 29 };
+
 		let identity = container(
 			row![
-				svg(phosphor_icon!("squares-four", "fill")).width(23),
+				svg(phosphor_icon!("squares-four", "fill"))
+					.width(23)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.on_accent)
+					}),
 				text("fileberg")
 					.size(21)
 					.weight(font::Weight::Bold)
-					.color(style::INK)
+					.color(colors.on_accent)
 			]
 			.spacing(10)
 			.align_y(Alignment::Center),
@@ -89,10 +99,10 @@ impl FileManager {
 		.padding([9, 22])
 		.height(46)
 		.width(Length::Fill)
-		.style(|_| style::panel(style::YELLOW));
+		.style(move |_| style::panel(colors.decorative.yellow));
 		let mut content = column![
 			container(self.toolbar(compact)).padding([12, 20]),
-			style::rule(),
+			style::rule(colors),
 			container(self.content_heading(compact)).padding([24, gutter])
 		]
 		.width(Length::Fill)
@@ -103,13 +113,16 @@ impl FileManager {
 				container(
 					row![
 						text(error).size(12).width(Length::Fill),
-						control(text("Dismiss").size(11), false)
+						control(text("Dismiss").size(11), false, colors)
 							.on_press(BrowserMessage::DismissError.into())
 					]
 					.spacing(8),
 				)
 				.padding([10, 20])
-				.style(|_| style::panel(neo_widgets::style::rgb(0xefb_6a9))),
+				.style(move |_| container::Style {
+					text_color: Some(colors.on_accent),
+					..style::panel(colors.decorative.pink)
+				}),
 			);
 		}
 		content = content.push(error_notice);
@@ -123,7 +136,7 @@ impl FileManager {
 							.on_submit(BrowserMessage::CreateFolder.into())
 							.padding(10)
 							.size(13)
-							.style(style::input),
+							.style(move |theme, status| style::input(theme, status, colors)),
 						primary(
 							text(if self.creating_folder {
 								"Creating…"
@@ -131,10 +144,12 @@ impl FileManager {
 								"Create"
 							})
 							.size(12)
+							.color(colors.text_on(colors.decorative.yellow)),
+							colors,
 						)
 						.on_press(BrowserMessage::CreateFolder.into())
 						.enabled(!self.creating_folder),
-						control(text("Cancel").size(12), false)
+						control(text("Cancel").size(12), false, colors)
 							.on_press(BrowserMessage::CancelFolder.into())
 					]
 					.spacing(10)
@@ -160,9 +175,13 @@ impl FileManager {
 								ui_icon!("arrow-up")
 							})
 							.width(13)
+							.style(move |_, _| svg::Style {
+								color: Some(colors.text),
+							})
 						]
 						.spacing(7),
-						false
+						false,
+						colors,
 					)
 					.on_press(BrowserMessage::Sort.into())
 				]
@@ -172,20 +191,24 @@ impl FileManager {
 		);
 		let visible = self.visible_entries();
 		let files: Element<'_, Message> = if self.loading && self.entries.is_empty() {
-			container(text("Loading…").size(13).color(style::MUTED))
+			container(text("Loading…").size(13).color(colors.secondary))
 				.center(Length::Fill)
 				.into()
 		} else if visible.is_empty() {
 			container(
 				column![
-					svg(ui_icon!("folder-open")).width(42),
+					svg(ui_icon!("folder-open"))
+						.width(42)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.secondary),
+						}),
 					text(if self.search.is_empty() && self.active_tag.is_none() {
 						"This folder is empty."
 					} else {
 						"No files match the current filters."
 					})
 					.size(13)
-					.color(style::MUTED)
+					.color(colors.secondary)
 				]
 				.spacing(14)
 				.align_x(Alignment::Center),
@@ -214,7 +237,8 @@ impl FileManager {
 		// closes; dismissal must not reset the viewport around the selected file.
 		let mut files = iced::widget::stack![
 			style::context_area(
-				iced::widget::mouse_area(files).on_press(BrowserMessage::ClearSelection.into())
+				iced::widget::mouse_area(files).on_press(BrowserMessage::ClearSelection.into()),
+				colors,
 			)
 			.width(Length::Fill)
 			.height(Length::Fill)
@@ -225,10 +249,11 @@ impl FileManager {
 		if self.typeahead.is_active() {
 			let preview = container(
 				row![
-					text("Jump to").size(10).color(style::MUTED),
+					text("Jump to").size(10).color(colors.on_accent),
 					text(self.typeahead.text())
 						.font(style::MONO)
 						.size(12)
+						.color(colors.on_accent)
 						.width(Length::Fill)
 						.wrapping(text::Wrapping::None)
 						.ellipsis(iced::advanced::text::Ellipsis::End),
@@ -238,25 +263,25 @@ impl FileManager {
 						"No match · Esc"
 					})
 					.size(10)
-					.color(style::MUTED),
+					.color(colors.on_accent),
 				]
 				.spacing(10)
 				.align_y(Alignment::Center),
 			)
 			.width(260)
 			.padding([8, 12])
-			.style(|_| container::Style {
+			.style(move |_| container::Style {
 				border: iced::Border {
-					color: style::INK,
+					color: colors.border,
 					width: 1.5,
 					radius: 0.0.into(),
 				},
 				shadow: iced::Shadow {
-					color: style::INK,
+					color: colors.border,
 					offset: iced::Vector::new(3.0, 3.0),
 					blur_radius: 0.0,
 				},
-				..style::panel(style::YELLOW)
+				..style::panel(colors.decorative.yellow)
 			});
 			files = files.push(
 				container(iced::widget::opaque(preview))
@@ -277,18 +302,23 @@ impl FileManager {
 				visible.len() - folders
 			))
 			.size(11)
-			.color(style::MUTED),
+			.color(colors.secondary),
 			Space::new().width(Length::Fill)
 		]
 		.align_y(Alignment::Center);
 		if let Some(usage) = self.storage {
 			status_content = status_content.push(
 				row![
-					svg(ui_icon!("hard-drive")).width(13).height(13),
+					svg(ui_icon!("hard-drive"))
+						.width(13)
+						.height(13)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.secondary),
+						}),
 					text(format!("{} free", format_size(usage.available)))
 						.font(style::MONO)
 						.size(10)
-						.color(style::MUTED)
+						.color(colors.secondary)
 				]
 				.spacing(7)
 				.align_y(Alignment::Center),
@@ -297,10 +327,10 @@ impl FileManager {
 		let status = container(status_content)
 			.padding([8, 16])
 			.width(Length::Fill)
-			.style(|_| style::panel(style::SIDEBAR));
+			.style(move |_| style::panel(colors.surface));
 		column![
 			identity,
-			style::divider(false),
+			style::divider(false, colors),
 			row![
 				self.sidebar(
 					compact,
@@ -312,11 +342,11 @@ impl FileManager {
 						220
 					}
 				),
-				style::divider(true),
+				style::divider(true, colors),
 				content
 			]
 			.height(Length::Fill),
-			style::divider(false),
+			style::divider(false, colors),
 			status
 		]
 		.height(Length::Fill)
@@ -324,6 +354,8 @@ impl FileManager {
 	}
 
 	fn toolbar(&self, compact: bool) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+
 		let home = dirs::home_dir();
 		let disk = self
 			.drives
@@ -333,7 +365,12 @@ impl FileManager {
 		let (anchor, parts): (Element<'_, Message>, _) = if let Some((volume, mount)) = disk {
 			let anchor = control(
 				row![
-					svg(ui_icon!("hard-drive")).width(17).height(17),
+					svg(ui_icon!("hard-drive"))
+						.width(17)
+						.height(17)
+						.style(move |_, _| svg::Style {
+							color: Some(colors.text),
+						}),
 					text(volume.name.clone())
 						.size(12)
 						.weight(font::Weight::Bold),
@@ -341,6 +378,7 @@ impl FileManager {
 				.spacing(6)
 				.align_y(Alignment::Center),
 				false,
+				colors,
 			)
 			.padding(4)
 			.on_press(BrowserMessage::GoTo(mount.path.clone()).into());
@@ -350,9 +388,18 @@ impl FileManager {
 				navigation::mounted_breadcrumbs(&self.path, &mount.path, home.as_deref()),
 			)
 		} else {
-			let anchor = control(svg(ui_icon!("house")).width(17).height(17), false)
-				.padding(4)
-				.on_press(BrowserMessage::GoTo(crate::default_path()).into());
+			let anchor = control(
+				svg(ui_icon!("house"))
+					.width(17)
+					.height(17)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					}),
+				false,
+				colors,
+			)
+			.padding(4)
+			.on_press(BrowserMessage::GoTo(crate::default_path()).into());
 
 			(
 				anchor.into(),
@@ -362,7 +409,11 @@ impl FileManager {
 		let mut crumbs = row![anchor].spacing(11).align_y(Alignment::Center);
 
 		for (label, path) in parts {
-			crumbs = crumbs.push(svg(ui_icon!("caret-right")).width(12).height(12));
+			crumbs = crumbs.push(svg(ui_icon!("caret-right")).width(12).height(12).style(
+				move |_, _| svg::Style {
+					color: Some(colors.secondary),
+				},
+			));
 			crumbs = crumbs.push(
 				control(
 					text(label).size(12).weight(if path == self.path {
@@ -371,57 +422,103 @@ impl FileManager {
 						font::Weight::Normal
 					}),
 					false,
+					colors,
 				)
 				.padding(4)
 				.on_press(BrowserMessage::GoTo(path).into()),
 			);
 		}
 		let navigation = row![
-			control(svg(ui_icon!("arrow-left")).width(18).height(18), false)
-				.on_press(BrowserMessage::GoBack.into())
-				.enabled(self.history.can_undo()),
-			control(svg(ui_icon!("arrow-right")).width(18).height(18), false)
-				.on_press(BrowserMessage::GoForward.into())
-				.enabled(self.history.can_redo()),
-			control(svg(ui_icon!("arrow-up")).width(18).height(18), false)
-				.on_press(BrowserMessage::GoUp.into())
-				.enabled(self.path.parent().is_some()),
+			control(
+				svg(ui_icon!("arrow-left"))
+					.width(18)
+					.height(18)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					}),
+				false,
+				colors
+			)
+			.on_press(BrowserMessage::GoBack.into())
+			.enabled(self.history.can_undo()),
+			control(
+				svg(ui_icon!("arrow-right"))
+					.width(18)
+					.height(18)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					}),
+				false,
+				colors
+			)
+			.on_press(BrowserMessage::GoForward.into())
+			.enabled(self.history.can_redo()),
+			control(
+				svg(ui_icon!("arrow-up"))
+					.width(18)
+					.height(18)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					}),
+				false,
+				colors
+			)
+			.on_press(BrowserMessage::GoUp.into())
+			.enabled(self.path.parent().is_some()),
 			scrollable(crumbs)
 				.direction(iced::widget::scrollable::Direction::Horizontal(
 					Default::default()
 				))
 				.width(Length::Fill),
-			control(svg(ui_icon!("arrow-clockwise")).width(17).height(17), false)
-				.on_press(BrowserMessage::Refresh.into()),
+			control(
+				svg(ui_icon!("arrow-clockwise"))
+					.width(17)
+					.height(17)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					}),
+				false,
+				colors
+			)
+			.on_press(BrowserMessage::Refresh.into()),
 		]
 		.spacing(3)
 		.align_y(Alignment::Center);
 		let search = text_input("Find something…", &self.search)
-			.style(style::search_input)
+			.style(move |theme, status| style::search_input(theme, status, colors))
 			.id("search")
 			.on_input(|query| BrowserMessage::Search(query).into())
 			.on_submit(BrowserMessage::OpenSelected.into())
 			.padding(0)
 			.size(12);
 		let mut search_content = row![
-			svg(ui_icon!("magnifying-glass")).width(17).height(17),
+			svg(ui_icon!("magnifying-glass"))
+				.width(17)
+				.height(17)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text),
+				}),
 			search
 		]
 		.spacing(9)
 		.align_y(Alignment::Center);
 		if !compact {
-			search_content =
-				search_content.push(text("Ctrl K").size(9).font(style::MONO).color(style::MUTED));
+			search_content = search_content.push(
+				text("Ctrl K")
+					.size(9)
+					.font(style::MONO)
+					.color(colors.secondary),
+			);
 		}
 		let search = container(search_content)
 			.padding([9, 10])
-			.style(|_| container::Style {
+			.style(move |_| container::Style {
 				border: iced::Border {
-					color: style::INK,
+					color: colors.border,
 					width: 1.5,
 					radius: 0.0.into(),
 				},
-				..style::panel(style::PAPER)
+				..style::panel(colors.body)
 			});
 		if compact {
 			column![navigation, search.width(Length::Fill)]
@@ -436,6 +533,8 @@ impl FileManager {
 	}
 
 	fn content_heading(&self, compact: bool) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+
 		let heading = if dirs::home_dir().as_ref() == Some(&self.path) {
 			std::borrow::Cow::Borrowed("Home")
 		} else {
@@ -455,20 +554,34 @@ impl FileManager {
 					.font(style::MONO)
 			)
 			.padding([4, 7])
-			.style(|_| container::Style {
+			.style(move |_| container::Style {
 				border: iced::Border {
-					color: style::INK,
+					color: colors.border,
 					width: 1.0,
 					radius: 0.0.into()
 				},
-				..style::panel(style::SIDEBAR)
+				..style::panel(colors.surface)
 			}),
 		]
 		.spacing(14)
 		.align_y(Alignment::Center);
-		let mut new_folder = row![svg(ui_icon!("plus")).width(16).height(16)].spacing(6);
+		let new_folder_color = colors.text_on(colors.decorative.yellow);
+		let mut new_folder = row![
+			svg(ui_icon!("plus"))
+				.width(16)
+				.height(16)
+				.style(move |_, _| svg::Style {
+					color: Some(new_folder_color),
+				})
+		]
+		.spacing(6);
 		if !compact {
-			new_folder = new_folder.push(text("New folder").size(12).weight(font::Weight::Bold));
+			new_folder = new_folder.push(
+				text("New folder")
+					.size(12)
+					.weight(font::Weight::Bold)
+					.color(new_folder_color),
+			);
 		}
 		let mut views = row![].spacing(0);
 		for (mode, icon) in [
@@ -476,36 +589,38 @@ impl FileManager {
 			(ViewMode::List, ui_icon!("list-bullets")),
 		] {
 			let selected = self.view_mode == mode;
+			let background = if selected { colors.text } else { colors.body };
 			views = views.push(
 				control(
 					svg(icon)
 						.width(18)
 						.height(18)
 						.style(move |_, _| svg::Style {
-							color: Some(if selected { style::PAPER } else { style::INK }),
+							color: Some(colors.text_on(background)),
 						}),
 					false,
+					colors,
 				)
 				.width(33)
 				.height(33)
-				.background(if selected { style::INK } else { style::PAPER })
-				.focus_color(if selected { style::INK } else { style::PAPER })
+				.background(background)
+				.focus_color(background)
 				.on_press(BrowserMessage::View(mode).into()),
 			);
 		}
 		row![
 			container(title).width(Length::Fill),
-			primary(new_folder)
+			primary(new_folder, colors)
 				.on_press(BrowserMessage::NewFolder.into())
 				.enabled(!self.loading),
 			container(views)
-				.style(|_| container::Style {
+				.style(move |_| container::Style {
 					border: iced::Border {
-						color: style::INK,
+						color: colors.border,
 						width: 2.0,
 						radius: 0.0.into()
 					},
-					..style::panel(style::INK)
+					..style::panel(colors.text)
 				})
 				.padding(2),
 		]
@@ -515,6 +630,8 @@ impl FileManager {
 	}
 
 	fn sidebar(&self, compact: bool, width: u16) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+
 		let active_place = [
 			dirs::home_dir(),
 			dirs::document_dir(),
@@ -532,7 +649,7 @@ impl FileManager {
 					text("PLACES")
 						.size(10)
 						.font(style::MONO)
-						.color(style::MUTED),
+						.color(colors.secondary),
 				)
 				.padding([0, 12]),
 			);
@@ -549,17 +666,36 @@ impl FileManager {
 		] {
 			if let Some(path) = path {
 				let active = active_place.as_ref() == Some(&path);
-				let mut label = row![svg(icon).width(21).height(21)]
+				let background = if active {
+					colors.decorative.blue
+				} else {
+					colors.surface
+				};
+				let foreground = colors.text_on(background);
+				let mut label =
+					row![
+						svg(icon)
+							.width(21)
+							.height(21)
+							.style(move |_, _| svg::Style {
+								color: Some(foreground),
+							})
+					]
 					.spacing(11)
 					.align_y(Alignment::Center);
 				if !compact {
 					label = label
-						.push(text(name).size(14).weight(font::Weight::Semibold))
+						.push(
+							text(name)
+								.size(14)
+								.weight(font::Weight::Semibold)
+								.color(foreground),
+						)
 						.width(Length::Fill);
 				}
 				places = places.push(hint::place_hint(
-					control(label, active)
-						.background(if active { style::BLUE } else { style::SIDEBAR })
+					control(label, active, colors)
+						.background(background)
 						.width(Length::Fill)
 						.padding(if compact {
 							iced::Padding::from(9)
@@ -569,6 +705,7 @@ impl FileManager {
 						.on_press(BrowserMessage::GoTo(path).into()),
 					name,
 					compact,
+					colors,
 				));
 			}
 		}
@@ -583,7 +720,7 @@ impl FileManager {
 		if !compact {
 			sidebar = sidebar.push(self.drive_cards());
 		}
-		let sidebar = sidebar::background(sidebar.into());
+		let sidebar = sidebar::background(sidebar.into(), colors);
 		container(sidebar)
 			.padding(if compact {
 				iced::Padding::from([20, 6])
@@ -597,15 +734,17 @@ impl FileManager {
 			})
 			.width(f32::from(width))
 			.height(Length::Fill)
-			.style(|_| style::panel(style::SIDEBAR))
+			.style(move |_| style::panel(colors.surface))
 			.into()
 	}
 
 	fn file_tile<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
+		let colors = self.appearance.colors();
+
 		self.entry_button(
 			entry,
 			column![
-				container(file_art(entry, 1.0))
+				container(file_art(entry, 1.0, colors))
 					.height(84)
 					.center_x(Length::Fill)
 					.align_y(Alignment::Center),
@@ -613,9 +752,9 @@ impl FileManager {
 					.size(12)
 					.weight(font::Weight::Bold)
 					.color(if entry.is_hidden {
-						style::MUTED
+						colors.secondary
 					} else {
-						style::INK
+						colors.text
 					})
 					.wrapping(text::Wrapping::None)
 					.ellipsis(iced::advanced::text::Ellipsis::End),
@@ -626,7 +765,7 @@ impl FileManager {
 				})
 				.size(9)
 				.font(style::MONO)
-				.color(style::MUTED)
+				.color(colors.secondary)
 			]
 			.spacing(5)
 			.align_x(Alignment::Center),
@@ -635,19 +774,21 @@ impl FileManager {
 	}
 
 	fn file_row<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
+		let colors = self.appearance.colors();
+
 		self.entry_button(
 			entry,
 			row![
-				container(file_art(entry, 0.4))
+				container(file_art(entry, 0.4, colors))
 					.width(30)
 					.height(30)
 					.center(Length::Shrink),
 				text(&entry.name)
 					.size(13)
 					.color(if entry.is_hidden {
-						style::MUTED
+						colors.secondary
 					} else {
-						style::INK
+						colors.text
 					})
 					.width(Length::Fill)
 					.wrapping(text::Wrapping::None)
@@ -658,7 +799,7 @@ impl FileManager {
 					format_size(entry.size)
 				})
 				.size(11)
-				.color(style::MUTED)
+				.color(colors.secondary)
 			]
 			.spacing(16)
 			.align_y(Alignment::Center),
@@ -669,6 +810,8 @@ impl FileManager {
 	fn entry_button<'a>(
 		&self, entry: &'a DirEntry, content: impl Into<Element<'a, Message>>, height: Length,
 	) -> Element<'a, Message> {
+		let colors = self.appearance.colors();
+
 		// Mouse selection and keyboard activation are deliberately separate. Enter on
 		// a focused file opens it; a single mouse click only selects it.
 		let selected = self.selection.paths.contains(&entry.path);
@@ -679,16 +822,19 @@ impl FileManager {
 		let content: Element<'a, Message> = if matches!(height, Length::Fixed(_)) {
 			let mut badges = row![];
 			if selected {
+				let check = svg(ui_icon!("check"))
+					.width(11)
+					.height(11)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.on_accent),
+					});
+
 				badges = badges.push(
-					container(svg(ui_icon!("check")).width(11).height(11).style(|_, _| {
-						svg::Style {
-							color: Some(style::PAPER),
-						}
-					}))
-					.width(15)
-					.height(15)
-					.center(Length::Shrink)
-					.style(|_| style::panel(style::INK)),
+					container(check)
+						.width(15)
+						.height(15)
+						.center(Length::Shrink)
+						.style(move |_| style::panel(colors.text)),
 				);
 			}
 			badges = badges.push(Space::new().width(Length::Fill));
@@ -697,11 +843,11 @@ impl FileManager {
 				.as_ref()
 				.is_some_and(|store| !store.data.assigned(&entry.path).is_empty())
 			{
-				badges = badges.push(svg(ui_icon!("tag")).width(13).height(13).style(|_, _| {
-					svg::Style {
-						color: Some(style::MUTED),
-					}
-				}));
+				badges = badges.push(svg(ui_icon!("tag")).width(13).height(13).style(
+					move |_, _| svg::Style {
+						color: Some(colors.secondary),
+					},
+				));
 			}
 			iced::widget::stack![tile, container(badges).padding(8).width(Length::Fill)].into()
 		} else {
@@ -711,7 +857,7 @@ impl FileManager {
 			.on_press(BrowserMessage::Clicked(entry.path.clone()).into())
 			.on_double_click(BrowserMessage::OpenEntry(entry.path.clone()).into())
 			.interaction(iced::mouse::Interaction::Pointer);
-		control(pointer, selected)
+		control(pointer, selected, colors)
 			.padding(0)
 			.id(entry.id.clone())
 			.on_context_menu_with_mouse_position({

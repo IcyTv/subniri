@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use bluer::Session;
 use iced::{Animation, Length, Subscription, Task};
-use neo_widgets::{phosphor_icon, style::COLORS, widgets::NeoButton};
+use neo_widgets::{phosphor_icon, style::Colors, widgets::NeoButton};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -146,15 +146,13 @@ impl Bluetooth {
 		self.active_devices = state.active_devices;
 	}
 
-	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
+	pub fn view_tile(&self, size: iced::Size, colors: Colors) -> NeoButton<'_, Message> {
 		let icon_color =
 			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green, Instant::now());
-		let background =
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green90, Instant::now());
+				.interpolate(colors.surface, colors.decorative.green, Instant::now());
 
-		neo_widgets::widgets::neo_tile(
+		neo_widgets::widgets::neo_tile_with_colors(
+			colors,
 			phosphor_icon!("bluetooth"),
 			"Bluetooth",
 			self.subtitle(),
@@ -162,7 +160,6 @@ impl Bluetooth {
 			Some(icon_color),
 			size,
 		)
-		.background(background)
 		.on_press(Message::Toggle)
 		.enabled(self.async_data.is_some() && self.pending.is_none())
 		.width(Length::Fill)
@@ -183,7 +180,7 @@ impl Bluetooth {
 		} else if self.enabled.value() {
 			format!("{} devices", self.active_devices)
 		} else {
-			"Disabled".to_string()
+			String::new()
 		}
 	}
 }

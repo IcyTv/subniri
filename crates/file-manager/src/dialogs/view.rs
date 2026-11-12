@@ -7,6 +7,7 @@ use iced::{
 
 impl FileManager {
 	pub(crate) fn confirmation_view(&self, id: iced::window::Id) -> Element<'_, crate::Message> {
+		let colors = self.appearance.colors();
 		let Some(pending) = self.dialogs.pending.as_ref().filter(|p| p.id == id) else {
 			return Space::new().into();
 		};
@@ -46,16 +47,16 @@ impl FileManager {
 				.width(Length::Fill),
 		)
 		.on_press(Message::Drag(id).into());
-		let close =
-			style::control(text("×").size(18), false).on_press(Message::Respond(id, false).into());
+		let close = style::control(text("×").size(18), false, colors)
+			.on_press(Message::Respond(id, false).into());
 		let active = pending.phase == Phase::Open;
 		let buttons = row![
 			Space::new().width(Length::Fill),
-			style::control(text("Cancel").size(13), false)
+			style::control(text("Cancel").size(13), false, colors)
 				.id(cancel_id(id))
 				.enabled(active)
 				.on_press(Message::Respond(id, false).into()),
-			style::primary(text(confirm_label).size(13))
+			style::primary(text(confirm_label).size(13).color(colors.on_accent), colors)
 				.id(confirm_id(id))
 				.enabled(active)
 				.on_press(Message::Respond(id, true).into()),
@@ -78,7 +79,10 @@ impl FileManager {
 		)
 		.width(Length::Fill)
 		.height(Length::Fill)
-		.style(|_| style::panel(style::PAPER))
+		.style(move |_| container::Style {
+			text_color: Some(colors.text),
+			..style::panel(colors.body)
+		})
 		.into()
 	}
 

@@ -73,6 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Launcher::update,
 		Launcher::view,
 	)
+	.theme(|launcher: &Launcher, _| launcher.appearance.colors().iced_theme())
 	.style(Launcher::style)
 	.subscription(Launcher::subscription)
 	.layer_settings(LayerShellSettings {

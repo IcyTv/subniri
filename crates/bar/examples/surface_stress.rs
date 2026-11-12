@@ -156,10 +156,15 @@ impl Probe {
 		} else {
 			if !self.simple {
 				if !self.animate {
-					return self.clock.view_popup().map(Message::Clock);
+					return self
+						.clock
+						.view_popup(neo_widgets::style::LIGHT)
+						.map(Message::Clock);
 				}
 				return neo_widgets::widgets::grow(
-					self.clock.view_popup().map(Message::Clock),
+					self.clock
+						.view_popup(neo_widgets::style::LIGHT)
+						.map(Message::Clock),
 					Duration::from_millis(50),
 					iced::animation::Easing::EaseOutQuart,
 					neo_widgets::widgets::GrowFrom::TopCenter,

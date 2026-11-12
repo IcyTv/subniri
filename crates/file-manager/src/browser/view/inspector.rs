@@ -16,10 +16,12 @@ const DETAILS_HEIGHT: f32 = 104.0;
 
 impl FileManager {
 	pub(super) fn selection_inspector(&self, gutter: u16) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let selected = self.entries.iter().find(|entry| {
 			self.selection.paths.len() == 1 && self.selection.paths.contains(&entry.path)
 		});
 		let count = self.selection.paths.len();
+
 		let details: Element<'_, Message> = if self.show_info {
 			let content = selected.map_or_else(
 				|| {
@@ -30,11 +32,11 @@ impl FileManager {
 							"Select an item to view its details."
 						})
 						.size(12)
-						.color(style::MUTED),
+						.color(colors.secondary),
 					)
 					.padding(14)
 					.width(Length::Fill)
-					.style(|_| style::panel(style::SIDEBAR))
+					.style(move |_| style::panel(colors.surface))
 					.into()
 				},
 				|entry| self.selected_tags(entry),
@@ -46,18 +48,18 @@ impl FileManager {
 		} else {
 			Space::new().into()
 		};
+
+		let enabled_color = colors.text_on(colors.black);
 		let action_color = if count == 1 {
-			style::PAPER
+			enabled_color
 		} else {
-			style::MUTED
+			colors.secondary
 		};
-		let icon = |handle| {
+		let icon = |handle, color| {
 			svg(handle)
 				.width(16)
 				.height(16)
-				.style(move |_, _| svg::Style {
-					color: Some(action_color),
-				})
+				.style(move |_, _| svg::Style { color: Some(color) })
 		};
 		let strip = container(
 			row![
@@ -65,7 +67,11 @@ impl FileManager {
 					.width(16)
 					.height(16)
 					.style(move |_, _| svg::Style {
-						color: Some(if count > 0 { style::BLUE } else { style::MUTED }),
+						color: Some(if count > 0 {
+							colors.decorative.blue
+						} else {
+							colors.secondary
+						}),
 					}),
 				text(selected.map_or_else(
 					|| if count > 1 {
@@ -81,29 +87,43 @@ impl FileManager {
 				.ellipsis(iced::advanced::text::Ellipsis::End),
 				style::dark_control(
 					row![
-						icon(ui_icon!("arrow-square-out")),
+						icon(ui_icon!("arrow-square-out"), action_color),
 						text("Open").size(11).color(action_color)
 					]
-					.spacing(6)
+					.spacing(6),
+					colors,
 				)
 				.id("selection-open")
 				.on_press(BrowserMessage::OpenSelected.into())
 				.enabled(count == 1)
-				.disabled_background(style::INK),
+				.disabled_background(colors.disabled_background),
 				style::dark_control(
 					row![
-						icon(ui_icon!("info")),
-						text(if self.show_info { "Hide info" } else { "Info" }).size(11)
+						icon(ui_icon!("info"), enabled_color),
+						text(if self.show_info { "Hide info" } else { "Info" })
+							.size(11)
+							.color(enabled_color)
 					]
-					.spacing(6)
+					.spacing(6),
+					colors,
 				)
 				.id("selection-info")
 				.on_press(BrowserMessage::ToggleInfo.into()),
-				style::dark_control(icon(ui_icon!("x")))
-					.id("selection-clear")
-					.on_press(BrowserMessage::ClearSelection.into())
-					.enabled(count > 0)
-					.disabled_background(style::INK),
+				style::dark_control(
+					icon(
+						ui_icon!("x"),
+						if count > 0 {
+							enabled_color
+						} else {
+							colors.secondary
+						},
+					),
+					colors,
+				)
+				.id("selection-clear")
+				.on_press(BrowserMessage::ClearSelection.into())
+				.enabled(count > 0)
+				.disabled_background(colors.disabled_background),
 			]
 			.spacing(8)
 			.align_y(Alignment::Center),
@@ -112,10 +132,11 @@ impl FileManager {
 		.width(Length::Fill)
 		.height(Length::Fill)
 		.center_y(Length::Fill)
-		.style(|_| container::Style {
-			text_color: Some(style::PAPER),
-			..style::panel(style::INK)
+		.style(move |_| container::Style {
+			text_color: Some(colors.text_on(colors.black)),
+			..style::panel(colors.black)
 		});
+
 		container(inspector_layout(strip.into(), details, self.show_info))
 			.padding(iced::Padding {
 				left: f32::from(gutter),

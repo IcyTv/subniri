@@ -10,8 +10,8 @@ use iced::{
 };
 use neo_widgets::{
 	icons::{ResolvedIcon, background::resolve_from_window},
-	style::COLORS,
-	widgets::{NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_button, neo_card},
+	style::Colors,
+	widgets::{NeoContentSurfaceStyle, neo_button},
 };
 use niri_ipc::{
 	Action, Event, Reply, Request, Response, Window, Workspace, WorkspaceReferenceArg,
@@ -24,6 +24,8 @@ use tokio::{
 };
 
 use crate::modules::{MODULE_HEIGHT, MODULE_RADIUS};
+
+const WORKSPACE_PREVIEW_GAP: f32 = 2.0;
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -174,7 +176,7 @@ impl Taskbar {
 		}
 	}
 
-	pub fn view(&self, output_name: Option<&str>) -> Element<'_, Message> {
+	pub fn view(&self, output_name: Option<&str>, colors: Colors) -> Element<'_, Message> {
 		let mut row = row![]
 			.spacing(4)
 			.padding([0, 8])
@@ -186,7 +188,7 @@ impl Taskbar {
 			}
 
 			if workspace.is_active {
-				row = row.push(workspace_btn(workspace, &[]));
+				row = row.push(workspace_btn(workspace, &[], colors));
 
 				row = row.push(space().width(1));
 
@@ -195,26 +197,27 @@ impl Taskbar {
 						continue;
 					}
 
-					row = row.push(window_btn(window));
+					row = row.push(window_btn(window, colors));
 				}
 
 				if index != self.workspaces.len() - 1 {
 					row = row.push(space().width(1));
 				}
 			} else {
-				row = row.push(workspace_btn(workspace, &self.windows));
+				row = row.push(workspace_btn(workspace, &self.windows, colors));
 			}
 		}
 
-		neo_card(row)
+		container(row)
 			.height(MODULE_HEIGHT)
-			.radius(MODULE_RADIUS)
-			.padding(0)
+			.align_y(iced::Alignment::Center)
 			.into()
 	}
 }
 
-fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element<'a, Message> {
+fn workspace_btn<'a>(
+	workspace: &'a Workspace, windows: &'a [Window], colors: Colors,
+) -> Element<'a, Message> {
 	let content: Element<Message> = if workspace.is_active {
 		"".into()
 	} else {
@@ -224,81 +227,69 @@ fn workspace_btn<'a>(workspace: &'a Workspace, windows: &'a [Window]) -> Element
 			.take(4)
 			.collect::<Vec<_>>();
 
-		workspace_preview(&windows)
-	};
-
-	let surface = NeoSurfaceStyle {
-		background: if workspace.is_active {
-			COLORS.decorative.yellow
-		} else {
-			COLORS.white
-		},
-		shadow_width: 2.0,
-		..Default::default()
+		let inset = NeoContentSurfaceStyle::with_colors(colors).inset();
+		workspace_preview(&windows, MODULE_HEIGHT - inset.height)
 	};
 
 	neo_button(content)
-		.style(NeoButtonStyle {
-			surface: NeoContentSurfaceStyle {
-				surface,
-				padding: 4.0.into(),
-			},
-			hovered: surface,
-			..Default::default()
+		.with_colors(colors)
+		.radius(MODULE_RADIUS)
+		.height(MODULE_HEIGHT)
+		.width(MODULE_HEIGHT)
+		.background(if workspace.is_active {
+			colors.decorative.yellow
+		} else {
+			colors.surface
 		})
-		.height(MODULE_HEIGHT - 20.)
-		.width(MODULE_HEIGHT - 20.)
 		.on_press(Message::FocusWorkspace(workspace.id))
 		.into()
 }
 
-fn workspace_preview<'a>(windows: &[&'a Window]) -> Element<'a, Message> {
-	const IMAGE_SIZE: f32 = 8.0;
-	const ICON_GAP: f32 = 2.0;
-	const PREVIEW_SIZE: f32 = IMAGE_SIZE * 2.0 + ICON_GAP;
+fn workspace_preview<'a>(windows: &[&'a Window], preview_size: f32) -> Element<'a, Message> {
+	let icon_size = workspace_preview_icon_size(windows.len(), preview_size);
 
 	let preview: Element<_> = match windows {
 		[] => space()
-			.width(Length::Fixed(PREVIEW_SIZE))
-			.height(Length::Fixed(PREVIEW_SIZE))
+			.width(Length::Fixed(preview_size))
+			.height(Length::Fixed(preview_size))
 			.into(),
-		[window] => container(workspace_preview_icon(window))
-			.width(Length::Fixed(PREVIEW_SIZE))
-			.height(Length::Fixed(PREVIEW_SIZE))
+		[window] => container(workspace_preview_icon(window, icon_size))
+			.width(Length::Fixed(preview_size))
+			.height(Length::Fixed(preview_size))
 			.center_x(Length::Fill)
 			.center_y(Length::Fill)
 			.into(),
 		[window_a, window_b] => row![
-			workspace_preview_icon(window_a),
-			workspace_preview_icon(window_b)
+			workspace_preview_icon(window_a, icon_size),
+			workspace_preview_icon(window_b, icon_size)
 		]
-		.spacing(ICON_GAP)
+		.spacing(WORKSPACE_PREVIEW_GAP)
 		.into(),
 		[window_a, window_b, window_c] => column![
 			row![
-				workspace_preview_icon(window_a),
-				workspace_preview_icon(window_b)
+				workspace_preview_icon(window_a, icon_size),
+				workspace_preview_icon(window_b, icon_size)
 			]
-			.spacing(ICON_GAP),
-			container(workspace_preview_icon(window_c))
-				.width(Length::Fixed(PREVIEW_SIZE))
+			.spacing(WORKSPACE_PREVIEW_GAP),
+			container(workspace_preview_icon(window_c, icon_size))
+				.width(Length::Fixed(preview_size))
 				.center_x(Length::Fill),
 		]
-		.spacing(ICON_GAP)
+		.spacing(WORKSPACE_PREVIEW_GAP)
 		.into(),
 		[window_a, window_b, window_c, window_d] => column![
 			row![
-				workspace_preview_icon(window_a),
-				workspace_preview_icon(window_b)
+				workspace_preview_icon(window_a, icon_size),
+				workspace_preview_icon(window_b, icon_size)
 			]
-			.spacing(ICON_GAP),
+			.spacing(WORKSPACE_PREVIEW_GAP),
 			row![
-				workspace_preview_icon(window_c),
-				workspace_preview_icon(window_d)
+				workspace_preview_icon(window_c, icon_size),
+				workspace_preview_icon(window_d, icon_size)
 			]
-			.spacing(ICON_GAP),
+			.spacing(WORKSPACE_PREVIEW_GAP),
 		]
-		.spacing(ICON_GAP)
+		.spacing(WORKSPACE_PREVIEW_GAP)
 		.into(),
 		_ => unreachable!(),
 	};
@@ -311,34 +302,43 @@ fn workspace_preview<'a>(windows: &[&'a Window]) -> Element<'a, Message> {
 		.into()
 }
 
-fn workspace_preview_icon(window: &Window) -> Element<'_, Message> {
-	const IMAGE_SIZE: Length = Length::Fixed(8.0);
-
-	match resolve_from_window(window, 8, 1) {
-		ResolvedIcon::Svg(handle) => svg(handle).width(IMAGE_SIZE).height(IMAGE_SIZE).into(),
-		ResolvedIcon::Image(handle) => image(handle).width(IMAGE_SIZE).height(IMAGE_SIZE).into(),
+fn workspace_preview_icon_size(count: usize, preview_size: f32) -> f32 {
+	if count <= 1 {
+		preview_size
+	} else {
+		(preview_size - WORKSPACE_PREVIEW_GAP) / 2.0
 	}
 }
 
-fn window_btn(window: &Window) -> Element<'_, Message> {
-	let icon = resolve_from_window(window, 32, 2);
+fn workspace_preview_icon(window: &Window, size: f32) -> Element<'_, Message> {
+	match resolve_from_window(window, size.ceil() as u32, 2) {
+		ResolvedIcon::Svg(handle) => svg(handle).width(size).height(size).into(),
+		ResolvedIcon::Image(handle) => image(handle).width(size).height(size).into(),
+	}
+}
+
+fn window_btn(window: &Window, colors: Colors) -> Element<'_, Message> {
+	let inset = NeoContentSurfaceStyle::with_colors(colors).inset();
+	let icon = resolve_from_window(window, (MODULE_HEIGHT - inset.height) as u32, 2);
 	let icon: Element<Message> = match icon {
-		ResolvedIcon::Svg(handle) => svg(handle).into(),
+		ResolvedIcon::Svg(handle) => svg(handle).width(Length::Fill).height(Length::Fill).into(),
 		ResolvedIcon::Image(handle) => image(handle)
+			.width(Length::Fill)
+			.height(Length::Fill)
 			.filter_method(image::FilterMethod::Linear)
 			.expand(true)
 			.into(),
 	};
 
 	neo_button(icon)
-		.shadow_width(0.0)
-		.padding(4.0)
-		.height(MODULE_HEIGHT - 20.0)
-		.width(MODULE_HEIGHT - 20.0)
+		.with_colors(colors)
+		.radius(MODULE_RADIUS)
+		.height(MODULE_HEIGHT)
+		.width(MODULE_HEIGHT)
 		.background(if window.is_focused {
-			COLORS.decorative.pink
+			colors.decorative.pink
 		} else {
-			COLORS.white
+			colors.surface
 		})
 		.on_press(Message::FocusWindow(window.id))
 		.into()
@@ -430,4 +430,71 @@ fn win_sort_key(w: &Window) -> impl Ord {
 	// TODO what about tabbed? Can niri do tabbed?
 	let (col, tile) = w.layout.pos_in_scrolling_layout.unwrap_or_default();
 	(w.workspace_id, col, tile, w.id)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn workspace_preview_icons_fill_single_and_grid_content() {
+		for colors in [neo_widgets::style::LIGHT, neo_widgets::style::DARK] {
+			let available =
+				MODULE_HEIGHT - NeoContentSurfaceStyle::with_colors(colors).inset().height;
+
+			assert_eq!(workspace_preview_icon_size(1, available), available);
+			for count in 2..=4 {
+				let size = workspace_preview_icon_size(count, available);
+
+				assert_eq!(size * 2.0 + WORKSPACE_PREVIEW_GAP, available);
+				assert!(
+					size > 8.0,
+					"previews must grow beyond the old fixed 8px icons"
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn taskbar_buttons_are_matching_module_squares_in_both_themes() -> Result<(), serde_json::Error>
+	{
+		let window: Window = serde_json::from_value(serde_json::json!({
+			"id": 1,
+			"workspace_id": 1,
+			"is_focused": true,
+			"is_floating": false,
+			"is_urgent": false,
+			"layout": {
+				"tile_size": [800.0, 600.0],
+				"window_size": [800, 600],
+				"window_offset_in_tile": [0.0, 0.0]
+			}
+		}))?;
+		let mut workspace = Workspace {
+			id: 1,
+			idx: 1,
+			name: None,
+			output: None,
+			is_urgent: false,
+			is_active: true,
+			is_focused: true,
+			active_window_id: Some(window.id),
+		};
+
+		for colors in [neo_widgets::style::LIGHT, neo_widgets::style::DARK] {
+			let button = window_btn(&window, colors);
+			let expected =
+				iced::Size::new(Length::Fixed(MODULE_HEIGHT), Length::Fixed(MODULE_HEIGHT));
+
+			assert_eq!(button.as_widget().size(), expected);
+			for active in [true, false] {
+				workspace.is_active = active;
+				let button = workspace_btn(&workspace, std::slice::from_ref(&window), colors);
+
+				assert_eq!(button.as_widget().size(), expected);
+			}
+		}
+
+		Ok(())
+	}
 }

@@ -78,6 +78,13 @@ impl<T: Num + Clone, Message> NeoSlider<T, Message> {
 		self
 	}
 
+	pub fn with_colors(mut self, colors: crate::style::Colors) -> Self {
+		self.track.background = colors.surface;
+		self.handle.background = colors.decorative.yellow;
+		self.running_color = colors.decorative.pink70;
+		self
+	}
+
 	pub fn handle_style(mut self, style: NeoSurfaceStyle) -> Self {
 		self.handle = style;
 		self

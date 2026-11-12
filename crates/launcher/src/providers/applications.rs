@@ -12,7 +12,7 @@ use async_channel::{Receiver, Sender};
 use config::LauncherTypoSearch;
 use freedesktop_desktop_entry::{DesktopEntry, desktop_entries, get_languages_from_env};
 use iced::widget::{span, text::Span};
-use neo_widgets::{icons::resolve_icon, style::COLORS};
+use neo_widgets::icons::resolve_icon;
 use tokio::{process::Command, sync::RwLock};
 use utilities::matching::{self, SkimMatcherV2, TypoOptions};
 use zbus::zvariant::{OwnedObjectPath, Value};
@@ -136,7 +136,11 @@ fn plain_spans(text: &str) -> Arc<[Span<'static, ()>]> {
 fn span_for(text: String, highlight: bool) -> Span<'static, ()> {
 	let mut span = span(text);
 	if highlight {
-		span = span.color(COLORS.decorative.purple);
+		// Retain match semantics without caching a particular theme's colours.
+		span = span.font(iced::Font {
+			weight: iced::font::Weight::Bold,
+			..Default::default()
+		});
 	}
 
 	span

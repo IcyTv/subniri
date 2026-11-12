@@ -52,10 +52,9 @@ impl Writer {
 				tokio::task::spawn_blocking(move || {
 					// Read afresh and change only the menu layout: don't overwrite
 					// unrelated settings with an old UI configuration snapshot.
-					let (mut doc, mut config) =
-						ConfigFile::load().map_err(|error| error.to_string())?;
-					config.system_menu = layout;
-					config.write(&mut doc).map_err(|error| error.to_string())
+					ConfigFile::update(|config| config.system_menu = layout)
+						.map(|_| ())
+						.map_err(|error| error.to_string())
 				})
 				.await
 				.unwrap_or_else(|error| Err(error.to_string()))

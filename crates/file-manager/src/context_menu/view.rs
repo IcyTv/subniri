@@ -8,12 +8,14 @@ use iced::{
 
 impl FileManager {
 	pub(crate) fn menu_view(&self, id: window::Id) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let Some(menu) = &self.menu else {
 			return iced::widget::Space::new().into();
 		};
 		let Some(page) = menu.page(id) else {
 			return iced::widget::Space::new().into();
 		};
+
 		let rows = self.menu_rows(id);
 		let mut items = column![].spacing(2);
 		let mut previous = "";
@@ -28,8 +30,13 @@ impl FileManager {
 			};
 			if page.query.is_empty() && page.parent_action.is_none() && group != previous {
 				items = items.push(
-					container(text(group).font(style::MONO).size(9).color(style::MUTED))
-						.padding([6, 8]),
+					container(
+						text(group)
+							.font(style::MONO)
+							.size(9)
+							.color(colors.secondary),
+					)
+					.padding([6, 8]),
 				);
 				previous = group;
 			}
@@ -48,10 +55,10 @@ impl FileManager {
 				.align_y(Alignment::Center)
 			];
 			if let Some(reason) = item.disabled {
-				content = content.push(text(reason).size(10).color(style::MUTED));
+				content = content.push(text(reason).size(10).color(colors.secondary));
 			}
 			let action = item.action;
-			let mut button = style::menu_control(content, selected)
+			let mut button = style::menu_control(content, selected, colors)
 				.enabled(item.disabled.is_none())
 				.id(page.row_id(action))
 				.width(Length::Fill)
@@ -75,6 +82,7 @@ impl FileManager {
 					style::menu_control(
 						text(if pinned { "★" } else { "☆" }).size(16).center(),
 						selected,
+						colors,
 					)
 					.padding([7, 8])
 					.width(34)
@@ -88,7 +96,7 @@ impl FileManager {
 				iced::widget::Space::new().width(34).into()
 			};
 			let separator = container(iced::widget::Space::new().width(1).height(18))
-				.style(move |_| style::panel(if selected { style::INK } else { style::PAPER }));
+				.style(move |_| style::panel(if selected { colors.text } else { colors.body }));
 			let line = container(
 				row![button, separator, pin]
 					.spacing(0)
@@ -98,14 +106,18 @@ impl FileManager {
 			.style(move |_| container::Style {
 				border: iced::Border {
 					color: if selected {
-						style::INK
+						colors.text
 					} else {
 						iced::Color::TRANSPARENT
 					},
 					width: 1.0,
 					radius: 0.0.into(),
 				},
-				..style::panel(if selected { style::BLUE } else { style::PAPER })
+				..style::panel(if selected {
+					colors.decorative.blue
+				} else {
+					colors.body
+				})
 			});
 			let area =
 				mouse_area(line).on_exit(ContextMenuMessage::MenuHover(id, action, false).into());
@@ -127,7 +139,7 @@ impl FileManager {
 				let marker = |show| {
 					container(iced::widget::Space::new().height(2))
 						.width(Length::Fill)
-						.style(move |_| style::panel(if show { style::INK } else { style::PAPER }))
+						.style(move |_| style::panel(if show { colors.text } else { colors.body }))
 				};
 				items = items.push(column![
 					marker(insertion.is_some_and(|(_, after)| !after)),
@@ -138,9 +150,10 @@ impl FileManager {
 				items = items.push(line);
 			}
 		}
+
 		if !page.query.is_empty() && self.menu_rows(id).is_empty() {
 			items = items.push(
-				container(text("No matching actions").size(12).color(style::MUTED)).padding(8),
+				container(text("No matching actions").size(12).color(colors.secondary)).padding(8),
 			);
 		}
 		let mut body = column![
@@ -149,24 +162,26 @@ impl FileManager {
 				.size(13)
 				.padding([13, 12])
 				.on_input(move |query| ContextMenuMessage::MenuInput(id, query).into())
-				.style(style::menu_search)
+				.style(move |theme, status| style::menu_search(theme, status, colors))
 		]
 		.spacing(0);
+
 		// Keep the scrollable at a stable child index while save/error status changes.
 		let mut status = column![];
 		if !menu.available {
 			status = status.push(
-				container(text("Item no longer available").size(12).color(style::INK))
+				container(text("Item no longer available").size(12).color(colors.text))
 					.padding([8, 10]),
 			);
 		}
 		if let Some(error) = &self.favorites.error {
 			status =
-				status.push(container(text(error).size(10).color(style::INK)).padding([8, 10]));
+				status.push(container(text(error).size(10).color(colors.text)).padding([8, 10]));
 		}
 		if self.favorites.running() {
 			status = status.push(
-				container(text("Saving favorites…").size(10).color(style::MUTED)).padding([8, 10]),
+				container(text("Saving favorites…").size(10).color(colors.secondary))
+					.padding([8, 10]),
 			);
 		}
 		body = body.push(status);
@@ -185,22 +200,24 @@ impl FileManager {
 			})
 			.height(Length::Fill),
 		);
+
 		let content = container(body)
 			.width(320)
 			.height(self.host_size.height.min(480.0).max(160.0))
 			.padding(1.5)
-			.style(|_| container::Style {
+			.style(move |_| container::Style {
 				border: iced::Border {
-					color: style::INK,
+					color: colors.text,
 					width: 1.5,
 					radius: 0.0.into(),
 				},
 				shadow: iced::Shadow {
-					color: style::INK,
+					color: colors.text,
 					offset: iced::Vector::new(3.0, 3.0),
 					blur_radius: 0.0,
 				},
-				..style::panel(style::PAPER)
+				text_color: Some(colors.text),
+				..style::panel(colors.body)
 			});
 		crate::ui::input::menu_gate(
 			container(content)

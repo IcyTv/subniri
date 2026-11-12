@@ -1,21 +1,25 @@
 //! Give the background context target explicit fill constraints. A shrink-sized
 //! button around proportional scroll regions otherwise collapses their layout.
-use crate::{Message, drives, ui::style};
+use crate::{Message, drives};
 use iced::{Element, Length, Theme, advanced::Renderer, widget::container};
-use neo_widgets::widgets::{NeoButton, NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle};
+use neo_widgets::{
+	style::Colors,
+	widgets::{NeoButton, NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle},
+};
 
 pub(super) fn background<'a, R: Renderer + 'a>(
-	content: Element<'a, Message, Theme, R>,
+	content: Element<'a, Message, Theme, R>, colors: Colors,
 ) -> Element<'a, Message, Theme, R> {
 	let surface = NeoSurfaceStyle {
-		background: style::SIDEBAR,
-		border: style::INK,
+		background: colors.surface,
+		border: colors.border,
 		radius: 0.0,
 		border_width: 0.0,
 		shadow_width: 0.0,
 	};
 
 	NeoButton::new(container(content).width(Length::Fill).height(Length::Fill))
+		.with_colors(colors)
 		.style(NeoButtonStyle {
 			surface: NeoContentSurfaceStyle {
 				surface,
@@ -26,7 +30,7 @@ pub(super) fn background<'a, R: Renderer + 'a>(
 				surface,
 				padding: 0.into(),
 			},
-			disabled_background: style::SIDEBAR,
+			disabled_background: colors.surface,
 		})
 		.width(Length::Fill)
 		.height(Length::Fill)
@@ -52,7 +56,7 @@ mod tests {
 		]
 		.height(Length::Fill)
 		.into();
-		let mut view = background(content);
+		let mut view = background(content, neo_widgets::style::LIGHT);
 		let mut tree = Tree::new(view.as_widget());
 		view.as_widget_mut().diff(&mut tree);
 

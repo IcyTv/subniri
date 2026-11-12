@@ -39,6 +39,11 @@ impl<'a, Message, Theme, Renderer> NeoCard<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	pub fn with_colors(mut self, colors: crate::style::Colors) -> Self {
+		self.style = NeoCardStyle::with_colors(colors);
+		self
+	}
+
 	pub fn width(mut self, width: impl Into<Length>) -> Self {
 		self.width = width.into();
 		self

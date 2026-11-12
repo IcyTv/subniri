@@ -8,12 +8,12 @@ use iced::{
 	Alignment, Animation, Element, Font, Length, Subscription, Task,
 	alignment::Vertical,
 	font,
-	widget::{Svg, column, container, row, rule, space, svg, text},
+	widget::{Svg, column, container, row, space, svg, text},
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
-	widgets::{NeoButton, neo_button, neo_card, neo_toggle},
+	style::Colors,
+	widgets::{NeoButton, neo_button, neo_card, neo_scrollable, neo_toggle},
 };
 use nmrs::{
 	AccessPoint, ActiveConnection, ActiveConnectionState, ConnectivityState, NetworkManager,
@@ -129,48 +129,58 @@ impl Network {
 		Task::none()
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		neo_button(
 			row![
-				self.connectivity_icon()
+				self.connectivity_icon(true, colors)
 					.width(Length::Shrink)
 					.height(ICON_HEIGHT),
-				text(self.active_name())
-					.font(Font {
-						weight: font::Weight::Bold,
-						..Font::DEFAULT
-					})
-					.color(COLORS.text)
-					.size(18)
-					.align_y(Vertical::Center)
+				super::module_label(
+					text(self.active_name())
+						.font(Font {
+							weight: font::Weight::Bold,
+							..Font::DEFAULT
+						})
+						.color(colors.on_accent)
+						.size(18)
+						.align_y(Vertical::Center)
+				)
 			]
 			.spacing(5.)
 			.align_y(Vertical::Center),
 		)
+		.with_colors(colors)
 		.height(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
-		.background(COLORS.decorative.green)
+		.background(colors.decorative.green)
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
-		let svg_rotation = self
-			.scanning
-			.interpolate(std::f32::consts::TAU, 0.0, Instant::now());
-
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		let top_row = row![
 			svg(phosphor_icon!("wifi-high", "bold"))
-				.width(ICON_HEIGHT * 1.5)
-				.height(ICON_HEIGHT * 1.5),
-			text("Network").weight(font::Weight::Bold),
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				})
+				.width(24)
+				.height(24),
+			text("Network")
+				.color(colors.text)
+				.size(20)
+				.weight(font::Weight::Bold),
 			space::horizontal(),
 			neo_button(
-				svg(phosphor_icon!("arrow-counter-clockwise", "bold"))
-					.rotation(svg_rotation)
-					.width(ICON_HEIGHT)
-					.height(ICON_HEIGHT)
+				text(if self.scanning.value() {
+					"Scanning…"
+				} else {
+					"Scan"
+				})
+				.color(colors.text)
 			)
+			.with_colors(colors)
+			.enabled(!self.scanning.value())
 			.on_press(Message::ScanWifi),
 			neo_toggle()
+				.with_colors(colors)
 				.toggled(self.wifi_enabled())
 				.enabled(self.snapshot.wifi.present && self.snapshot.wifi.hardware_enabled)
 				.on_toggled(Message::ToggleWifi)
@@ -178,7 +188,7 @@ impl Network {
 				.width(40.0)
 		]
 		.align_y(Alignment::Center)
-		.spacing(5.0);
+		.spacing(12.0);
 
 		let primary_connection = self.primary_connection(ActiveConnectionState::Activated);
 
@@ -241,28 +251,53 @@ impl Network {
 
 		let connection_widget = neo_card(
 			row![
-				self.connectivity_icon().width(28.0).height(28.0),
-				column![text(active_text), text(active_subtext).size(10.0)]
+				self.connectivity_icon(false, colors)
+					.width(28.0)
+					.height(28.0),
+				column![
+					text(active_text)
+						.color(colors.text)
+						.size(16)
+						.wrapping(text::Wrapping::None)
+						.ellipsis(text::Ellipsis::End),
+					text(active_subtext).color(colors.secondary).size(12.0)
+				]
+				.spacing(4)
+				.width(Length::Fill)
 			]
 			.align_y(Alignment::Center)
 			.spacing(10.0)
 			.width(Length::Fill),
 		)
+		.with_colors(colors)
+		.background(colors.surface)
 		.width(Length::Fill);
 
-		let wifi_networks: Element<Message> = if self.wifi_enabled() {
+		let wifi_networks: Element<Message> = if self.wifi_enabled()
+			&& !self.snapshot.access_points.is_empty()
+		{
 			column(
 				self.snapshot
 					.access_points
 					.iter()
-					.map(Self::view_access_point),
-			)
+					.map(|ap| {
+						let known = self.snapshot.saved_wifi_profiles.iter().any(|profile| {
+							matches!(&profile.summary, nmrs::models::SettingsSummary::Wifi { ssid, .. } if ssid == &ap.ssid)
+						});
+						Self::view_access_point(ap, known, colors)
+					}),
+			).spacing(8)
 			.into()
 		} else {
 			container(
-				text("Enable wifi to see available networks")
-					.wrapping(text::Wrapping::Word)
-					.weight(font::Weight::Bold),
+				text(if self.wifi_enabled() {
+					"No networks found"
+				} else {
+					"Enable Wi-Fi to see available networks"
+				})
+				.color(colors.secondary)
+				.size(14)
+				.wrapping(text::Wrapping::Word),
 			)
 			.center_x(Length::Fill)
 			.into()
@@ -270,21 +305,23 @@ impl Network {
 
 		let content = column![
 			top_row,
-			rule::horizontal(2.0),
-			text("Active Connections").weight(font::Weight::Bold),
 			connection_widget,
-			rule::horizontal(2.0),
-			wifi_networks,
+			text("Wi-Fi networks").color(colors.secondary).size(14),
+			neo_scrollable(wifi_networks)
+				.with_colors(colors)
+				.height(Length::Shrink.max(260)),
 		]
-		.spacing(10.0);
+		.spacing(16.0);
 
 		neo_card(content)
+			.with_colors(colors)
 			.width(320.0)
-			.background(COLORS.decorative.green)
+			.radius(MODULE_RADIUS)
+			.background(colors.body)
 			.into()
 	}
 
-	fn connectivity_icon(&self) -> Svg<'_> {
+	fn connectivity_icon(&self, on_accent: bool, colors: Colors) -> Svg<'_> {
 		let active_transport = self.primary_transport(ActiveConnectionState::Activated);
 		let connecting_transport = self.primary_transport(ActiveConnectionState::Activating);
 
@@ -307,10 +344,15 @@ impl Network {
 			(phosphor_icon!("network-x", "bold"), true)
 		};
 
-		let color = if muted {
-			COLORS.black.scale_alpha(0.5)
+		let foreground = if on_accent {
+			colors.on_accent
 		} else {
-			COLORS.black
+			colors.text
+		};
+		let color = if muted {
+			foreground.scale_alpha(0.5)
+		} else {
+			foreground
 		};
 
 		svg(icon).style(move |_, _| svg::Style { color: Some(color) })
@@ -372,30 +414,75 @@ impl Network {
 			&& self.snapshot.wifi.enabled
 	}
 
-	fn view_access_point<'a>(ap: &'a AccessPoint) -> Element<'a, Message> {
+	fn view_access_point<'a>(
+		ap: &'a AccessPoint, known: bool, colors: Colors,
+	) -> Element<'a, Message> {
+		let lock = if known {
+			Some(phosphor_icon!("lock-simple-open", "bold"))
+		} else if !ap.security.is_open() {
+			Some(phosphor_icon!("lock-simple", "bold"))
+		} else {
+			None
+		};
+		let badge: Element<'a, Message> = lock.map_or_else(
+			|| space().width(16).into(),
+			|icon| {
+				svg(icon)
+					.width(16)
+					.height(16)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text),
+					})
+					.into()
+			},
+		);
+
 		neo_button(
 			row![
-				Self::wifi_icon_for_signal_strength(ap.strength)
+				Self::wifi_icon_for_signal_strength(ap.strength, colors)
 					.width(28.0)
 					.height(28.0),
-				column![text(&ap.ssid).ellipsis(text::Ellipsis::End),].spacing(2.0)
+				column![
+					text(&ap.ssid)
+						.color(colors.text)
+						.wrapping(text::Wrapping::None)
+						.ellipsis(text::Ellipsis::End),
+				]
+				.spacing(2.0)
+				.width(Length::Fill),
+				badge,
+				svg(phosphor_icon!("check", "bold"))
+					.width(if ap.is_active { 18 } else { 0 })
+					.height(18)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text)
+					}),
 			]
 			.align_y(Alignment::Center)
 			.width(Length::Fill)
 			.spacing(8.0),
 		)
+		.with_colors(colors)
+		.background(if ap.is_active {
+			colors.selection
+		} else {
+			colors.surface
+		})
 		.padding([0.0, 8.0])
 		.width(Length::Fill)
 		.height(60.0)
 		.into()
 	}
 
-	fn wifi_icon_for_signal_strength(strength: u8) -> Svg<'static> {
+	fn wifi_icon_for_signal_strength(strength: u8, colors: Colors) -> Svg<'static> {
 		match strength {
 			0..=39 => svg(phosphor_icon!("wifi-low", "bold")),
 			40..=69 => svg(phosphor_icon!("wifi-medium", "bold")),
 			40..=u8::MAX => svg(phosphor_icon!("wifi-high", "bold")),
 		}
+		.style(move |_, _| svg::Style {
+			color: Some(colors.text),
+		})
 	}
 
 	async fn snapshot(manager: &NetworkManager) -> nmrs::Result<NetworkSnapshot> {
@@ -567,6 +654,61 @@ mod tests {
 			.serve_at("/org/freedesktop/NetworkManager/Settings", Settings)?
 			.build()
 			.await?)
+	}
+
+	#[test]
+	#[ignore = "requires a private D-Bus and headless graphics renderer"]
+	fn network_popup_layout() -> Result<(), test_bus::Error> {
+		test_bus::run("modules::network::tests::popup_layout_child")
+	}
+
+	#[tokio::test]
+	#[ignore = "private-bus subprocess helper"]
+	async fn popup_layout_child() -> Result<(), test_bus::Error> {
+		use crate::modules::layout_tests;
+
+		test_bus::require_child()?;
+		let _service = snapshot_service().await?;
+		let mut network = Network::new().await?;
+		let mut renderer = layout_tests::renderer().await?;
+		for (theme, colors) in [
+			("light", neo_widgets::style::LIGHT),
+			("dark", neo_widgets::style::DARK),
+		] {
+			for (state, enabled) in [("empty", true), ("off", false)] {
+				network.snapshot.wifi.present = true;
+				network.snapshot.wifi.hardware_enabled = true;
+				network.snapshot.wifi.enabled = enabled;
+
+				let popup = layout_tests::capture(
+					network.view_popup(colors),
+					&mut renderer,
+					colors,
+					&format!("network-{state}-{theme}"),
+				)?;
+				assert_eq!(popup.nodes.first().ok_or("missing popup")?.width, 320.0);
+				assert!(popup.texts.contains_key("Network"));
+				assert!(popup.texts.contains_key(if enabled {
+					"No networks found"
+				} else {
+					"Enable Wi-Fi to see available networks"
+				}));
+				let button = layout_tests::capture(
+					network.view(colors).into(),
+					&mut renderer,
+					colors,
+					&format!("bar-network-{state}-{theme}"),
+				)?;
+				assert_eq!(
+					button.nodes.first().ok_or("missing button")?.height,
+					MODULE_HEIGHT
+				);
+				for bounds in button.texts.values() {
+					assert!((bounds.center_y() - 23.0).abs() < 0.01);
+				}
+			}
+		}
+		Ok(())
 	}
 
 	#[test]

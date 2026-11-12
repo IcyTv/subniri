@@ -7,7 +7,7 @@ use iced_runtime::core::font;
 use jiff::ToSpan;
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{neo_button, neo_card, neo_slider, neo_toggle},
 };
 use num_traits::{AsPrimitive, Num, NumCast};
@@ -42,8 +42,8 @@ pub struct Nightlight {
 }
 
 impl Nightlight {
-	pub fn accent_color() -> Color {
-		COLORS.decorative.orange
+	pub fn accent_color(colors: Colors) -> Color {
+		colors.decorative.orange
 	}
 
 	pub fn icon<'a>() -> Svg<'a> {
@@ -121,7 +121,7 @@ impl Nightlight {
 	}
 
 	#[allow(clippy::too_many_lines)]
-	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
+	pub fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
 		let dawn = config
 			.nightlight
 			.dawn
@@ -144,13 +144,13 @@ impl Nightlight {
 		neo_card(
 			row![
 				container(Self::icon())
-					.width(58)
-					.height(58)
-					.padding(12)
-					.style(|_| container::Style {
-						background: Some(iced::Background::Color(COLORS.white)),
+					.width(crate::sizing::HEADER_ICON)
+					.height(crate::sizing::HEADER_ICON)
+					.padding(crate::sizing::HEADER_ICON_PADDING)
+					.style(move |_| container::Style {
+						background: Some(iced::Background::Color(colors.surface)),
 						border: Border {
-							color: COLORS.border,
+							color: colors.border,
 							width: 2.0,
 							radius: 3.into(),
 						},
@@ -159,14 +159,14 @@ impl Nightlight {
 				column![
 					text("NIGHTLIGHT")
 						.width(Length::Fill)
-						.color(COLORS.text)
-						.size(34)
+						.color(colors.on_accent)
+						.size(crate::sizing::HEADER_TITLE)
 						.weight(font::Weight::Bold)
 						.stretch(font::Stretch::ExtraExpanded)
 						.wrapping(text::Wrapping::WordOrGlyph),
 					text("Save your eyes")
 						.width(Length::Fill)
-						.color(COLORS.text.scale_alpha(0.76))
+						.color(colors.on_accent.scale_alpha(0.76))
 						.size(14)
 						.weight(font::Weight::Bold),
 				]
@@ -174,6 +174,7 @@ impl Nightlight {
 
 				space::horizontal(),
 				neo_toggle()
+					.with_colors(colors)
 					.width(40)
 					.height(18)
 					.toggled(config.nightlight.enabled)
@@ -182,53 +183,54 @@ impl Nightlight {
 			.align_y(Alignment::Center)
 			.spacing(16)
 		)
+		.with_colors(colors)
 		.width(Length::Fill)
-		.height(116)
-		.background(Self::accent_color())
-		.padding(18),
+		.height(crate::sizing::HEADER_HEIGHT)
+		.background(Self::accent_color(colors))
+		.padding(crate::sizing::HEADER_PADDING),
 		// Settings
 		grid![
 			slider_card(
-				SliderCardArgs::new()
+				SliderCardArgs::new(colors)
 					.name("DAY TEMP")
 					.value(day_temp)
 					.display(format!("{day_temp}K"))
 					.range(1000..=10_000)
 					.step(10)
-					.accent(COLORS.decorative.yellow)
-					.handle(COLORS.decorative.pink)
-					.background(COLORS.decorative.yellow90)
+					.accent(colors.decorative.yellow)
+					.handle(colors.decorative.pink)
+					.background(colors.surface)
 					.on_change_live(Message::PreviewDayTemp)
 					.on_change(Message::UpdateDayTemp)
 			),
 				slider_card(
-					SliderCardArgs::new()
+					SliderCardArgs::new(colors)
 						.name("DAY BRIGHT")
 						.value(day_bright)
 						.display(format!("{:.0}%", day_bright * 100.0))
 						.range(0.0..=1.0)
 						.step(0.01)
-						.accent(COLORS.decorative.green)
-						.handle(COLORS.decorative.yellow)
-						.background(COLORS.decorative.green90)
+						.accent(colors.decorative.green)
+						.handle(colors.decorative.yellow)
+						.background(colors.surface)
 						.on_change_live(Message::PreviewDayBright)
 						.on_change(Message::UpdateDayBright)
 			),
 				slider_card(
-					SliderCardArgs::new()
+					SliderCardArgs::new(colors)
 						.name("NIGHT TEMP")
 						.value(night_temp)
 						.display(format!("{night_temp}K"))
 						.range(1000..=10_000)
 						.step(10)
-						.accent(COLORS.decorative.purple70)
-						.handle(COLORS.decorative.blue)
-						.background(COLORS.decorative.purple90)
+						.accent(colors.decorative.purple70)
+						.handle(colors.decorative.blue)
+						.background(colors.surface)
 						.on_change_live(Message::PreviewNightTemp)
 						.on_change(Message::UpdateNightTemp)
 			),
 				slider_card(
-					SliderCardArgs::new()
+					SliderCardArgs::new(colors)
 						.name("NIGHT BRIGHT")
 						.value(night_bright)
 						.display(format!(
@@ -237,9 +239,9 @@ impl Nightlight {
 						))
 						.range(0.0..=1.0)
 						.step(0.01)
-						.accent(COLORS.decorative.blue)
-						.handle(COLORS.decorative.yellow)
-						.background(COLORS.decorative.blue90)
+						.accent(colors.decorative.blue)
+						.handle(colors.decorative.yellow)
+						.background(colors.surface)
 						.on_change_live(Message::PreviewNightBright)
 						.on_change(Message::UpdateNightBright)
 			)
@@ -253,10 +255,10 @@ impl Nightlight {
 					container("")
 						.height(Length::Fill)
 						.width(8)
-						.style(|_| container::Style {
-							background: Some(iced::Background::Color(COLORS.decorative.pink)),
+						.style(move |_| container::Style {
+							background: Some(iced::Background::Color(colors.decorative.pink)),
 							border: Border {
-								color: COLORS.border,
+								color: colors.border,
 								width: 2.0,
 								radius: 3.into(),
 							},
@@ -264,11 +266,11 @@ impl Nightlight {
 						}),
 					column![
 						text("USE LOCATION")
-							.color(COLORS.text)
+							.color(colors.text)
 							.size(18)
 							.weight(font::Weight::Bold),
 						text("Let geoclue and weather data determine dusk and dawn")
-							.color(COLORS.text.scale_alpha(0.7))
+							.color(colors.text.scale_alpha(0.7))
 							.size(13)
 							.weight(font::Weight::Bold)
 							.wrapping(text::Wrapping::Word)
@@ -276,6 +278,7 @@ impl Nightlight {
 					.spacing(4)
 					.width(Length::Fill),
 					neo_toggle()
+						.with_colors(colors)
 						.toggled(config.nightlight.use_location)
 						.width(40)
 						.height(18)
@@ -286,17 +289,17 @@ impl Nightlight {
 				container("")
 					.height(2)
 					.width(Length::Fill)
-					.style(|_| container::Style {
-						background: Some(iced::Background::Color(COLORS.black)),
+					.style(move |_| container::Style {
+						background: Some(iced::Background::Color(colors.border)),
 						..Default::default()
 					}),
 				column![
 					text("OR SET CUSTOM TIMES")
-						.color(COLORS.text)
+						.color(colors.text)
 						.size(18)
 						.weight(font::Weight::Bold),
 					text("Set custom times for the night mode to work. Dusk is when it turns on the night settings, Dawn when it turns on the day settings.")
-						.color(COLORS.text.scale_alpha(0.7))
+						.color(colors.text.scale_alpha(0.7))
 						.size(13)
 						.weight(font::Weight::Bold)
 						.wrapping(text::Wrapping::Word)
@@ -305,13 +308,14 @@ impl Nightlight {
 				.width(Length::Fill),
 
 				row![
-					time_container("DAWN", dawn, COLORS.decorative.orange70, Message::DecreaseDawn, Message::IncreaseDawn),
-					time_container("DUSK", dusk, COLORS.decorative.purple70, Message::DecreaseDusk, Message::IncreaseDusk)
+					time_container("DAWN", dawn, colors.decorative.orange70, Message::DecreaseDawn, Message::IncreaseDawn, colors),
+					time_container("DUSK", dusk, colors.decorative.purple70, Message::DecreaseDusk, Message::IncreaseDusk, colors)
 				]
 				.spacing(10),
 			]
 			.spacing(12)
 		)
+		.with_colors(colors)
 		.width(Length::Fill)
 		.padding(16),
 	]
@@ -321,6 +325,7 @@ impl Nightlight {
 }
 
 struct SliderCardArgs<'a, T, D, F, L> {
+	colors: Colors,
 	name: &'a str,
 	value: T,
 	value_display: D,
@@ -334,16 +339,17 @@ struct SliderCardArgs<'a, T, D, F, L> {
 }
 
 impl<T: Default, D: Default, F, L> SliderCardArgs<'_, T, D, F, L> {
-	pub fn new() -> Self {
+	pub fn new(colors: Colors) -> Self {
 		Self {
+			colors,
 			name: "<not set>",
 			value: T::default(),
 			value_display: D::default(),
 			range: T::default()..=T::default(),
 			step: T::default(),
-			accent: COLORS.white,
-			handle_color: COLORS.decorative.pink,
-			background_color: COLORS.white,
+			accent: colors.surface,
+			handle_color: colors.decorative.pink,
+			background_color: colors.surface,
 			on_change: None,
 			on_change_live: None,
 		}
@@ -414,19 +420,21 @@ where
 	f32: AsPrimitive<T>,
 {
 	let color = args.accent;
+	let colors = args.colors;
+
 	neo_card(
 		column![
 			row![
 				text(args.name)
 					.width(Length::Fill)
-					.color(COLORS.text)
+					.color(colors.text)
 					.size(18)
 					.weight(font::Weight::Bold),
 				container(
 					text(args.value_display)
 						.weight(font::Weight::Bold)
 						.size(16)
-						.color(COLORS.text)
+						.color(colors.on_accent)
 						.center()
 				)
 				.center_x(86)
@@ -434,7 +442,7 @@ where
 				.style(move |_| container::Style {
 					background: Some(iced::Background::Color(color)),
 					border: Border {
-						color: COLORS.border,
+						color: colors.border,
 						width: 2.0,
 						radius: 3.into(),
 					},
@@ -443,6 +451,7 @@ where
 			]
 			.spacing(8),
 			neo_slider(args.range, args.value)
+				.with_colors(colors)
 				.step(args.step)
 				.running_color(args.accent)
 				.handle_color(args.handle_color)
@@ -451,9 +460,10 @@ where
 		]
 		.spacing(12),
 	)
+	.with_colors(colors)
 	.width(Length::Fill)
-	.height(112)
-	.padding(16)
+	.height(crate::sizing::CARD_HEIGHT)
+	.padding(crate::sizing::CARD_PADDING)
 	.background(args.background_color)
 	.into()
 }
@@ -470,28 +480,36 @@ fn fallback_time(hour: i8, minute: i8) -> jiff::civil::Time {
 
 fn time_container(
 	name: &str, time: jiff::civil::Time, color: Color, decrease: Message, increase: Message,
+	colors: Colors,
 ) -> Element<'_, Message> {
 	container(
 		row![
 			text(name)
-				.color(COLORS.text)
+				.color(colors.text_on(color))
 				.size(18)
 				.weight(font::Weight::Bold),
 			space::horizontal(),
-			neo_button(svg(phosphor_icon!("minus")))
-				.width(38)
-				.on_press(decrease),
+			neo_button(svg(phosphor_icon!("minus")).style(move |_, _| svg::Style {
+				color: Some(colors.text)
+			}))
+			.with_colors(colors)
+			.width(38)
+			.on_press(decrease),
 			neo_card(
 				text(time.strftime("%H:%M").to_string())
-					.color(COLORS.text)
+					.color(colors.text)
 					.size(18)
 					.weight(font::Weight::Bold),
 			)
+			.with_colors(colors)
 			.width(82)
-			.background(COLORS.white),
-			neo_button(svg(phosphor_icon!("plus")))
-				.width(38)
-				.on_press(increase),
+			.background(colors.surface),
+			neo_button(svg(phosphor_icon!("plus")).style(move |_, _| svg::Style {
+				color: Some(colors.text)
+			}))
+			.with_colors(colors)
+			.width(38)
+			.on_press(increase),
 		]
 		.spacing(6)
 		.align_y(Alignment::Center)
@@ -503,7 +521,7 @@ fn time_container(
 	.style(move |_| container::Style {
 		background: Some(iced::Background::Color(color)),
 		border: Border {
-			color: COLORS.border,
+			color: colors.border,
 			width: 2.0,
 			radius: 3.into(),
 		},

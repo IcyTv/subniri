@@ -9,6 +9,7 @@ use iced_exwlshell::{
 	settings::{LayerShellSettings, StartMode},
 	to_exwlshell_message,
 };
+use neo_widgets::appearance::{Appearance, Event as AppearanceEvent};
 
 use crate::tags::{TagEditor, TagId, TagStore};
 use crate::{browser::navigation::History, filesystem::entry::DirEntry};
@@ -19,7 +20,6 @@ use crate::context_menu::favorites;
 #[cfg(test)]
 use crate::filesystem::entry;
 use crate::filesystem::storage;
-use crate::ui::style;
 use crate::{browser, context_menu, tags};
 
 #[derive(Debug, Clone, Parser)]
@@ -68,7 +68,7 @@ pub(crate) fn run() -> Result<(), Box<dyn std::error::Error>> {
 		],
 		..Default::default()
 	})
-	.theme(Theme::Light)
+	.theme(|app: &FileManager, _| app.appearance.colors().iced_theme())
 	.style(FileManager::style)
 	.subscription(FileManager::subscription)
 	.layer_settings(LayerShellSettings {
@@ -88,6 +88,7 @@ pub(crate) enum ViewMode {
 #[to_exwlshell_message]
 #[derive(Debug, Clone)]
 pub(crate) enum Message {
+	Appearance(AppearanceEvent),
 	Drives(crate::drives::Message),
 	Dialog(crate::dialogs::Message),
 	Input(iced::window::Id, iced::Event, iced::event::Status),
@@ -99,6 +100,7 @@ pub(crate) enum Message {
 }
 
 pub(crate) struct FileManager {
+	pub(crate) appearance: Appearance,
 	pub(crate) drives: crate::drives::Drives,
 	pub(crate) dialogs: crate::dialogs::Dialogs,
 	pub(crate) favorites: favorites::Favorites,
@@ -137,6 +139,7 @@ impl FileManager {
 	pub(crate) fn new(args: Args) -> (Self, Task<Message>) {
 		let path = std::path::absolute(&args.path).unwrap_or(args.path);
 		let mut app = Self {
+			appearance: Appearance::default(),
 			drives: crate::drives::Drives::default(),
 			dialogs: crate::dialogs::Dialogs::default(),
 			favorites: favorites::Favorites::default(),
@@ -180,6 +183,7 @@ impl FileManager {
 	fn subscription(&self) -> Subscription<Message> {
 		use futures::StreamExt;
 		let mut subscriptions = vec![
+			self.appearance.subscription().map(Message::Appearance),
 			iced::time::every(std::time::Duration::from_secs(2))
 				.map(|_| crate::drives::Message::Refresh.into()),
 			iced::event::listen_with(|event, status, id| match event {
@@ -225,6 +229,7 @@ impl FileManager {
 			return Task::none();
 		}
 		match message {
+			Message::Appearance(event) => self.appearance.update(event),
 			Message::Drives(message) => return self.update_drives(message),
 			Message::Dialog(message) => return self.update_dialog(message),
 			Message::Input(id, event, status) => return self.route_input(id, event, status),
@@ -250,7 +255,7 @@ impl FileManager {
 			// Popups include unpainted shadow gutters. Paint the host in its view,
 			// not in the shared surface clear color.
 			background_color: iced::Color::TRANSPARENT,
-			text_color: style::INK,
+			text_color: self.appearance.colors().text,
 		}
 	}
 

@@ -14,8 +14,9 @@ use iced_exwlshell::{
 	to_layer_message,
 };
 use neo_widgets::{
+	appearance::{Appearance, Event as AppearanceEvent},
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, neo_button, neo_card},
 };
 use zbus::Connection;
@@ -29,6 +30,25 @@ fn shortcut_entry(character: &str) -> Option<usize> {
 
 #[cfg(test)]
 mod shortcut_tests {
+	use super::*;
+
+	#[test]
+	fn actions_are_neutral_until_hover_or_keyboard_navigation() {
+		let (mut logout, _) = Logout::new(Args::parse_from(["iceout"]));
+		assert!(!logout.action_highlighted(0));
+
+		let _ = logout.update(Message::HoverEntry(Some(0)));
+		assert!(logout.action_highlighted(0));
+		let _ = logout.update(Message::HoverEntry(None));
+		assert!(!logout.action_highlighted(0));
+
+		let _ = logout.update(Message::CycleEntry(false));
+		assert!(logout.action_highlighted(logout.selected_entry));
+		let _ = logout.update(Message::HoverEntry(Some(0)));
+		assert!(logout.action_highlighted(0));
+		assert!(!logout.keyboard_focus);
+	}
+
 	#[test]
 	fn character_payload_must_be_exactly_one_shortcut_digit() {
 		for invalid in ["", "1x", "1234", "1\u{301}", "0", "7", "12", "１"] {
@@ -66,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Logout::update,
 		Logout::view,
 	)
+	.theme(|logout: &Logout| logout.appearance.colors().iced_theme())
 	.style(Logout::style)
 	.subscription(Logout::subscription)
 	.layer_settings(LayerShellSettings {
@@ -83,6 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[to_layer_message]
 #[derive(Debug, Clone)]
 enum Message {
+	Appearance(AppearanceEvent),
 	Exit,
 	PowerCapabilitiesLoaded(PowerCapabilities),
 	ActionFinished(ActionResult),
@@ -90,14 +112,18 @@ enum Message {
 	SelectEntry(usize),
 	ActivateCurrentEntry,
 	SelectAndActivate(usize),
+	HoverEntry(Option<usize>),
 	Noop,
 
 	IcedEvent(iced::event::Event),
 }
 
 struct Logout {
+	appearance: Appearance,
 	args: Args,
 	selected_entry: usize,
+	keyboard_focus: bool,
+	hovered_entry: Option<usize>,
 	power_capabilities: PowerCapabilities,
 	state: LogoutState,
 }
@@ -177,8 +203,11 @@ impl PowerCapability {
 impl Logout {
 	fn new(args: Args) -> (Self, Task<Message>) {
 		let logout = Logout {
+			appearance: Appearance::default(),
 			args,
 			selected_entry: 0,
+			keyboard_focus: false,
+			hovered_entry: None,
 			power_capabilities: PowerCapabilities::default(),
 			state: LogoutState::Choosing,
 		};
@@ -189,7 +218,6 @@ impl Logout {
 		String::from("iceout")
 	}
 
-	#[allow(clippy::unused_self)]
 	fn subscription(&self) -> Subscription<Message> {
 		let keyboard = keyboard::listen().map(|e| match e {
 			keyboard::Event::KeyPressed {
@@ -221,12 +249,20 @@ impl Logout {
 		});
 		let event = iced::event::listen().map(Message::IcedEvent);
 
-		Subscription::batch([keyboard, event])
+		Subscription::batch([
+			keyboard,
+			event,
+			self.appearance.subscription().map(Message::Appearance),
+		])
 	}
 
 	#[allow(clippy::needless_pass_by_value)]
 	fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
+			Message::Appearance(event) => {
+				// The layer-shell backend redraws on messages, including appearance frames.
+				self.appearance.update(event);
+			}
 			Message::PowerCapabilitiesLoaded(capabilities) => {
 				self.power_capabilities = capabilities;
 				if !self.is_entry_enabled(self.selected_entry) {
@@ -242,6 +278,8 @@ impl Logout {
 				}
 			}
 			Message::CycleEntry(backwards) => {
+				self.keyboard_focus = true;
+				self.hovered_entry = None;
 				if !matches!(self.state, LogoutState::Choosing) {
 					return Task::none();
 				}
@@ -249,6 +287,8 @@ impl Logout {
 				self.select_next_entry(backwards);
 			}
 			Message::SelectEntry(entry) => {
+				self.keyboard_focus = true;
+				self.hovered_entry = None;
 				if !matches!(self.state, LogoutState::Choosing) {
 					return Task::none();
 				}
@@ -256,6 +296,10 @@ impl Logout {
 				if self.is_entry_enabled(entry) {
 					self.selected_entry = entry;
 				}
+			}
+			Message::HoverEntry(entry) => {
+				self.hovered_entry = entry;
+				self.keyboard_focus = false;
 			}
 			Message::IcedEvent(iced::event::Event::Window(iced::window::Event::Unfocused))
 			| Message::Exit => {
@@ -385,17 +429,19 @@ impl Logout {
 	}
 
 	fn view(&self) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+
 		if let LogoutState::Transition { label } = self.state {
-			return self.transition(label);
+			return self.transition(label, colors);
 		}
 
 		let content = match self.args.command.unwrap_or_default() {
-			Command::Session => self.session(),
-			Command::Power => self.power(0),
-			Command::All => column![self.session(), self.power(2),].spacing(12),
+			Command::Session => self.session(colors),
+			Command::Power => self.power(0, colors),
+			Command::All => column![self.session(colors), self.power(2, colors),].spacing(12),
 		};
 
-		let content = column![text("Choose an action.").color(COLORS.white), content,].spacing(12);
+		let content = column![text("Choose an action.").color(colors.text), content,].spacing(12);
 
 		let content = container(content).padding(Padding {
 			left: 24.0,
@@ -418,36 +464,44 @@ impl Logout {
 				.height(Length::Fill)
 				.width(2)
 				.style(|_| container::Style {
-					background: Some(Background::Color(COLORS.black)),
+					background: Some(Background::Color(Color::BLACK)),
 					..Default::default()
 				}),
 			space().width(8),
-			mouse_area(svg(phosphor_icon!("x")).width(Length::Shrink).height(24))
-				.on_press(Message::Exit)
-				.interaction(mouse::Interaction::Pointer),
+			mouse_area(
+				svg(phosphor_icon!("x"))
+					.width(Length::Shrink)
+					.height(24)
+					.style(move |_, _| svg::Style {
+						color: Some(colors.text)
+					})
+			)
+			.on_press(Message::Exit)
+			.interaction(mouse::Interaction::Pointer),
 		];
 
 		let header = container(header)
 			.padding(12)
 			.width(Length::Fill)
-			.style(|_| container::Style {
-				background: Some(Background::Color(COLORS.body)),
+			.style(move |_| container::Style {
+				background: Some(Background::Color(colors.body)),
 				border: Border {
 					width: 2.0,
-					color: COLORS.border,
+					color: Color::BLACK,
 					..Default::default()
 				},
 				..Default::default()
 			});
 
 		let content = neo_card(column![header, content].spacing(18))
+			.with_colors(colors)
 			.padding(Padding {
 				left: 0.0,
 				right: 0.0,
 				top: 0.0,
 				bottom: 20.0,
 			})
-			.background(COLORS.black.mix(COLORS.white, 0.1))
+			.background(colors.surface)
 			.width(480);
 
 		let content = mouse_area(content).on_press(Message::Noop);
@@ -455,7 +509,7 @@ impl Logout {
 		mouse_area(
 			container(content)
 				.style(|_| container::Style {
-					background: Some(Background::Color(COLORS.black.scale_alpha(0.4))),
+					background: Some(Background::Color(Color::BLACK.scale_alpha(0.4))),
 					..Default::default()
 				})
 				.padding(0)
@@ -468,82 +522,100 @@ impl Logout {
 		.into()
 	}
 
-	fn session(&self) -> Column<'_, Message> {
+	fn session(&self, colors: Colors) -> Column<'_, Message> {
 		column![
-			action_button(phosphor_icon!("lock"), "LOCK", 0).background(
-				if self.selected_entry == 0 {
-					COLORS.decorative.yellow
-				} else {
-					COLORS.white
-				}
+			self.action(
+				phosphor_icon!("lock"),
+				"LOCK",
+				0,
+				colors,
+				colors.decorative.yellow
 			),
-			action_button(phosphor_icon!("sign-out"), "LOGOUT", 1).background(
-				if self.selected_entry == 1 {
-					COLORS.decorative.green
-				} else {
-					COLORS.white
-				}
+			self.action(
+				phosphor_icon!("sign-out"),
+				"LOGOUT",
+				1,
+				colors,
+				colors.decorative.green
 			),
 		]
 		.spacing(12)
 	}
 
-	fn power(&self, offset: usize) -> Column<'_, Message> {
+	fn power(&self, offset: usize, colors: Colors) -> Column<'_, Message> {
 		column![
-			action_button(phosphor_icon!("power"), "POWER OFF", offset)
-				.background(if self.selected_entry == offset {
-					COLORS.feedback.danger
-				} else {
-					COLORS.white
-				})
-				.enabled(self.power_capabilities.power_off.enabled()),
-			action_button(
+			self.action(
+				phosphor_icon!("power"),
+				"POWER OFF",
+				offset,
+				colors,
+				colors.feedback.danger
+			),
+			self.action(
 				phosphor_icon!("arrow-counter-clockwise"),
 				"REBOOT",
-				offset + 1
-			)
-			.background(if self.selected_entry == offset + 1 {
-				COLORS.feedback.warning
-			} else {
-				COLORS.white
-			})
-			.enabled(self.power_capabilities.reboot.enabled()),
-			action_button(phosphor_icon!("pause-circle"), "HIBERNATE", offset + 2)
-				.background(if self.selected_entry == offset + 2 {
-					COLORS.decorative.yellow
-				} else {
-					COLORS.white
-				})
-				.enabled(self.power_capabilities.hibernate.enabled()),
-			action_button(phosphor_icon!("moon"), "SLEEP", offset + 3)
-				.background(if self.selected_entry == offset + 3 {
-					COLORS.decorative.blue
-				} else {
-					COLORS.white
-				})
-				.enabled(self.power_capabilities.suspend.enabled()),
+				offset + 1,
+				colors,
+				colors.feedback.warning
+			),
+			self.action(
+				phosphor_icon!("pause-circle"),
+				"HIBERNATE",
+				offset + 2,
+				colors,
+				colors.decorative.yellow
+			),
+			self.action(
+				phosphor_icon!("moon"),
+				"SLEEP",
+				offset + 3,
+				colors,
+				colors.decorative.blue
+			),
 		]
 		.spacing(12)
+	}
+
+	fn action<'a>(
+		&self, icon: svg::Handle, label: &'a str, index: usize, colors: Colors, accent: Color,
+	) -> Element<'a, Message> {
+		let enabled = self.is_entry_enabled(index);
+		let highlighted = self.action_highlighted(index);
+		let button = action_button(icon, label, index, colors, highlighted)
+			.background(if highlighted { accent } else { colors.surface })
+			.enabled(enabled);
+
+		iced::widget::mouse_area(button)
+			.on_enter(Message::HoverEntry(Some(index)))
+			.on_exit(Message::HoverEntry(None))
+			.into()
+	}
+
+	fn action_highlighted(&self, index: usize) -> bool {
+		self.is_entry_enabled(index)
+			&& (self.hovered_entry == Some(index)
+				|| (self.keyboard_focus && self.selected_entry == index))
 	}
 
 	#[allow(clippy::unused_self)]
-	fn transition(&self, label: &'static str) -> Element<'_, Message> {
+	fn transition(&self, label: &'static str, colors: Colors) -> Element<'_, Message> {
 		let content = neo_card(
 			column![
 				text(label).font(Font {
 					weight: font::Weight::Bold,
 					..Default::default()
 				}),
-				text("Please wait.").color(COLORS.white),
+				text("Please wait.").color(colors.text),
 			]
 			.spacing(12),
 		)
-		.background(COLORS.black.mix(COLORS.white, 0.1))
+		.with_colors(colors)
+		.background(colors.surface)
 		.width(480);
 
 		container(content)
 			.style(|_| container::Style {
-				background: Some(Background::Color(COLORS.black.scale_alpha(0.4))),
+				background: Some(Background::Color(Color::BLACK.scale_alpha(0.4))),
 				..Default::default()
 			})
 			.padding(0)
@@ -554,37 +626,10 @@ impl Logout {
 			.into()
 	}
 
-	// fn session(&self) -> Element<'_, Message> {
-	// 	neo_card(
-	// 		column![
-	// 			text("Choose an action.").color(COLORS.white),
-	// 			action_button(phosphor_icon!("lock"), "LOCK", 1).background(
-	// 				if self.selected_entry == 0 {
-	// 					COLORS.decorative.yellow
-	// 				} else {
-	// 					COLORS.white
-	// 				}
-	// 			),
-	// 			action_button(phosphor_icon!("sign-out"), "LOGOUT", 2).background(
-	// 				if self.selected_entry == 1 {
-	// 					COLORS.decorative.orange
-	// 				} else {
-	// 					COLORS.white
-	// 				}
-	// 			)
-	// 		]
-	// 		.spacing(12),
-	// 	)
-	// 	.background(COLORS.black.mix(COLORS.white, 0.1))
-	// 	.width(480)
-	// 	.into()
-	// }
-
-	#[allow(clippy::unused_self)]
 	fn style(&self, _theme: &Theme) -> Style {
 		Style {
 			background_color: Color::TRANSPARENT,
-			text_color: Color::BLACK,
+			text_color: self.appearance.colors().text,
 		}
 	}
 
@@ -793,16 +838,31 @@ impl Logout {
 	}
 }
 
-fn action_button(icon: svg::Handle, label: &str, index: usize) -> NeoButton<'_, Message> {
+fn action_button(
+	icon: svg::Handle, label: &str, index: usize, colors: Colors, selected: bool,
+) -> NeoButton<'_, Message> {
+	let foreground = if selected {
+		colors.on_accent
+	} else {
+		colors.text
+	};
+
 	neo_button(
 		row![
-			container(svg(icon).width(Length::Shrink),).padding(12),
+			container(
+				svg(icon)
+					.width(Length::Shrink)
+					.style(move |_, _| svg::Style {
+						color: Some(foreground)
+					}),
+			)
+			.padding(12),
 			space().width(6),
 			container("")
 				.height(Length::Fill)
 				.width(2)
 				.style(|_| container::Style {
-					background: Some(Background::Color(COLORS.black)),
+					background: Some(Background::Color(Color::BLACK)),
 					..Default::default()
 				}),
 			space().width(12),
@@ -811,12 +871,13 @@ fn action_button(icon: svg::Handle, label: &str, index: usize) -> NeoButton<'_, 
 					weight: font::Weight::Bold,
 					..Default::default()
 				})
-				.color(COLORS.text),
+				.color(foreground),
 			space::horizontal(),
-			text(format!("{:>02}", index + 1))
+			text(format!("{:>02}", index + 1)).color(foreground)
 		]
 		.align_y(Center),
 	)
+	.with_colors(colors)
 	.on_press(Message::SelectAndActivate(index))
 	.height(72)
 	.width(Length::Fill)

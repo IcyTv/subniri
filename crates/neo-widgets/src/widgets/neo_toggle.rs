@@ -58,6 +58,13 @@ impl<Message> NeoToggle<Message> {
 		self
 	}
 
+	pub fn with_colors(mut self, colors: crate::style::Colors) -> Self {
+		self.track.background = colors.surface;
+		self.handle.background = colors.decorative.yellow;
+		self.fill_color = colors.decorative.green70;
+		self
+	}
+
 	pub fn handle_style(mut self, style: NeoSurfaceStyle) -> Self {
 		self.handle = style;
 		self

@@ -7,21 +7,22 @@ use iced::{
 	theme,
 	widget::{column, container, row, space, text},
 };
-use neo_widgets::{
-	style::COLORS,
-	widgets::{neo_button, neo_card},
-};
+use neo_widgets::widgets::{neo_button, neo_card};
 
 use crate::setting::Tab;
 
+mod appearance;
 mod oauth;
 mod setting;
+mod sizing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	log::init!("settings", "snowconf")?;
 
 	let app = iced::application(Settings::new, Settings::update, Settings::view)
+		.theme(|settings: &Settings| settings.appearance.colors().iced_theme())
 		.style(Settings::style)
+		.scale_factor(|_| sizing::SCALE)
 		.subscription(Settings::subscription);
 
 	Ok(app.run()?)
@@ -29,6 +30,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 #[derive(Debug, Clone)]
 enum Message {
+	Appearance(neo_widgets::appearance::Event),
+	SelectTheme(config::AppearanceMode),
+	RetrySavingAppearance,
 	SelectSetting(usize),
 	Setting(usize, setting::Message),
 	ClearConfigOverride,
@@ -39,6 +43,7 @@ enum Message {
 }
 
 struct Settings {
+	appearance: neo_widgets::appearance::Appearance,
 	selected_setting: usize,
 	tabs: Vec<Tab>,
 	config: ConfigFile,
@@ -48,7 +53,7 @@ struct Settings {
 
 impl Settings {
 	fn new() -> (Self, Task<Message>) {
-		let mut first = Tab::nightlight();
+		let mut first = Tab::appearance();
 		first.selected.go_mut(true, Instant::now());
 
 		let (doc, config) = match ConfigFile::load() {
@@ -67,9 +72,11 @@ impl Settings {
 		);
 
 		let settings = Self {
+			appearance: neo_widgets::appearance::Appearance::default(),
 			selected_setting: 0,
 			tabs: vec![
 				first,
+				Tab::nightlight(),
 				Tab::spotify(),
 				Tab::homeassistant(),
 				Tab::more_soon(),
@@ -105,7 +112,10 @@ impl Settings {
 			)
 		});
 
-		let mut subs = vec![config_watch];
+		let mut subs = vec![
+			config_watch,
+			self.appearance.subscription().map(Message::Appearance),
+		];
 
 		let at = Instant::now();
 		if self.tabs.iter().any(|setting| setting.is_animating(at)) {
@@ -117,6 +127,16 @@ impl Settings {
 
 	fn update(&mut self, message: Message) -> Task<Message> {
 		match message {
+			Message::Appearance(event) => {
+				self.appearance.update(event);
+				Task::none()
+			}
+			Message::SelectTheme(theme) => {
+				neo_widgets::appearance::select(theme).map(Message::Appearance)
+			}
+			Message::RetrySavingAppearance => {
+				neo_widgets::appearance::retry_saving().map(Message::Appearance)
+			}
 			Message::ConfigUpdated => {
 				let (doc, config) = match ConfigFile::load() {
 					Ok(c) => c,
@@ -126,6 +146,9 @@ impl Settings {
 					}
 				};
 
+				let integrations_changed = self.config.spotify != config.spotify
+					|| self.config.homeassistant != config.homeassistant;
+
 				self.doc = doc;
 				self.config = config;
 				match ConfigFile::load_declarative() {
@@ -133,7 +156,11 @@ impl Settings {
 					Err(error) => log::warn!("Error loading declarative config: {error}"),
 				}
 
-				self.init_tabs()
+				if integrations_changed {
+					self.init_tabs()
+				} else {
+					Task::none()
+				}
 			}
 			Message::ClearConfigOverride => {
 				match ConfigFile::clear_override() {
@@ -174,15 +201,16 @@ impl Settings {
 
 	#[allow(clippy::too_many_lines)]
 	fn view(&self) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
 		let mut sidebar = column![
 			column![
-				text("SETTINGS").color(COLORS.text).size(28).font(Font {
+				text("SETTINGS").color(colors.text).size(28).font(Font {
 					weight: font::Weight::Bold,
 					..Default::default()
 				}),
 				text("break glass, tune pixels")
 					.size(12)
-					.color(COLORS.text.scale_alpha(0.7))
+					.color(colors.text.scale_alpha(0.7))
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Default::default()
@@ -192,8 +220,8 @@ impl Settings {
 			container("")
 				.width(Length::Fill)
 				.height(2)
-				.style(|_| container::Style {
-					background: Some(Background::Color(COLORS.border)),
+				.style(move |_| container::Style {
+					background: Some(Background::Color(colors.border)),
 					..Default::default()
 				}),
 		]
@@ -202,26 +230,30 @@ impl Settings {
 		let at = Instant::now();
 
 		for (index, setting) in self.tabs.iter().enumerate() {
+			let background = setting.color(at, colors);
+			let icon_background = setting.icon_bg_color(at, colors);
 			let widget = neo_button(
 				row![
-					container(setting.icon())
-						.width(36)
-						.height(36)
-						.align_y(Alignment::Center)
-						.align_x(Alignment::Center)
-						.padding(8)
-						.style(move |_| container::Style {
-							border: Border {
-								width: 2.0,
-								color: COLORS.border,
-								radius: 3.into(),
-							},
-							background: Some(Background::Color(setting.icon_bg_color(at))),
-							..Default::default()
-						}),
+					container(setting.icon().style(move |_, _| iced::widget::svg::Style {
+						color: Some(colors.text_on(icon_background)),
+					}))
+					.width(36)
+					.height(36)
+					.align_y(Alignment::Center)
+					.align_x(Alignment::Center)
+					.padding(8)
+					.style(move |_| container::Style {
+						border: Border {
+							width: 2.0,
+							color: colors.border,
+							radius: 3.into(),
+						},
+						background: Some(Background::Color(icon_background)),
+						..Default::default()
+					}),
 					text(setting.name())
 						.width(Length::Fill)
-						.color(COLORS.text)
+						.color(colors.text_on(background))
 						.size(18)
 						.font(Font {
 							weight: font::Weight::Bold,
@@ -233,7 +265,8 @@ impl Settings {
 				.align_y(Alignment::Center)
 				.width(Length::Fill),
 			)
-			.background(setting.color(at))
+			.with_colors(colors)
+			.background(background)
 			.shadow_width(setting.shadow_width(at))
 			.width(Length::Fill)
 			.on_press(Message::SelectSetting(index));
@@ -245,18 +278,21 @@ impl Settings {
 
 		let mut settings_row = row![
 			neo_card(sidebar)
+				.with_colors(colors)
 				.width(260)
 				.height(Length::Fill)
 				.padding(14)
-				.background(COLORS.body),
+				.background(colors.body),
 		]
 		.spacing(18)
 		.padding(18);
 
-		if let Some(setting) = self.tabs.get(self.selected_setting) {
+		if self.selected_setting == 0 {
+			settings_row = settings_row.push(appearance::view(&self.appearance));
+		} else if let Some(setting) = self.tabs.get(self.selected_setting) {
 			settings_row = settings_row.push(
 				setting
-					.view(&self.config)
+					.view(&self.config, colors)
 					.map(|msg| Message::Setting(self.selected_setting, msg)),
 			);
 		}
@@ -281,10 +317,10 @@ impl Settings {
 						container(text(diff_text).size(13).wrapping(text::Wrapping::Word))
 							.width(Length::Fill)
 							.padding(10)
-							.style(|_| container::Style {
-								background: Some(Background::Color(COLORS.white)),
+							.style(move |_| container::Style {
+								background: Some(Background::Color(colors.surface)),
 								border: Border {
-									color: COLORS.border,
+									color: colors.border,
 									width: 2.0,
 									radius: 3.into(),
 								},
@@ -292,17 +328,20 @@ impl Settings {
 							}),
 						row![
 							neo_button(text("COPY NIX CHANGES").weight(font::Weight::Bold))
+								.with_colors(colors)
 								.on_press(Message::CopyNixChanges),
 							neo_button(text("DISCARD LOCAL CHANGES").weight(font::Weight::Bold))
+								.with_colors(colors)
 								.on_press(Message::ClearConfigOverride),
 						]
 						.spacing(10),
 					]
 					.spacing(8),
 				)
+				.with_colors(colors)
 				.width(Length::Fill)
 				.padding(14)
-				.background(COLORS.decorative.yellow90),
+				.background(colors.decorative.yellow90),
 			);
 		}
 
@@ -311,9 +350,10 @@ impl Settings {
 
 	#[allow(clippy::unused_self)]
 	fn style(&self, _theme: &Theme) -> theme::Style {
+		let colors = self.appearance.colors();
 		theme::Style {
-			background_color: COLORS.decorative.pink70,
-			text_color: COLORS.text,
+			background_color: colors.canvas,
+			text_color: colors.text,
 		}
 	}
 

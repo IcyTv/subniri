@@ -5,7 +5,7 @@ use iced::{
 	Animation, Border, Color, Element, Length, Task, font,
 	widget::{Svg, column, row, svg, text, text_input},
 };
-use neo_widgets::{phosphor_icon, style::COLORS, widgets::neo_card};
+use neo_widgets::{phosphor_icon, style::Colors, widgets::neo_card};
 
 mod homeassistant;
 mod nightlight;
@@ -24,6 +24,7 @@ pub struct Tab {
 }
 
 pub enum TabContents {
+	Appearance,
 	Nightlight(nightlight::Nightlight),
 	Homeassistant(homeassistant::Homeassistant),
 	Spotify(spotify::Spotify),
@@ -39,6 +40,13 @@ impl Hash for Tab {
 impl Tab {
 	fn default_animation() -> Animation<bool> {
 		Animation::new(false).quick()
+	}
+
+	pub fn appearance() -> Self {
+		Self {
+			selected: Self::default_animation(),
+			contents: TabContents::Appearance,
+		}
 	}
 
 	pub fn nightlight() -> Self {
@@ -77,16 +85,18 @@ impl Tab {
 		self.contents.name()
 	}
 
-	pub fn accent(&self) -> Color {
-		self.contents.accent()
+	pub fn accent(&self, colors: Colors) -> Color {
+		self.contents.accent(colors)
 	}
 
-	pub fn color(&self, at: Instant) -> Color {
-		self.selected.interpolate(COLORS.white, self.accent(), at)
+	pub fn color(&self, at: Instant, colors: Colors) -> Color {
+		self.selected
+			.interpolate(colors.surface, self.accent(colors), at)
 	}
 
-	pub fn icon_bg_color(&self, at: Instant) -> Color {
-		self.selected.interpolate(self.accent(), COLORS.white, at)
+	pub fn icon_bg_color(&self, at: Instant, colors: Colors) -> Color {
+		self.selected
+			.interpolate(self.accent(colors), colors.surface, at)
 	}
 
 	pub fn shadow_width(&self, at: Instant) -> f32 {
@@ -97,19 +107,31 @@ impl Tab {
 		self.selected.is_animating(at)
 	}
 
-	pub fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
-		self.contents.view(config)
+	pub fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
+		self.contents.view(config, colors)
 	}
 
 	pub fn update(
 		&mut self, config: &mut ConfigFile, doc: &mut KdlDocument, message: Message,
 	) -> Task<Message> {
 		match message {
-			Message::Nightlight(nightlight::Message::UpdateConfig)
+			message @ (Message::Nightlight(nightlight::Message::UpdateConfig)
 			| Message::Spotify(spotify::Message::UpdateConfig)
-			| Message::Homeassistant(homeassistant::Message::UpdateConfig) => {
-				if let Err(error) = config.write(doc) {
-					log::error!("Failed to save config: {error}");
+			| Message::Homeassistant(homeassistant::Message::UpdateConfig)) => {
+				// Commit only this integration's edit under the shared writer lock.
+				// Other processes may have changed appearance or menu configuration.
+				let result = ConfigFile::update(|fresh| match message {
+					Message::Nightlight(_) => fresh.nightlight = config.nightlight.clone(),
+					Message::Spotify(_) => fresh.spotify = config.spotify.clone(),
+					Message::Homeassistant(_) => fresh.homeassistant = config.homeassistant.clone(),
+				});
+
+				match result {
+					Ok((fresh_doc, fresh)) => {
+						*doc = fresh_doc;
+						*config = fresh;
+					}
+					Err(error) => log::error!("Failed to save config: {error}"),
 				}
 
 				Task::none()
@@ -129,6 +151,7 @@ impl Tab {
 impl TabContents {
 	fn icon<'a>(&self) -> Svg<'a> {
 		match self {
+			Self::Appearance => svg(phosphor_icon!("palette")),
 			Self::Nightlight(_) => nightlight::Nightlight::icon(),
 			Self::Spotify(_) => spotify::Spotify::icon(),
 			Self::Homeassistant(_) => homeassistant::Homeassistant::icon(),
@@ -138,6 +161,7 @@ impl TabContents {
 
 	fn name(&self) -> &'static str {
 		match self {
+			Self::Appearance => "Appearance",
 			Self::Nightlight(_) => "Nightlight",
 			Self::Homeassistant(_) => "Homeassistant",
 			Self::Spotify(_) => "Spotify",
@@ -145,12 +169,13 @@ impl TabContents {
 		}
 	}
 
-	fn accent(&self) -> Color {
+	fn accent(&self, colors: Colors) -> Color {
 		match self {
-			Self::Nightlight(_) => nightlight::Nightlight::accent_color(),
-			Self::Homeassistant(_) => homeassistant::Homeassistant::accent_color(),
-			Self::Spotify(_) => spotify::Spotify::accent_color(),
-			Self::MoreSoon => COLORS.decorative.yellow,
+			Self::Appearance => colors.decorative.purple,
+			Self::Nightlight(_) => nightlight::Nightlight::accent_color(colors),
+			Self::Homeassistant(_) => homeassistant::Homeassistant::accent_color(colors),
+			Self::Spotify(_) => spotify::Spotify::accent_color(colors),
+			Self::MoreSoon => colors.decorative.yellow,
 		}
 	}
 
@@ -179,14 +204,16 @@ impl TabContents {
 		}
 	}
 
-	fn view<'a>(&'a self, config: &'a ConfigFile) -> Element<'a, Message> {
+	fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
 		match self {
-			Self::Nightlight(nightlight) => nightlight.view(config).map(Message::Nightlight),
-			Self::Spotify(spotify) => spotify.view(config).map(Message::Spotify),
-			Self::Homeassistant(homeassistant) => {
-				homeassistant.view(config).map(Message::Homeassistant)
+			Self::Nightlight(nightlight) => {
+				nightlight.view(config, colors).map(Message::Nightlight)
 			}
-			Self::MoreSoon => "".into(),
+			Self::Spotify(spotify) => spotify.view(config, colors).map(Message::Spotify),
+			Self::Homeassistant(homeassistant) => homeassistant
+				.view(config, colors)
+				.map(Message::Homeassistant),
+			Self::Appearance | Self::MoreSoon => "".into(),
 		}
 	}
 }
@@ -199,6 +226,7 @@ struct InputCardOptions<
 	V: text::IntoFragment<'a>,
 	FI: Fn(String) -> Message + 'a,
 > {
+	colors: Colors,
 	background: Color,
 	border: Color,
 	display: D,
@@ -215,10 +243,13 @@ impl<
 	FI: Fn(String) -> Message + 'a,
 > InputCardOptions<'a, Message, D, V, FI>
 {
-	fn new(value: V, on_input: FI) -> InputCardOptions<'a, Message, &'a str, V, FI> {
+	fn new(
+		value: V, on_input: FI, colors: Colors,
+	) -> InputCardOptions<'a, Message, &'a str, V, FI> {
 		InputCardOptions {
-			background: COLORS.white,
-			border: COLORS.border,
+			colors,
+			background: colors.surface,
+			border: colors.border,
 			display: "Input",
 			value,
 			placeholder: "Enter value",
@@ -261,7 +292,7 @@ fn input_card<'a, Message: Clone + 'a>(
 			row![
 				text(options.display)
 					.width(Length::Fill)
-					.color(COLORS.text)
+					.color(options.colors.text)
 					.size(18)
 					.weight(font::Weight::Bold)
 			]
@@ -275,19 +306,20 @@ fn input_card<'a, Message: Clone + 'a>(
 							color: options.border,
 							radius: 3.into(),
 						},
-						background: COLORS.white.into(),
-						placeholder: COLORS.text.scale_alpha(0.76),
-						value: COLORS.text,
-						selection: options.background,
+						background: options.colors.surface.into(),
+						placeholder: options.colors.secondary.scale_alpha(0.76),
+						value: options.colors.text,
+						selection: options.colors.selection,
 					}
 				})
 				.padding(6)
 		]
 		.spacing(12),
 	)
+	.with_colors(options.colors)
 	.width(Length::Fill)
-	.height(112)
-	.padding(16)
+	.height(crate::sizing::CARD_HEIGHT)
+	.padding(crate::sizing::CARD_PADDING)
 	.background(options.background)
 	.into()
 }

@@ -140,6 +140,7 @@
   in
     serialize.nodes (
       [
+        (plain "appearance" [(leaf "theme" settings.appearance.theme)])
         (plain "nightlight" (
           lib.optionals settings.nightlight.enable [
             (flag "enabled")
@@ -280,6 +281,12 @@ in {
       };
 
       settings = {
+        appearance.theme = mkOption {
+          type = types.enum ["light" "dark"];
+          default = "light";
+          description = "Shared colour scheme for Subniri interfaces.";
+        };
+
         nightlight = {
           enable = mkOption {
             type = types.bool;

@@ -6,13 +6,15 @@ use futures::StreamExt;
 use iced::{
 	Element, Length, Subscription,
 	alignment::Vertical,
-	widget::{Grid, column, container, row, rule, space, stack, svg, text},
+	widget::{Grid, column, container, row, rule, scrollable, space, text},
 };
 use jiff::ToSpan;
 use neo_widgets::{
-	phosphor_icon,
-	style::COLORS,
-	widgets::{neo_button, neo_card, neo_tumbler},
+	style::Colors,
+	widgets::{
+		NeoButtonStyle, NeoContentSurfaceStyle, NeoSurfaceStyle, neo_button,
+		neo_tumbler_with_colors as tumbler,
+	},
 };
 
 #[derive(Debug)]
@@ -25,6 +27,8 @@ pub struct Calendar {
 
 	events: HashMap<jiff::civil::Date, Vec<Arc<CalendarEventDto>>>,
 	service_error: Option<String>,
+	loaded: bool,
+	agenda_expanded: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +38,7 @@ pub enum Message {
 	Closed,
 
 	OnDateSelected(jiff::civil::Date),
+	CollapseAgenda,
 	OnMonthForward,
 	OnMonthBackward,
 	OnYearForward,
@@ -42,6 +47,7 @@ pub enum Message {
 	EventsUpdated(Vec<CalendarEventDto>),
 	EventAdded(CalendarEventDto),
 	Unavailable(String),
+	ForMonth(i16, i8, Box<Message>),
 }
 
 impl Calendar {
@@ -57,24 +63,30 @@ impl Calendar {
 
 			events: HashMap::new(),
 			service_error: None,
+			loaded: false,
+			agenda_expanded: false,
 		}
 	}
 
 	pub fn update(&mut self, message: Message) {
 		match message {
+			Message::ForMonth(year, month, message) => {
+				if (year, month) == (self.selected_year, self.selected_month) {
+					self.update(*message);
+				}
+			}
 			Message::Tick => {
 				self.current_date = jiff::Zoned::now();
 			}
 			Message::Closed => {
-				self.selected_date = self.current_date.date();
-				self.selected_month = self.current_date.month();
-				self.selected_year = self.current_date.year();
+				self.agenda_expanded = false;
+				self.select_date(self.current_date.date());
 			}
 			Message::OnDateSelected(day) => {
-				self.selected_date = day;
-				self.selected_month = day.month();
-				self.selected_year = day.year();
+				self.select_date(day);
+				self.agenda_expanded = true;
 			}
+			Message::CollapseAgenda => self.agenda_expanded = false,
 			Message::OnMonthForward => {
 				self.shift_month(1);
 			}
@@ -89,6 +101,7 @@ impl Calendar {
 			}
 
 			Message::EventsUpdated(events) => {
+				self.loaded = true;
 				self.service_error = None;
 				self.events.clear();
 				for event in events {
@@ -106,9 +119,26 @@ impl Calendar {
 		if let Ok(date) = jiff::civil::Date::new(self.selected_year, self.selected_month, 1)
 			.and_then(|date| date.checked_add(months.months()))
 		{
-			self.selected_year = date.year();
-			self.selected_month = date.month();
+			if let Ok(selected) = jiff::civil::Date::new(
+				date.year(),
+				date.month(),
+				self.selected_date.day().min(date.days_in_month()),
+			) {
+				self.select_date(selected);
+			}
 		}
+	}
+
+	fn select_date(&mut self, date: jiff::civil::Date) {
+		if (date.year(), date.month()) != (self.selected_year, self.selected_month) {
+			self.events.clear();
+			self.loaded = false;
+			self.service_error = None;
+		}
+
+		self.selected_date = date;
+		self.selected_year = date.year();
+		self.selected_month = date.month();
 	}
 
 	fn insert_event(&mut self, event: CalendarEventDto) {
@@ -158,11 +188,11 @@ impl Calendar {
 							match message {
 								Ok(message) => {
 									backoff = Duration::from_secs(1);
-									yield message;
+									yield Message::ForMonth(year, month, Box::new(message));
 								}
 								Err(error) => {
 									log::warn!("Calendar service unavailable: {error}");
-									yield Message::Unavailable(error);
+									yield Message::ForMonth(year, month, Box::new(Message::Unavailable(error)));
 									break;
 								}
 							}
@@ -177,10 +207,10 @@ impl Calendar {
 		)
 	}
 
-	pub fn view(&self) -> Element<'_, Message> {
+	pub fn view(&self, colors: Colors) -> Element<'_, Message> {
 		let Ok(month_begin) = jiff::civil::Date::new(self.selected_year, self.selected_month, 1)
 		else {
-			return text("Calendar date unavailable").into();
+			return text("Calendar date unavailable").color(colors.text).into();
 		};
 		let leading_days = month_begin.weekday().to_monday_zero_offset() as i32;
 
@@ -194,13 +224,16 @@ impl Calendar {
 			Vec::with_capacity(((rows + 1) * 8) as usize);
 		for weekday in ["Wk", "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"] {
 			calendar_cells.push(
-				neo_card(
-					container(text(weekday).weight(iced::font::Weight::Bold))
-						.center_x(Length::Fill),
+				container(
+					container(
+						text(weekday)
+							.weight(iced::font::Weight::Bold)
+							.color(colors.text),
+					)
+					.center_x(Length::Fill),
 				)
 				.width(Length::Fill)
 				.padding([2, 0])
-				.background(COLORS.decorative.purple90)
 				.into(),
 			);
 		}
@@ -210,16 +243,17 @@ impl Calendar {
 				.checked_add((week * 7 - leading_days).days())
 				.map_or(0, iso_week_number);
 			calendar_cells.push(
-				neo_card(
-					container(text(format!("{week_number:02}")).style(|_| text::Style {
-						color: Some(COLORS.text.scale_alpha(0.5)),
-						..Default::default()
-					}))
+				container(
+					container(
+						text(format!("{week_number:02}")).style(move |_| text::Style {
+							color: Some(colors.text.scale_alpha(0.5)),
+							..Default::default()
+						}),
+					)
 					.center_x(Length::Fill),
 				)
 				.width(Length::Fill)
 				.padding([2, 0])
-				.background(COLORS.decorative.blue90)
 				.into(),
 			);
 
@@ -236,76 +270,55 @@ impl Calendar {
 				let is_selected_day = date == self.selected_date;
 
 				let text_color = if is_selected_day {
-					COLORS.decorative.purple
+					colors.on_accent
+				} else if !is_current_month {
+					colors.muted
 				} else {
-					COLORS.text
+					colors.text
 				};
 				let text_style = text::Style {
 					color: Some(text_color),
 				};
 
-				let event_indicator: Element<Message> = if self.events.contains_key(&date) {
-					svg(phosphor_icon!("circle", "fill"))
-						.width(6.0)
-						.height(6.0)
-						.style(|_, _| svg::Style {
-							color: Some(COLORS.decorative.purple),
-							..Default::default()
-						})
-						.into()
-				} else {
-					space().into()
-				};
-
-				let event_overlay = row![
-					space().width(Length::Fill),
-					event_indicator,
-					space().width(Length::Fill),
-				]
-				.width(Length::Fill)
-				.height(Length::Fill)
-				.align_y(Vertical::Top);
-
-				let underline: Element<Message> = if is_current_day {
-					rule::horizontal(2)
-						.style(|_| rule::Style {
-							color: COLORS.decorative.purple,
-							fill_mode: rule::FillMode::Full,
-							snap: true,
-							radius: 0.0.into(),
-						})
-						.into()
-				} else {
-					space().into()
-				};
-
-				let day = text(date.day().to_string()).style(move |_| {
-					if is_current_month {
-						text_style
+				let underline: Element<Message> =
+					if !is_selected_day && self.events.contains_key(&date) {
+						rule::horizontal(2)
+							.style(move |_| rule::Style {
+								color: colors.decorative.purple,
+								fill_mode: rule::FillMode::Full,
+								snap: true,
+								radius: 0.0.into(),
+							})
+							.into()
 					} else {
-						text::Style {
-							color: Some(COLORS.text.scale_alpha(0.5)),
-							..Default::default()
-						}
-					}
-				});
+						space().into()
+					};
 
-				let widget: Element<_> = stack![
+				let day = text(date.day().to_string())
+					.size(19)
+					.wrapping(text::Wrapping::None)
+					.weight(if is_current_day {
+						iced::font::Weight::Bold
+					} else {
+						iced::font::Weight::Normal
+					})
+					.style(move |_| text_style);
+
+				let widget: Element<_> = column![
 					container(day)
 						.width(Length::Fill)
 						.height(28.0)
 						.center_x(Length::Fill)
 						.center_y(Length::Fill),
-					event_overlay,
-					container(underline)
-						.width(Length::Fill)
-						.height(Length::Fill)
-						.align_y(Vertical::Bottom),
+					container(underline).width(Length::Fill).height(2),
 				]
 				.into();
 
 				calendar_cells.push(
 					neo_button(widget)
+						.with_colors(colors)
+						.style(day_style(colors, is_selected_day))
+						.width(Length::Fill)
 						.on_press(Message::OnDateSelected(date))
 						.into(),
 				);
@@ -320,35 +333,156 @@ impl Calendar {
 			|| space().into(),
 			|error| {
 				text(format!("Calendar unavailable: {error}"))
+					.color(colors.text)
 					.size(12)
 					.into()
 			},
 		);
 
-		column![
+		let mut content = column![
 			row![
-				neo_tumbler(
-					container(text(month_name).weight(iced::font::Weight::Bold))
-						.center_x(Length::Fill),
+				tumbler(
+					container(
+						text(month_name)
+							.weight(iced::font::Weight::Bold)
+							.color(colors.text)
+					)
+					.center_x(Length::Fill),
 					Message::OnMonthForward,
 					Message::OnMonthBackward,
-					0.0
+					0.0,
+					colors,
 				)
 				.width(Length::Fill),
 				// space::horizontal(),
-				neo_tumbler(
-					text(format!("{}", self.selected_year)).weight(iced::font::Weight::Bold),
+				tumbler(
+					text(format!("{}", self.selected_year))
+						.weight(iced::font::Weight::Bold)
+						.color(colors.text),
 					Message::OnYearForward,
 					Message::OnYearBackward,
 					5.0,
+					colors,
 				),
 			],
 			status,
 			Grid::with_children(calendar_cells).columns(8)
+		];
+		if self.agenda_expanded {
+			content = content.push(self.view_agenda(colors));
+		}
+
+		content.spacing(10).width(Length::Fill).into()
+	}
+
+	fn view_agenda(&self, colors: Colors) -> Element<'_, Message> {
+		let header = row![
+			text(self.selected_date.to_string())
+				.color(colors.text)
+				.weight(iced::font::Weight::Bold),
+			space::horizontal(),
+			neo_button(text("Collapse").color(colors.text))
+				.with_colors(colors)
+				.on_press(Message::CollapseAgenda),
 		]
-		.spacing(10)
-		.width(iced::Length::Fill)
-		.into()
+		.align_y(Vertical::Center);
+		let mut agenda = column![header].spacing(8);
+		let status = self.agenda_status();
+		if let Some(status) = status {
+			return agenda.push(text(status).color(colors.secondary)).into();
+		}
+
+		let events = self.agenda_events();
+		let count = events.len();
+		let rows = column(events.into_iter().map(|event| {
+			let time = event_time(event);
+			container(column![
+				text(&event.title)
+					.size(15)
+					.weight(iced::font::Weight::Bold)
+					.color(colors.text)
+					.ellipsis(text::Ellipsis::End)
+					.wrapping(text::Wrapping::None),
+				text(time).size(12).color(colors.secondary),
+			])
+			.height(48)
+			.width(Length::Fill)
+			.into()
+		}));
+		agenda = agenda.push(scrollable(rows).height((count.min(4) * 48) as f32));
+
+		agenda.into()
+	}
+
+	fn agenda_status(&self) -> Option<&'static str> {
+		if self.service_error.is_some() {
+			Some("Calendar unavailable")
+		} else if !self.loaded {
+			Some("Loading events…")
+		} else if !self.events.contains_key(&self.selected_date) {
+			Some("No events")
+		} else {
+			None
+		}
+	}
+
+	fn agenda_events(&self) -> Vec<&CalendarEventDto> {
+		let mut events: Vec<_> = self
+			.events
+			.get(&self.selected_date)
+			.into_iter()
+			.flatten()
+			.map(Arc::as_ref)
+			.collect();
+		events.sort_by_key(|event| (event.start, event.end, event.title.as_str()));
+
+		events
+	}
+}
+
+fn event_time(event: &CalendarEventDto) -> String {
+	if event.is_all_day {
+		"All day".to_string()
+	} else {
+		format!(
+			"{}–{}",
+			event.start.format("%H:%M"),
+			event.end.format("%H:%M")
+		)
+	}
+}
+
+fn day_style(colors: Colors, selected: bool) -> NeoButtonStyle {
+	let background = if selected {
+		colors.decorative.purple
+	} else {
+		colors.body
+	};
+	let highlighted = if selected { background } else { colors.raised };
+	let surface = NeoSurfaceStyle {
+		background,
+		border_width: 0.0,
+		shadow_width: 0.0,
+		..NeoSurfaceStyle::with_colors(colors)
+	};
+
+	NeoButtonStyle {
+		surface: NeoContentSurfaceStyle {
+			surface,
+			padding: 4.into(),
+		},
+		hovered: NeoSurfaceStyle {
+			background: highlighted,
+			..surface
+		},
+		focused: NeoContentSurfaceStyle {
+			surface: NeoSurfaceStyle {
+				background: highlighted,
+				..surface
+			},
+			padding: 4.into(),
+		},
+		disabled_background: colors.body,
 	}
 }
 
@@ -370,15 +504,29 @@ async fn request<T, E: std::fmt::Display>(
 		.map_err(|error| error.to_string())
 }
 
+fn calendar_range(
+	year: i16, month: i8,
+) -> Result<(chrono::NaiveDateTime, chrono::NaiveDateTime), String> {
+	// The API uses naive local datetimes. No timezone-midnight resolution is
+	// needed for a month query, including on days with a local clock change.
+	let month_start = chrono::NaiveDate::from_ymd_opt(i32::from(year), month as u32, 1)
+		.and_then(|date| date.and_hms_opt(0, 0, 0))
+		.ok_or_else(|| "Invalid calendar month".to_string())?;
+	let start = month_start
+		.checked_sub_signed(chrono::Duration::days(i64::from(
+			month_start.weekday().num_days_from_monday(),
+		)))
+		.ok_or_else(|| "Calendar grid is out of range".to_string())?;
+	let end = start
+		.checked_add_signed(chrono::Duration::days(42))
+		.ok_or_else(|| "Calendar month is out of range".to_string())?;
+
+	Ok((start, end))
+}
+
 fn calendar_events(year: i16, month: i8) -> impl futures::Stream<Item = Result<Message, String>> {
 	async_stream::try_stream! {
-		// The API uses naive local datetimes. No timezone-midnight resolution is
-		// needed for a month query, including on days with a local clock change.
-		let start = chrono::NaiveDate::from_ymd_opt(i32::from(year), month as u32, 1)
-			.and_then(|date| date.and_hms_opt(0, 0, 0))
-			.ok_or_else(|| "Invalid calendar month".to_string())?;
-		let end = start.checked_add_months(chrono::Months::new(1))
-			.ok_or_else(|| "Calendar month is out of range".to_string())?;
+		let (start, end) = calendar_range(year, month)?;
 		let connection = request(zbus::Connection::session()).await?;
 		let proxy = request(CalendarProxy::new(&connection)).await?;
 		// Subscribe before reading so events during the initial fetch are not lost.
@@ -415,6 +563,124 @@ fn iso_week_number(date: jiff::civil::Date) -> u32 {
 mod tests {
 	use super::{Calendar, Message};
 	use daemon_common::calendar::CalendarEventDto;
+
+	#[test]
+	fn event_queries_cover_adjacent_month_dates_in_every_visible_grid() {
+		for year in [2024, 2025, 2026] {
+			for month in 1..=12 {
+				let (start, end) = super::calendar_range(year, month).expect("valid range");
+				let first = jiff::civil::Date::new(year, month, 1).expect("valid month");
+				let leading = i32::from(first.weekday().to_monday_zero_offset());
+				for offset in 0..42 {
+					let day = first
+						.checked_add(jiff::ToSpan::days(offset - leading))
+						.expect("valid grid date");
+					let day = chrono::NaiveDate::from_ymd_opt(
+						i32::from(day.year()),
+						day.month() as u32,
+						day.day() as u32,
+					)
+					.expect("valid date");
+					assert!(day >= start.date() && day < end.date());
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn agenda_distinguishes_loading_failure_and_empty_and_sorts_local_times() {
+		let mut calendar = Calendar::new();
+		calendar.update(Message::OnDateSelected(jiff::civil::date(2026, 1, 1)));
+		assert_eq!(calendar.agenda_status(), Some("Loading events…"));
+
+		calendar.update(Message::Unavailable("offline".into()));
+		assert_eq!(calendar.agenda_status(), Some("Calendar unavailable"));
+		calendar.update(Message::EventsUpdated(vec![]));
+		assert_eq!(calendar.agenda_status(), Some("No events"));
+
+		let mut late = event(2026).expect("valid event");
+		late.title = "Lunch".into();
+		let mut early = late.clone();
+		early.title = "Morning".into();
+		early.start -= chrono::Duration::hours(3);
+		early.end = early.start + chrono::Duration::minutes(30);
+		calendar.events.insert(
+			calendar.selected_date,
+			vec![std::sync::Arc::new(late), std::sync::Arc::new(early)],
+		);
+		let events = calendar.agenda_events();
+
+		assert_eq!(calendar.agenda_status(), None);
+		assert_eq!(
+			events
+				.iter()
+				.map(|event| event.title.as_str())
+				.collect::<Vec<_>>(),
+			["Morning", "Lunch"]
+		);
+		assert_eq!(super::event_time(events[0]), "09:00–09:30");
+		let mut all_day = events[0].clone();
+		all_day.is_all_day = true;
+		assert_eq!(super::event_time(&all_day), "All day");
+	}
+
+	#[test]
+	fn agenda_starts_compact_and_selection_expands_until_collapsed() {
+		let mut calendar = Calendar::new();
+		assert!(!calendar.agenda_expanded);
+
+		calendar.update(Message::OnDateSelected(jiff::civil::date(2026, 1, 31)));
+		assert!(calendar.agenda_expanded);
+		assert!(!calendar.loaded);
+
+		calendar.update(Message::EventsUpdated(vec![]));
+		assert!(calendar.loaded);
+		calendar.update(Message::CollapseAgenda);
+		assert!(!calendar.agenda_expanded);
+		calendar.update(Message::OnDateSelected(jiff::civil::date(2026, 1, 30)));
+		assert!(calendar.agenda_expanded);
+		calendar.update(Message::Closed);
+		assert!(!calendar.agenda_expanded);
+	}
+
+	#[test]
+	fn month_and_year_navigation_carry_and_clamp_selected_day() {
+		let mut calendar = Calendar::new();
+		calendar.update(Message::OnDateSelected(jiff::civil::date(2024, 1, 31)));
+		calendar.update(Message::EventsUpdated(vec![]));
+
+		calendar.update(Message::OnMonthForward);
+		assert_eq!(calendar.selected_date, jiff::civil::date(2024, 2, 29));
+		assert!(!calendar.loaded);
+		calendar.update(Message::OnYearForward);
+		assert_eq!(calendar.selected_date, jiff::civil::date(2025, 2, 28));
+
+		calendar.update(Message::ForMonth(
+			2024,
+			1,
+			Box::new(Message::EventsUpdated(vec![])),
+		));
+		assert!(
+			!calendar.loaded,
+			"old month data must not mark current month loaded"
+		);
+	}
+
+	#[test]
+	fn both_themes_build_compact_and_expanded_agendas() {
+		let mut calendar = Calendar::new();
+		for colors in [neo_widgets::style::LIGHT, neo_widgets::style::DARK] {
+			let _ = calendar.view(colors);
+		}
+
+		calendar.update(Message::OnDateSelected(jiff::civil::date(2026, 1, 1)));
+		calendar.update(Message::EventsUpdated(vec![
+			event(2026).expect("valid event"),
+		]));
+		for colors in [neo_widgets::style::LIGHT, neo_widgets::style::DARK] {
+			let _ = calendar.view(colors);
+		}
+	}
 
 	fn event(year: i32) -> Result<CalendarEventDto, Box<dyn std::error::Error>> {
 		let date = chrono::NaiveDate::from_ymd_opt(year, 1, 1)
@@ -465,7 +731,7 @@ mod tests {
 		let message =
 			tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await?;
 		assert!(
-			matches!(message, Some(Message::Unavailable(_))),
+			matches!(message, Some(Message::ForMonth(_, _, message)) if matches!(*message, Message::Unavailable(_))),
 			"calendar must report unavailability"
 		);
 		Ok(())
@@ -481,7 +747,8 @@ mod tests {
 			(calendar.selected_year, calendar.selected_month),
 			(9999, 12)
 		);
-		let _ = calendar.view();
+		let colors = neo_widgets::style::Colors::for_theme(config::AppearanceMode::Light);
+		let _ = calendar.view(colors);
 		calendar.update(Message::OnDateSelected(jiff::civil::date(-9999, 1, 1)));
 		calendar.update(Message::OnMonthBackward);
 		calendar.update(Message::OnYearBackward);
@@ -489,7 +756,7 @@ mod tests {
 			(calendar.selected_year, calendar.selected_month),
 			(-9999, 1)
 		);
-		let _ = calendar.view();
+		let _ = calendar.view(colors);
 	}
 
 	#[test]
@@ -536,7 +803,9 @@ mod tests {
 			.ok_or("missing subscription")?;
 		let mut stream = recipe.stream(futures::stream::pending().boxed());
 		let first = tokio::time::timeout(std::time::Duration::from_secs(2), stream.next()).await?;
-		assert!(matches!(first, Some(Message::Unavailable(_))));
+		assert!(
+			matches!(first, Some(Message::ForMonth(_, _, message)) if matches!(*message, Message::Unavailable(_)))
+		);
 		let connection = zbus::connection::Builder::session()?
 			.name(daemon_common::DEFAULT_BUS_NAME)?
 			.serve_at(
@@ -548,7 +817,7 @@ mod tests {
 		let next = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next()).await?;
 		connection.close().await?;
 		assert!(
-			matches!(next, Some(Message::EventsUpdated(_))),
+			matches!(next, Some(Message::ForMonth(_, _, message)) if matches!(*message, Message::EventsUpdated(_))),
 			"subscription must reconnect and read a fresh snapshot"
 		);
 		Ok(())

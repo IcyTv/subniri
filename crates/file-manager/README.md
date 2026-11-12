@@ -145,17 +145,12 @@ cargo check -p file-manager
 cargo test -p file-manager -- --skip disks::tests::test
 cargo clippy -p file-manager --all-targets --no-deps
 cargo build -p file-manager --example native-popup-probe
-nix-shell -p weston --run 'python3 scripts/test-fileberg-native-popup.py'
-nix-shell -p weston --run 'POPUP_PROBE_SCALE=1.25 python3 scripts/test-fileberg-native-popup.py'
-nix-shell -p weston --run 'python3 scripts/test-fileberg-context-menu.py'
-nix-shell -p weston --run 'FILEBERG_PROBE_FAVORITES=1 python3 scripts/test-fileberg-context-menu.py'
 ```
 
 The existing `disks::tests::test` is a live UDisks2/system-D-Bus probe, not a
 deterministic unit test. It is excluded from the focused test command above.
 
-Native checks reuse the existing private headless Weston→niri helpers. Keyboard
-events enter through a test-only host relay so niri exercises ordinary popup grabs;
-its internal virtual-keyboard protocol bypasses that path. User desktop sockets,
-configuration, and data are never used by these tests. Artifacts remain in
-`/tmp/opencode/fileberg-*`.
+Native compositor checks require a private headless Weston host with nested niri
+and isolated configuration/data. Do not use the user's desktop sockets or live
+session. Keyboard events must enter through the host so niri exercises ordinary
+popup grabs; its internal virtual-keyboard protocol bypasses that path.

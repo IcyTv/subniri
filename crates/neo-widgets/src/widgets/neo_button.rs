@@ -14,7 +14,10 @@ use iced::{
 	window,
 };
 
-use crate::{style::COLORS, widgets::NeoSurfaceStyle};
+use crate::{
+	style::{COLORS, Colors},
+	widgets::NeoSurfaceStyle,
+};
 
 use super::neo_surface::{self, NeoContentSurfaceStyle};
 
@@ -24,6 +27,27 @@ pub struct NeoButtonStyle {
 	pub hovered: NeoSurfaceStyle,
 	pub focused: NeoContentSurfaceStyle,
 	pub disabled_background: Color,
+}
+
+impl NeoButtonStyle {
+	#[must_use]
+	pub fn with_colors(colors: Colors) -> Self {
+		let surface = NeoContentSurfaceStyle::with_colors(colors);
+
+		Self {
+			surface,
+			hovered: surface.surface,
+			focused: NeoContentSurfaceStyle {
+				surface: NeoSurfaceStyle {
+					background: colors.surface,
+					border_width: 3.0,
+					..surface.surface
+				},
+				..surface
+			},
+			disabled_background: colors.disabled_background,
+		}
+	}
 }
 
 impl Default for NeoButtonStyle {
@@ -63,6 +87,7 @@ pub struct NeoButton<'a, Message, Theme = iced::Theme, Renderer = iced::Renderer
 	enabled: bool,
 	focusable: bool,
 	focus_on_click: bool,
+	focus_marker: Option<Color>,
 	id: Id,
 }
 
@@ -95,8 +120,15 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 			enabled: true,
 			focusable: false,
 			focus_on_click: true,
+			focus_marker: None,
 			id: Id::unique(),
 		}
+	}
+
+	/// Reset the style to this palette before applying other style customizations.
+	pub fn with_colors(mut self, colors: Colors) -> Self {
+		self.style = NeoButtonStyle::with_colors(colors);
+		self
 	}
 
 	pub fn enabled(mut self, enabled: bool) -> Self {
@@ -180,6 +212,9 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 	pub fn background(mut self, color: Color) -> Self {
 		self.style.surface.surface.background = color;
 		self.style.hovered.background = color;
+		// A custom fill may have an explicit contrasting foreground. Keep it
+		// readable on focus; callers can still opt into a separate focus_color.
+		self.style.focused.surface.background = color;
 		self
 	}
 
@@ -220,6 +255,12 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		self
 	}
 
+	/// Draw an inset focus accent without replacing any edge of the surface border.
+	pub fn focus_marker(mut self, color: Color) -> Self {
+		self.focus_marker = Some(color);
+		self
+	}
+
 	pub fn focusable(mut self, focusable: bool) -> Self {
 		self.focusable = focusable;
 		self
@@ -241,6 +282,7 @@ impl<'a, Message, Theme, Renderer> NeoButton<'a, Message, Theme, Renderer> {
 		Out: 'a,
 	{
 		NeoButton {
+			focus_marker: self.focus_marker,
 			content: self.content.map(func.clone()),
 			on_press: self.on_press.map(|on_press| match on_press {
 				OnPress::Message(message) => OnPress::Message(func.clone()(message)),
@@ -541,6 +583,23 @@ where
 			},
 			offset,
 			|renderer| {
+				if state.focused
+					&& self.enabled && let Some(color) = self.focus_marker
+				{
+					renderer.fill_quad(
+						renderer::Quad {
+							bounds: Rectangle {
+								x: bounds.x + 6.0 + offset,
+								y: bounds.y + 6.0 + offset,
+								width: 3.0,
+								height: (bounds.height - surface.shadow_width - 12.0).max(0.0),
+							},
+							..Default::default()
+						},
+						color,
+					);
+				}
+
 				self.content.as_widget().draw(
 					#[allow(clippy::indexing_slicing)]
 					&tree.children[0],
@@ -591,6 +650,38 @@ impl Focusable for State {
 
 #[cfg(test)]
 mod tests {
+	#[test]
+	fn focus_marker_preserves_all_surface_borders_and_survives_message_mapping() {
+		for colors in [crate::style::LIGHT, crate::style::DARK] {
+			let button = super::NeoButton::<u8>::new(iced::widget::Space::new())
+				.with_colors(colors)
+				.focus_marker(colors.decorative.pink)
+				.focus_color(colors.raised)
+				.map(u16::from);
+
+			assert_eq!(button.focus_marker, Some(colors.decorative.pink));
+			assert_eq!(button.style.focused.surface.border, colors.black);
+			assert!(button.style.focused.surface.border_width >= 2.0);
+			assert_eq!(button.style.focused.surface.background, colors.raised);
+		}
+	}
+
+	#[test]
+	fn custom_fill_preserves_foreground_contrast_on_focus() {
+		let colors = crate::style::DARK;
+		let button: super::NeoButton<'_, ()> = super::neo_button(iced::widget::text("Action"))
+			.with_colors(colors)
+			.background(colors.decorative.pink);
+
+		assert_eq!(
+			button.style.focused.surface.background,
+			colors.decorative.pink
+		);
+		assert!(
+			button.style.focused.surface.border_width > button.style.surface.surface.border_width
+		);
+	}
+
 	use super::*;
 
 	#[test]

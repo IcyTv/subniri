@@ -9,7 +9,7 @@ use daemon_common::{
 };
 use futures::StreamExt;
 use iced::{Animation, Subscription, Task, widget::svg};
-use neo_widgets::{phosphor_icon, style::COLORS, widgets::NeoButton};
+use neo_widgets::{phosphor_icon, style::Colors, widgets::NeoButton};
 use utilities::Hashable;
 
 pub(super) mod integration;
@@ -232,9 +232,11 @@ impl HomeassistantEntity {
 		self.enabled.is_animating(now)
 	}
 
-	pub fn view_tile(&self, size: iced::Size) -> NeoButton<'_, Message> {
+	pub fn view_tile(&self, size: iced::Size, colors: Colors) -> NeoButton<'_, Message> {
 		let now = Instant::now();
-		neo_widgets::widgets::neo_tile(
+
+		neo_widgets::widgets::neo_tile_with_colors(
+			colors,
 			self.icon(),
 			self.name.as_str(),
 			self.id.as_str(),
@@ -245,13 +247,9 @@ impl HomeassistantEntity {
 			},
 			Some(
 				self.enabled
-					.interpolate(COLORS.white, COLORS.decorative.green, now),
+					.interpolate(colors.surface, colors.decorative.green, now),
 			),
 			size,
-		)
-		.background(
-			self.enabled
-				.interpolate(COLORS.white, COLORS.decorative.green90, now),
 		)
 		.on_press(Message::Activate)
 		.enabled(self.interaction.actionable())

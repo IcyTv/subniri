@@ -3,7 +3,7 @@ use iced::{
 	widget::{PickList, overlay::menu, pick_list},
 };
 
-use crate::style::COLORS;
+use crate::style::{COLORS, Colors};
 
 use super::neo_input::NeoField;
 
@@ -19,6 +19,7 @@ pub struct NeoPickList<'a, T: Clone + PartialEq + 'a, Message> {
 	pick_list: PickList<'a, T, &'a [T], &'a T, Message>,
 	width: Length,
 	enabled: bool,
+	colors: Option<Colors>,
 }
 
 impl<'a, T: Clone + PartialEq + 'a, Message: Clone + 'a> NeoPickList<'a, T, Message> {
@@ -31,7 +32,17 @@ impl<'a, T: Clone + PartialEq + 'a, Message: Clone + 'a> NeoPickList<'a, T, Mess
 				.menu_style(menu_style),
 			width: Length::Shrink,
 			enabled: false,
+			colors: None,
 		}
+	}
+
+	pub fn with_colors(mut self, colors: Colors) -> Self {
+		self.pick_list = self
+			.pick_list
+			.style(move |_theme, _status| closed_style_with_colors(colors))
+			.menu_style(move |_theme| menu_style_with_colors(colors));
+		self.colors = Some(colors);
+		self
 	}
 
 	pub fn on_select(mut self, on_select: impl Fn(T) -> Message + 'a) -> Self {
@@ -51,22 +62,27 @@ impl<'a, T: Clone + PartialEq + 'a, Message: Clone + 'a> From<NeoPickList<'a, T,
 	for Element<'a, Message>
 {
 	fn from(pick_list: NeoPickList<'a, T, Message>) -> Self {
-		Element::new(NeoField::new(
-			pick_list.pick_list,
-			pick_list.width,
-			pick_list.enabled,
-		))
+		let field = NeoField::new(pick_list.pick_list, pick_list.width, pick_list.enabled);
+
+		Element::new(match pick_list.colors {
+			Some(colors) => field.with_colors(colors),
+			None => field,
+		})
 	}
 }
 
 fn closed_style(_theme: &iced::Theme, _status: pick_list::Status) -> pick_list::Style {
+	closed_style_with_colors(COLORS)
+}
+
+fn closed_style_with_colors(colors: Colors) -> pick_list::Style {
 	pick_list::Style {
-		text_color: COLORS.black,
-		placeholder_color: COLORS.secondary,
-		handle_color: COLORS.black,
+		text_color: colors.text,
+		placeholder_color: colors.secondary,
+		handle_color: colors.text,
 		background: Color::TRANSPARENT.into(),
 		border: iced::Border {
-			color: COLORS.black,
+			color: colors.border,
 			width: 0.0,
 			radius: 0.0.into(),
 		},
@@ -74,18 +90,26 @@ fn closed_style(_theme: &iced::Theme, _status: pick_list::Status) -> pick_list::
 }
 
 fn menu_style(_theme: &iced::Theme) -> menu::Style {
+	menu_style_with_colors(Colors {
+		surface: COLORS.white,
+		selection: COLORS.decorative.blue90,
+		..COLORS
+	})
+}
+
+fn menu_style_with_colors(colors: Colors) -> menu::Style {
 	menu::Style {
-		background: COLORS.white.into(),
+		background: colors.surface.into(),
 		border: iced::Border {
-			color: COLORS.black,
+			color: colors.border,
 			width: 2.0,
 			radius: 3.0.into(),
 		},
-		text_color: COLORS.black,
-		selected_text_color: COLORS.black,
-		selected_background: COLORS.decorative.blue90.into(),
+		text_color: colors.text,
+		selected_text_color: colors.text,
+		selected_background: colors.selection.into(),
 		shadow: Shadow {
-			color: COLORS.black,
+			color: colors.border,
 			offset: Vector::new(4.0, 4.0),
 			blur_radius: 0.0,
 		},
@@ -104,6 +128,30 @@ mod tests {
 		assert_eq!(style.border.width, 0.0);
 		assert_eq!(style.text_color, COLORS.black);
 		assert_eq!(style.handle_color, COLORS.black);
+	}
+
+	#[test]
+	fn explicit_dark_colors_style_closed_picker_and_menu() {
+		let colors = crate::style::DARK;
+		let options = ["One", "Two"];
+		let picker =
+			neo_pick_list::<_, ()>(Some(&options[0]), &options, |value| (*value).to_owned())
+				.with_colors(colors);
+		let closed = closed_style_with_colors(colors);
+		let menu = menu_style_with_colors(colors);
+
+		assert_eq!(picker.colors, Some(colors));
+		assert_eq!(closed.text_color, colors.text);
+		assert_eq!(closed.placeholder_color, colors.secondary);
+		assert_eq!(closed.handle_color, colors.text);
+		assert_eq!(closed.border.color, colors.border);
+		assert_eq!(closed.background, Color::TRANSPARENT.into());
+		assert_eq!(menu.background, colors.surface.into());
+		assert_eq!(menu.text_color, colors.text);
+		assert_eq!(menu.selected_text_color, colors.text);
+		assert_eq!(menu.selected_background, colors.selection.into());
+		assert_eq!(menu.border.color, colors.border);
+		assert_eq!(menu.shadow.color, colors.border);
 	}
 
 	#[test]

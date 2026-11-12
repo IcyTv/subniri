@@ -15,7 +15,7 @@ use jiff::{
 };
 use neo_widgets::{
 	phosphor_icon,
-	style::COLORS,
+	style::Colors,
 	widgets::{NeoButton, gif, gif::Frames, neo_button, neo_card},
 };
 use nix::unistd::{Uid, User};
@@ -43,6 +43,7 @@ pub enum Message {
 
 	OpenPowerMenu,
 	OpenSettings,
+	SelectTheme(config::AppearanceMode),
 
 	ChangeBrightness(f64),
 	ChangeTemperature(u32),
@@ -82,6 +83,13 @@ pub enum ContextMenu {
 	Nightlight(nightlight::ContextMenu),
 }
 
+#[derive(Clone, Copy, Debug)]
+struct ContextPopup {
+	menu: ContextMenu,
+	anchor: Rectangle,
+	pointer: Option<nightlight::PointerPlacement>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum Avatar {
@@ -96,13 +104,15 @@ pub struct SystemMenu {
 	username: String,
 	avatar: Avatar,
 	uptime: jiff::Span,
+	theme: config::AppearanceMode,
+	connected: bool,
 
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight: Box<nightlight::Nightlight>,
 	homeassistant: homeassistant::integration::Integration,
 
-	context_menus: Vec<ContextMenu>,
+	context_menus: Vec<ContextPopup>,
 	preview: Option<Vec<config::PlacedTile>>,
 	popup_id: Option<iced::window::Id>,
 	maximum: Size,
@@ -142,6 +152,8 @@ impl SystemMenu {
 			username,
 			avatar,
 			uptime,
+			theme: config.appearance.theme,
+			connected: false,
 
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
@@ -161,6 +173,11 @@ impl SystemMenu {
 
 	pub fn init(&self) -> Task<Message> {
 		self.homeassistant.init().map(Message::Homeassistant)
+	}
+
+	pub fn appearance_changed(&mut self, theme: config::AppearanceMode, connected: bool) {
+		self.theme = theme;
+		self.connected = connected;
 	}
 
 	pub fn subscription(&self) -> Subscription<Message> {
@@ -280,6 +297,7 @@ impl SystemMenu {
 			| Message::Noop
 			| Message::OpenSettings
 			| Message::OpenPowerMenu
+			| Message::SelectTheme(_)
 			| Message::OpenContextMenu(_, _, _) => (),
 		}
 		self.retarget();
@@ -423,25 +441,32 @@ impl SystemMenu {
 		self.context_menus.clear();
 	}
 
-	pub fn view(&self) -> NeoButton<'_, Message> {
+	pub fn view(&self, colors: Colors) -> NeoButton<'_, Message> {
 		let _ = self;
-		neo_button(svg(phosphor_icon!("squares-four", "bold")).width(Length::Shrink))
-			.width(48.0)
-			.height(MODULE_HEIGHT)
-			.background(COLORS.decorative.blue)
-			.radius(MODULE_RADIUS)
+		neo_button(
+			svg(phosphor_icon!("squares-four", "bold"))
+				.width(Length::Shrink)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.on_accent),
+				}),
+		)
+		.with_colors(colors)
+		.width(48.0)
+		.height(MODULE_HEIGHT)
+		.background(colors.decorative.blue)
+		.radius(MODULE_RADIUS)
 	}
 
 	#[allow(clippy::too_many_lines)]
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		let mut content = column![]
 			.spacing(spatial::SPACING)
 			.width(Length::Fill)
 			.height(Length::Fill);
 
 		content = content.push(neo_widgets::widgets::intrinsic_size(
-			self.header(false),
-			self.header(true),
+			self.header(false, colors),
+			self.header(true, colors),
 			Message::HeaderMeasured,
 		));
 
@@ -458,9 +483,9 @@ impl SystemMenu {
 					tile.tile.widget.clone(),
 					Some(tile.clone()),
 					if enabled.get(index) == Some(&false) {
-						self.view_catalog_tile(&tile.tile.widget, size)
+						self.view_catalog_tile(&tile.tile.widget, size, colors)
 					} else {
-						self.view_widget(&tile.tile.widget, size)
+						self.view_widget(&tile.tile.widget, size, colors)
 					},
 				)
 			})
@@ -475,12 +500,14 @@ impl SystemMenu {
 			self.grid_size(),
 			maximum,
 			!self.resize.waiting(),
+			colors,
 		);
 		content = content.push(widgets);
 		let card = neo_card(content)
+			.with_colors(colors)
 			.width(Length::Fill)
 			.height(Length::Fill)
-			.background(COLORS.decorative.blue)
+			.background(colors.body)
 			.radius(MODULE_RADIUS);
 		let target = self.target_size();
 		let envelope = if self.popup_id.is_some() {
@@ -505,17 +532,21 @@ impl SystemMenu {
 		}
 	}
 
-	fn header(&self, fill: bool) -> Element<'_, Message> {
+	fn header(&self, fill: bool, colors: Colors) -> Element<'_, Message> {
 		let width = if fill { Length::Fill } else { Length::Shrink };
+
+		const HEADER_ICON: u32 = 36;
+
 		let user_card = row![
 			neo_card(self.avatar())
+				.with_colors(colors)
 				.padding(2)
-				.background(COLORS.decorative.pink),
+				.background(colors.decorative.pink),
 			column![
 				text(&self.username)
 					.size(16)
 					.wrapping(iced::widget::text::Wrapping::None)
-					.color(COLORS.text)
+					.color(colors.on_accent)
 					.font(Font {
 						weight: font::Weight::Bold,
 						..Default::default()
@@ -524,38 +555,52 @@ impl SystemMenu {
 					"up {}",
 					UPTIME_PRINTER.span_to_string(&self.uptime)
 				))
-				.color(COLORS.text)
+				.color(colors.on_accent)
 				.wrapping(iced::widget::text::Wrapping::None)
 				.size(12)
 			]
 			.width(width),
-			neo_button(svg(phosphor_icon!("power")))
-				.width(32)
-				.height(32)
-				.padding(6)
-				.on_press(Message::OpenPowerMenu),
-			neo_button(svg(phosphor_icon!("gear")))
-				.width(32)
-				.height(32)
-				.padding(6)
-				.on_press(Message::OpenSettings),
-			neo_button(svg(phosphor_icon!("pencil")))
-				.width(32)
-				.height(32)
-				.padding(6)
-				.background(if self.layout.editing() {
-					COLORS.decorative.blue
+			neo_button(svg(phosphor_icon!("power")).style(move |_, _| svg::Style {
+				color: Some(colors.text),
+			}))
+			.with_colors(colors)
+			.width(HEADER_ICON)
+			.height(HEADER_ICON)
+			.padding(6)
+			.on_press(Message::OpenPowerMenu),
+			neo_button(svg(phosphor_icon!("gear")).style(move |_, _| svg::Style {
+				color: Some(colors.text),
+			}))
+			.with_colors(colors)
+			.width(HEADER_ICON)
+			.height(HEADER_ICON)
+			.padding(6)
+			.on_press(Message::OpenSettings),
+			neo_button(svg(phosphor_icon!("pencil")).style(move |_, _| svg::Style {
+				color: Some(if self.layout.editing() {
+					colors.on_accent
 				} else {
-					COLORS.white
-				})
-				.on_press(Message::EditingChanged(!self.layout.editing())),
+					colors.text
+				}),
+			}))
+			.with_colors(colors)
+			.width(HEADER_ICON)
+			.height(HEADER_ICON)
+			.padding(6)
+			.background(if self.layout.editing() {
+				colors.decorative.blue
+			} else {
+				colors.surface
+			})
+			.on_press(Message::EditingChanged(!self.layout.editing())),
 		]
 		.width(width)
 		.spacing(8)
 		.align_y(Vertical::Center);
 
 		neo_card(user_card)
-			.background(COLORS.decorative.pink)
+			.with_colors(colors)
+			.background(colors.decorative.pink)
 			.width(width)
 			.into()
 	}
@@ -567,11 +612,14 @@ impl SystemMenu {
 		}
 	}
 
-	fn view_catalog_tile(&self, widget: &SystemMenuWidgets, size: Size) -> Element<'_, Message> {
+	fn view_catalog_tile(
+		&self, widget: &SystemMenuWidgets, size: Size, colors: Colors,
+	) -> Element<'_, Message> {
 		let (icon, label) = match widget {
 			SystemMenuWidgets::Wifi => (phosphor_icon!("wifi-high"), "Wi-Fi".to_owned()),
 			SystemMenuWidgets::Bluetooth => (phosphor_icon!("bluetooth"), "Bluetooth".to_owned()),
 			SystemMenuWidgets::Nightlight => (phosphor_icon!("moon"), "Nightlight".to_owned()),
+			SystemMenuWidgets::DarkMode => (phosphor_icon!("moon"), "Dark mode".to_owned()),
 			SystemMenuWidgets::Speaker => (phosphor_icon!("speaker-high"), "Speaker".to_owned()),
 			SystemMenuWidgets::Microphone => {
 				(phosphor_icon!("microphone"), "Microphone".to_owned())
@@ -584,83 +632,106 @@ impl SystemMenu {
 					.map_or_else(|| id.clone(), |entity| entity.title().to_owned()),
 			),
 		};
-		neo_widgets::widgets::neo_tile::<Message>(
-			icon,
-			label,
-			"",
-			None,
-			Some(COLORS.disabled_background),
-			size,
+		neo_widgets::widgets::neo_tile_with_colors::<Message>(
+			colors, icon, label, "", None, None, size,
 		)
-		.background(COLORS.disabled_background)
+		.background(colors.disabled_background)
 		.enabled(false)
 		.into()
 	}
 
-	pub fn view_context_menu(&self, depth: usize) -> Element<'_, Message> {
+	pub fn view_context_menu(&self, depth: usize, colors: Colors) -> Element<'_, Message> {
 		match self.context_menus.get(depth).copied() {
-			Some(ContextMenu::Nightlight(menu)) => {
-				self.nightlight
-					.view_context_menu(menu)
-					.map(move |message| match message {
-						nightlight::Message::OpenContextMenu(menu, bounds) => {
-							Message::OpenContextMenu(
-								ContextMenu::Nightlight(menu),
-								depth + 1,
-								bounds,
-							)
-						}
-						message => Message::Nightlight(message),
-					})
-			}
-			_ => neo_card(text("No context menu").color(COLORS.text))
+			Some(ContextPopup {
+				menu: ContextMenu::Nightlight(menu),
+				pointer,
+				..
+			}) => self
+				.nightlight
+				.view_context_menu(
+					menu,
+					self.context_menus
+						.get(depth + 1)
+						.map(|child| match child.menu {
+							ContextMenu::Nightlight(child) => child,
+						}),
+					pointer,
+					colors,
+				)
+				.map(move |message| match message {
+					nightlight::Message::OpenContextMenu(menu, bounds) => {
+						Message::OpenContextMenu(ContextMenu::Nightlight(menu), depth + 1, bounds)
+					}
+					message => Message::Nightlight(message),
+				}),
+			_ => neo_card(text("No context menu").color(colors.text))
+				.with_colors(colors)
 				.padding(8)
-				.background(COLORS.white)
+				.background(colors.surface)
 				.into(),
 		}
 	}
 
-	pub fn open_context_menu(&mut self, menu: ContextMenu, depth: usize) {
+	pub fn open_context_menu(&mut self, menu: ContextMenu, depth: usize, anchor: Rectangle) {
 		if depth > self.context_menus.len() {
 			return;
 		}
 		self.context_menus.truncate(depth);
-		self.context_menus.push(menu);
+		self.context_menus.push(ContextPopup {
+			menu,
+			anchor,
+			pointer: None,
+		});
+	}
+
+	pub fn context_configured(&mut self, depth: usize, geometry: Rectangle) {
+		if let Some(popup) = self.context_menus.get_mut(depth) {
+			popup.pointer = Some(nightlight::PointerPlacement::from_geometry(
+				popup.anchor,
+				geometry,
+			));
+		}
 	}
 
 	pub(crate) fn view_widget<'a>(
-		&'a self, widget: &SystemMenuWidgets, size: Size,
+		&'a self, widget: &SystemMenuWidgets, size: Size, colors: Colors,
 	) -> Element<'a, Message> {
 		let button = match widget {
-			SystemMenuWidgets::Wifi => self.wifi.view_tile(size).map(Message::Wifi),
-			SystemMenuWidgets::Bluetooth => self.bluetooth.view_tile(size).map(Message::Bluetooth),
-			SystemMenuWidgets::Speaker => neo_widgets::widgets::neo_tile(
+			SystemMenuWidgets::Wifi => self.wifi.view_tile(size, colors).map(Message::Wifi),
+			SystemMenuWidgets::Bluetooth => self
+				.bluetooth
+				.view_tile(size, colors)
+				.map(Message::Bluetooth),
+			SystemMenuWidgets::Speaker => neo_widgets::widgets::neo_tile_with_colors(
+				colors,
 				phosphor_icon!("speaker-high"),
 				"Default Sink",
 				"-- %",
 				Some(true),
-				Some(COLORS.white),
+				None,
 				size,
 			),
-			SystemMenuWidgets::Microphone => neo_widgets::widgets::neo_tile(
+			SystemMenuWidgets::Microphone => neo_widgets::widgets::neo_tile_with_colors(
+				colors,
 				phosphor_icon!("microphone"),
 				"Default Source",
 				"-- %",
 				Some(false),
-				Some(COLORS.white),
+				None,
 				size,
 			),
-			SystemMenuWidgets::Vpn => neo_widgets::widgets::neo_tile(
+			SystemMenuWidgets::Vpn => neo_widgets::widgets::neo_tile_with_colors(
+				colors,
 				phosphor_icon!("shield-slash"),
 				"VPN",
 				"Disconnected",
 				Some(false),
-				Some(COLORS.white),
+				None,
 				size,
 			),
 			SystemMenuWidgets::Nightlight => self
 				.nightlight
-				.view_tile(size)
+				.view_tile(size, colors)
 				.map(Message::Nightlight)
 				.on_context_menu_with_mouse_position(|position| {
 					Message::OpenContextMenu(
@@ -671,7 +742,8 @@ impl SystemMenu {
 				}),
 			SystemMenuWidgets::Homeassistant(id) => self.homeassistant.get(id).map_or_else(
 				|| {
-					neo_widgets::widgets::neo_tile(
+					neo_widgets::widgets::neo_tile_with_colors(
+						colors,
 						phosphor_icon!("house"),
 						"Unknown Entity",
 						id.clone(),
@@ -683,7 +755,7 @@ impl SystemMenu {
 				},
 				|e| {
 					let id = id.clone();
-					e.view_tile(size).map(move |msg| {
+					e.view_tile(size, colors).map(move |msg| {
 						Message::Homeassistant(homeassistant::integration::Message::Entity(
 							id.clone(),
 							msg,
@@ -691,7 +763,33 @@ impl SystemMenu {
 					})
 				},
 			),
+			SystemMenuWidgets::DarkMode => {
+				let dark = self.theme == config::AppearanceMode::Dark;
+				let next = if dark {
+					config::AppearanceMode::Light
+				} else {
+					config::AppearanceMode::Dark
+				};
+				let status = if !self.connected { "Unavailable" } else { "" };
+
+				neo_widgets::widgets::neo_tile_with_colors(
+					colors,
+					if dark {
+						phosphor_icon!("moon", "fill")
+					} else {
+						phosphor_icon!("moon")
+					},
+					"Dark mode",
+					status,
+					Some(dark),
+					Some(colors.decorative.purple),
+					size,
+				)
+				.on_press(Message::SelectTheme(next))
+				.enabled(self.connected)
+			}
 		};
+
 		let view: Element<'_, Message> = if matches!(widget, SystemMenuWidgets::Nightlight)
 			&& size.width >= spatial::span(4)
 			&& size.height >= spatial::span(2)
@@ -702,13 +800,14 @@ impl SystemMenu {
 				background: iced::Color::TRANSPARENT,
 				border_width: 0.0,
 				shadow_width: 0.0,
-				..Default::default()
+				..NeoSurfaceStyle::with_colors(colors)
 			};
 			let content_surface = NeoContentSurfaceStyle {
 				surface,
 				padding: 0.0.into(),
 			};
-			neo_button(self.nightlight.view_expanded(size))
+			neo_button(self.nightlight.view_expanded(size, colors))
+				.with_colors(colors)
 				.width(Length::Fill)
 				.height(Length::Fill)
 				.style(NeoButtonStyle {
@@ -728,6 +827,7 @@ impl SystemMenu {
 		} else {
 			button.width(Length::Fill).height(Length::Fill).into()
 		};
+
 		let label = match widget {
 			SystemMenuWidgets::Homeassistant(id) => self
 				.homeassistant
@@ -735,7 +835,22 @@ impl SystemMenu {
 				.map_or_else(|| id.clone(), |entity| entity.title().to_owned()),
 			_ => format!("{widget:?}"),
 		};
-		iced::widget::tooltip(view, text(label), iced::widget::tooltip::Position::Bottom).into()
+		iced::widget::tooltip(
+			view,
+			text(label).color(colors.text),
+			iced::widget::tooltip::Position::Bottom,
+		)
+		.style(move |_| iced::widget::container::Style {
+			background: Some(colors.surface.into()),
+			text_color: Some(colors.text),
+			border: iced::Border {
+				color: colors.black,
+				width: 2.0,
+				radius: 3.0.into(),
+			},
+			..Default::default()
+		})
+		.into()
 	}
 }
 
@@ -802,6 +917,33 @@ mod reliability_tests {
 	use super::SystemMenu;
 	use crate::modules::test_bus;
 
+	#[test]
+	fn theme_updates_follow_effective_appearance_without_closing_or_changing_layout() {
+		use config::AppearanceMode;
+
+		let mut config = config::ConfigFile::default();
+		config.appearance.theme = AppearanceMode::Dark;
+		let mut menu = SystemMenu::new(&config);
+		let layout = menu.layout.configuration();
+
+		assert_eq!(menu.theme, AppearanceMode::Dark);
+		assert!(!menu.connected);
+
+		menu.appearance_changed(AppearanceMode::Light, true);
+		assert_eq!(menu.theme, AppearanceMode::Light);
+		assert!(menu.connected);
+
+		let message = super::Message::SelectTheme(AppearanceMode::Dark);
+		assert!(!message.closes_context_menus());
+		assert_eq!(menu.update(message).units(), 0);
+		assert_eq!(menu.theme, AppearanceMode::Light);
+		assert_eq!(menu.layout.configuration(), layout);
+
+		menu.appearance_changed(AppearanceMode::Dark, false);
+		assert_eq!(menu.theme, AppearanceMode::Dark);
+		assert!(!menu.connected);
+	}
+
 	#[tokio::test]
 	async fn dismissal_persists_row_compaction_once_and_preserves_authored_gap()
 	-> Result<(), test_bus::Error> {
@@ -836,7 +978,12 @@ mod reliability_tests {
 	fn empty_menu_catalog_starts_at_first_row_and_fits_its_grid() {
 		let mut menu = SystemMenu::new(&config::ConfigFile::default());
 		let _ = menu.update(super::Message::EditingChanged(true));
-		assert_eq!(menu.grid_size().height, super::spatial::span(2));
+		let tiles_per_row = (menu.minimum_columns() / 2) as usize;
+		let rows = config::SystemMenuWidgets::VARIANTS
+			.len()
+			.div_ceil(tiles_per_row) as u32;
+
+		assert_eq!(menu.grid_size().height, super::spatial::span(rows));
 		assert_eq!(
 			menu.grid_size().width,
 			super::spatial::span(menu.minimum_columns())

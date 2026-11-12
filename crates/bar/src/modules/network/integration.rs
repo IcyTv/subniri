@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use iced::{Element, Rectangle, Subscription, Task};
-use neo_widgets::style::COLORS;
+use neo_widgets::style::Colors;
 use utilities::Hashable;
 
 use super::{Message as Event, Network};
@@ -96,24 +96,34 @@ impl Integration {
 		}
 	}
 
-	pub fn view(&self) -> Element<'_, Message> {
+	pub fn view(&self, colors: Colors) -> Element<'_, Message> {
 		match &self.state {
-			ServiceState::Connecting => loading(COLORS.decorative.green),
-			ServiceState::Unavailable { error, .. } => {
-				unavailable("Network unavailable", error, COLORS.decorative.green)
-			}
+			ServiceState::Connecting => loading(colors.decorative.green, colors),
+			ServiceState::Unavailable { error, .. } => unavailable(
+				"Network unavailable",
+				error,
+				colors.decorative.green,
+				colors,
+			),
 			ServiceState::Ready(network) => network
-				.view()
+				.view(colors)
 				.map(Message::Action)
 				.on_press_with_bounds(Message::OpenPopup)
 				.into(),
 		}
 	}
 
-	pub fn view_popup(&self) -> Element<'_, Message> {
+	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		match &self.state {
-			ServiceState::Ready(network) => network.view_popup().map(Message::Action),
-			_ => self.view(),
+			ServiceState::Ready(network) => network.view_popup(colors).map(Message::Action),
+			ServiceState::Connecting => {
+				super::super::connection_popup("Network", "Connecting…", colors)
+			}
+			ServiceState::Unavailable { .. } => super::super::connection_popup(
+				"Network",
+				"Network unavailable. Retrying automatically.",
+				colors,
+			),
 		}
 	}
 
