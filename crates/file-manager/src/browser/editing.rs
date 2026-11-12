@@ -113,6 +113,9 @@ impl FileManager {
 					thumbnail: None,
 					is_dir: folder,
 					is_hidden: false,
+					is_symlink: false,
+					unresolved_link: false,
+					folder_identity: None,
 				};
 
 				let position = self

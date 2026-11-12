@@ -1068,6 +1068,7 @@ mod tests {
 				forward_keys: false,
 				blocked: false,
 				entries: Vec::new(),
+				completion_available: false,
 			};
 
 			let mut tree = Tree::new(&gate as &dyn Widget<Message, iced::Theme, ()>);
