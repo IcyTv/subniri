@@ -232,6 +232,22 @@
         waylandRuntimeLibs = with pkgs; [wayland libxkbcommon vulkan-loader];
         guiBuildInputs = with pkgs; [wayland libxkbcommon];
 
+        mkApplicationIcon = binName:
+          pkgs.runCommand "${binName}-icons" {
+            nativeBuildInputs = [pkgs.buildPackages.librsvg];
+          } ''
+            icon=${./assets/icons}/${binName}.svg
+            install -Dm644 "$icon" "$out/share/icons/hicolor/scalable/apps/${binName}.svg"
+            for size in 16 32 128 256; do
+              target="$out/share/icons/hicolor/''${size}x''${size}/apps"
+              mkdir -p "$target"
+              rsvg-convert --width "$size" --height "$size" "$icon" \
+                --output "$target/${binName}.png"
+            done
+            install -Dm644 ${./assets/icons/README.md} "$out/share/doc/${binName}/icons/README.md"
+            install -Dm644 ${./assets/icons/LICENSE-Phosphor} "$out/share/doc/${binName}/icons/LICENSE-Phosphor"
+          '';
+
         mkWrappedGuiOverride = {
           name,
           binName ? name,
@@ -244,9 +260,11 @@
           desktopItem = pkgs.makeDesktopItem ({
               name = binName;
               exec = binName;
+              icon = binName;
               terminal = false;
             }
             // desktopEntry);
+          applicationIcon = mkApplicationIcon binName;
           wrapperArgs =
             [
               "--prefix"
@@ -272,8 +290,14 @@
                   + lib.optionalString (desktopEntry != null) ''
                     mkdir -p "$bin/share/applications"
                     cp ${desktopItem}/share/applications/*.desktop "$bin/share/applications/"
+                    cp -r ${applicationIcon}/share/icons "$bin/share/"
+                    cp -r ${applicationIcon}/share/doc "$bin/share/"
                   '')
                 drv;
+              }
+              // lib.optionalAttrs (desktopEntry != null) {
+                # Keep icon attribution in the executable output shipped by the bundle.
+                outputDoc = "bin";
               }
               // extraAttrs;
           };
@@ -423,7 +447,6 @@
                   desktopName = "Iceout";
                   genericName = "Logout Menu";
                   comment = "Log out, suspend, restart, or shut down";
-                  icon = "system-log-out";
                   categories = ["System"];
                 };
               })
@@ -434,7 +457,6 @@
                   desktopName = "Snowconf";
                   genericName = "Subniri Settings";
                   comment = "Configure the Subniri desktop";
-                  icon = "preferences-system";
                   categories = ["Settings" "DesktopSettings"];
                 };
               })
@@ -445,7 +467,6 @@
                   desktopName = "Avalaunch";
                   genericName = "Application Launcher";
                   comment = "Find and launch applications";
-                  icon = "system-run";
                   categories = ["Utility"];
                 };
               })
@@ -457,7 +478,6 @@
                   genericName = "File Manager";
                   comment = "Browse files and folders";
                   exec = "fileberg %f";
-                  icon = "system-file-manager";
                   categories = ["System" "FileTools" "FileManager"];
                   mimeTypes = ["inode/directory"];
                 };
