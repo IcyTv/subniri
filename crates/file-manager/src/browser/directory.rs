@@ -12,6 +12,10 @@ use std::path::PathBuf;
 
 impl FileManager {
 	pub(crate) fn goto(&mut self, path: PathBuf) -> Task<Message> {
+		if self.editing.editor.is_some() || self.editing.pending.is_some() {
+			return self.finish_edit_before(BrowserMessage::GoTo(path).into());
+		}
+
 		self.page = super::Page::Files;
 		self.typeahead.clear();
 		let selected = self.selection_snapshot();
@@ -19,6 +23,7 @@ impl FileManager {
 			.go_to(path, selected)
 			.map_or_else(Task::none, |visit| self.navigation_changed(visit))
 	}
+
 	pub(crate) fn navigation_changed(&mut self, visit: Visit) -> Task<Message> {
 		self.page = super::Page::Files;
 		let close = self.menu_lifecycle(neo_widgets::popup::Event::CloseAll);
@@ -28,7 +33,7 @@ impl FileManager {
 		self.selected = None;
 		self.selection.clear();
 		self.search.clear();
-		self.folder_name = None;
+		self.editing.toast = None;
 		self.active_tag = None;
 		self.entries.clear();
 		self.storage = None;
@@ -40,11 +45,16 @@ impl FileManager {
 			.or_else(|| self.selected.clone())
 	}
 	pub(crate) fn reveal_selection(&self) -> Task<Message> {
-		self.entries
-			.iter()
+		if let Some(editor) = &self.editing.editor {
+			return view::selection::reveal_editor(editor.entry.id.clone());
+		}
+
+		self.visible_entries()
+			.into_iter()
 			.find(|e| Some(&e.path) == self.selected.as_ref())
 			.map_or_else(Task::none, |e| view::reveal_selection(e.id.clone()))
 	}
+
 	pub(crate) fn load_directory(&mut self) -> Task<Message> {
 		self.request_id += 1;
 		self.loading = true;
@@ -96,7 +106,12 @@ impl FileManager {
 			.entries
 			.iter()
 			.filter(|entry| {
-				entry.name.to_lowercase().contains(&query)
+				!self
+					.editing
+					.editor
+					.as_ref()
+					.is_some_and(|edit| edit.entry.path == entry.path)
+					&& entry.name.to_lowercase().contains(&query)
 					&& self.active_tag.is_none_or(|tag| {
 						self.tags
 							.as_ref()
@@ -104,16 +119,15 @@ impl FileManager {
 					})
 			})
 			.collect();
-		if !self.ascending {
-			// Reverse names within each group, never move folders below files.
-			entries.sort_by(|a, b| {
-				b.is_dir
-					.cmp(&a.is_dir)
-					.then_with(|| b.path.file_name().cmp(&a.path.file_name()))
-			});
+
+		entries.sort_by(|a, b| super::editing::compare(a, b, self.ascending));
+		if let Some(editor) = &self.editing.editor {
+			entries.insert(editor.position.min(entries.len()), &editor.entry);
 		}
+
 		entries
 	}
+
 	pub(crate) fn typeahead_match(&self) -> Option<&DirEntry> {
 		if !self.typeahead.is_active() {
 			return None;

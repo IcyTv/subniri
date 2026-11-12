@@ -63,7 +63,8 @@ impl FileManager {
 		);
 		let content = crate::browser::drag::widget::gate(
 			content,
-			!self.transfers.busy
+			self.editing.editor.is_none()
+				&& !self.transfers.busy
 				&& self.transfers.loaded
 				&& self.menu.is_none()
 				&& self.drives.menu.is_none()
@@ -205,38 +206,6 @@ impl FileManager {
 			);
 		}
 		content = content.push(error_notice);
-		if let Some(name) = &self.folder_name {
-			content = content.push(
-				container(
-					row![
-						text_input("Folder name", name)
-							.id("folder-name")
-							.on_input(|name| BrowserMessage::FolderName(name).into())
-							.on_submit(BrowserMessage::CreateFolder.into())
-							.padding(10)
-							.size(13)
-							.style(move |theme, status| style::input(theme, status, colors)),
-						primary(
-							text(if self.creating_folder {
-								"Creating…"
-							} else {
-								"Create"
-							})
-							.size(12)
-							.color(colors.text_on(colors.decorative.yellow)),
-							colors,
-						)
-						.on_press(BrowserMessage::CreateFolder.into())
-						.enabled(!self.creating_folder),
-						control(text("Cancel").size(12), false, colors)
-							.on_press(BrowserMessage::CancelFolder.into())
-					]
-					.spacing(10)
-					.align_y(Alignment::Center),
-				)
-				.padding([8, gutter]),
-			);
-		}
 		if let Some(form) = self.tag_form() {
 			content = content.push(container(form).padding([8, gutter]));
 		}
@@ -341,6 +310,40 @@ impl FileManager {
 				|point| ContextMenuMessage::MenuOpen(None, point).into()
 			)
 		];
+		if let Some(toast) = &self.editing.toast {
+			let notice = iced::widget::mouse_area(
+				container(
+					row![
+						text(&toast.text).size(12).width(Length::Fill),
+						control(text("Show item").size(12), false, colors)
+							.on_press(BrowserMessage::ShowEditedItem.into()),
+						control(text("Dismiss").size(11), false, colors)
+							.on_press(BrowserMessage::DismissToast.into()),
+					]
+					.spacing(10)
+					.align_y(Alignment::Center),
+				)
+				.padding(12)
+				.width(Length::Fill.max(650))
+				.style(move |_| container::Style {
+					border: iced::Border {
+						color: colors.border,
+						width: 1.0,
+						radius: 0.0.into(),
+					},
+					..style::panel(colors.surface)
+				}),
+			)
+			.on_enter(BrowserMessage::ToastHover(true).into())
+			.on_exit(BrowserMessage::ToastHover(false).into());
+
+			files = files.push(
+				container(notice)
+					.padding(16)
+					.align_bottom(Length::Fill)
+					.center_x(Length::Fill),
+			);
+		}
 		if self.typeahead.is_active() {
 			let preview = container(
 				row![
@@ -1005,8 +1008,35 @@ impl FileManager {
 			.into()
 	}
 
-	fn file_tile<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
+	fn file_tile<'a>(&'a self, entry: &'a DirEntry) -> Element<'a, Message> {
 		let colors = self.entry_colors(entry);
+		if let Some(editor) = self
+			.editing
+			.editor
+			.as_ref()
+			.filter(|edit| edit.entry.path == entry.path)
+		{
+			return container(
+				column![
+					container(file_art(
+						entry,
+						if editor.error.is_some() { 0.75 } else { 1.0 },
+						colors
+					))
+					.height(if editor.error.is_some() { 64 } else { 84 })
+					.center_x(Length::Fill)
+					.align_y(Alignment::Center),
+					self.name_editor(),
+				]
+				.spacing(5)
+				.align_x(Alignment::Center),
+			)
+			.padding(8)
+			.width(Length::Fill)
+			.height(grid::TILE_HEIGHT)
+			.id(entry.id.clone())
+			.into();
+		}
 
 		self.entry_button(
 			entry,
@@ -1040,8 +1070,30 @@ impl FileManager {
 		)
 	}
 
-	fn file_row<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
+	fn file_row<'a>(&'a self, entry: &'a DirEntry) -> Element<'a, Message> {
 		let colors = self.entry_colors(entry);
+		if self
+			.editing
+			.editor
+			.as_ref()
+			.is_some_and(|edit| edit.entry.path == entry.path)
+		{
+			return container(
+				row![
+					container(file_art(entry, 0.4, colors))
+						.width(30)
+						.height(30)
+						.center(Length::Shrink),
+					self.name_editor(),
+				]
+				.spacing(16)
+				.align_y(Alignment::Center),
+			)
+			.padding(8)
+			.width(Length::Fill)
+			.id(entry.id.clone())
+			.into();
+		}
 
 		self.entry_button(
 			entry,
@@ -1159,6 +1211,40 @@ impl FileManager {
 				directory: entry.is_dir,
 			},
 		)
+	}
+
+	fn name_editor(&self) -> Element<'_, Message> {
+		let colors = self.appearance.colors();
+		let Some(editor) = &self.editing.editor else {
+			return Space::new().into();
+		};
+
+		let input = text_input("Name", &editor.name)
+			.id(crate::browser::editing::INPUT_ID)
+			.on_input(|name| BrowserMessage::EditName(name).into())
+			.on_submit(BrowserMessage::SaveEdit.into())
+			.size(12)
+			.padding([4, 5])
+			.style(move |theme, status| style::input(theme, status, colors));
+		let mut content = column![input].spacing(3).width(Length::Fill);
+		if let Some(error) = &editor.error {
+			content = content.push(iced::widget::tooltip(
+				text(error)
+					.size(10)
+					.color(colors.text)
+					.height(28)
+					.ellipsis(iced::advanced::text::Ellipsis::End),
+				container(text(error).size(12))
+					.padding(8)
+					.width(Length::Shrink.max(360))
+					.style(move |_| style::panel(colors.surface)),
+				iced::widget::tooltip::Position::FollowCursor,
+			));
+		} else if self.editing.busy {
+			content = content.push(text("Saving…").size(10).color(colors.secondary));
+		}
+
+		content.into()
 	}
 
 	fn entry_colors(&self, entry: &DirEntry) -> neo_widgets::style::Colors {

@@ -31,7 +31,7 @@ impl FileManager {
 				}
 				if self.closing.is_some()
 					&& !self.tag_busy
-					&& !self.creating_folder
+					&& !self.editing.busy
 					&& !self.favorites.running()
 				{
 					return next.chain(self.finish_pending_close());

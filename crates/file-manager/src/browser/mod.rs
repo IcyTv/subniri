@@ -1,6 +1,7 @@
 //! Directory browsing, selection, navigation, and inline folder creation.
 mod directory;
 pub(crate) mod drag;
+pub(crate) mod editing;
 pub(crate) mod navigation;
 pub(crate) mod selection;
 pub(crate) mod typeahead;
@@ -41,10 +42,16 @@ pub enum Message {
 	View(ViewMode),
 	Sort,
 	NewFolder,
-	CancelFolder,
-	FolderName(String),
-	CreateFolder,
-	FolderCreated(PathBuf, Result<PathBuf, String>),
+	NewFile,
+	Rename,
+	EditName(String),
+	SaveEdit,
+	CancelEdit,
+	EditFinished(Result<PathBuf, String>),
+	ToastTick(std::time::Instant),
+	ToastHover(bool),
+	ShowEditedItem,
+	DismissToast,
 	OperationFinished(Result<(), String>),
 	ClearSelection,
 	DismissError,

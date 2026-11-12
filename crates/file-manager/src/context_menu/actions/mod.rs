@@ -9,6 +9,7 @@ mod copy;
 mod cut;
 mod delete;
 mod duplicate;
+mod new_file;
 mod new_folder;
 mod open;
 mod open_window;
@@ -44,6 +45,7 @@ pub enum Command {
 	Tags,
 	Properties,
 	NewFolder,
+	NewFile,
 	Paste,
 	Sort,
 	View,
@@ -69,7 +71,7 @@ pub(super) enum Scope {
 }
 
 impl Command {
-	pub const ALL: [Self; 24] = [
+	pub const ALL: [Self; 25] = [
 		Self::Open,
 		Self::OpenWith,
 		Self::OpenWindow,
@@ -90,6 +92,7 @@ impl Command {
 		Self::Tags,
 		Self::Properties,
 		Self::NewFolder,
+		Self::NewFile,
 		Self::Paste,
 		Self::Sort,
 		Self::View,
@@ -118,6 +121,7 @@ impl Command {
 			Self::Tags => &tags::DEFINITION,
 			Self::Properties => &properties::DEFINITION,
 			Self::NewFolder => &new_folder::DEFINITION,
+			Self::NewFile => &new_file::DEFINITION,
 			Self::Paste => &paste::DEFINITION,
 			Self::Sort => &sort::DEFINITION,
 			Self::View => &view::DEFINITION,
@@ -342,7 +346,6 @@ mod tests {
 			Command::AdvancedMoveDurable,
 			Command::AdvancedMoveBuffered,
 			Command::Duplicate,
-			Command::Rename,
 			Command::Trash,
 			Command::Properties,
 		] {
@@ -356,6 +359,7 @@ mod tests {
 			Command::Open,
 			Command::OpenWith,
 			Command::OpenWindow,
+			Command::Rename,
 			Command::Tags,
 		] {
 			assert_eq!(

@@ -104,6 +104,7 @@ pub const FILEBERG_ACTION_IDS: &[&str] = &[
 	"tags",
 	"properties",
 	"new-folder",
+	"new-file",
 	"paste",
 	"sort",
 	"view",

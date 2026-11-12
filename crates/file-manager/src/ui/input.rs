@@ -197,6 +197,32 @@ impl<R: Renderer> Widget<Message, iced::Theme, R> for Gate<'_, R> {
 			shell.capture_event();
 			return;
 		}
+		if self.enabled
+			&& matches!(
+				event,
+				Event::Mouse(mouse::Event::ButtonPressed(_))
+					| Event::Touch(iced::touch::Event::FingerPressed { .. })
+			) {
+			let mut focus = EditorFocus::default();
+			self.content
+				.as_widget_mut()
+				.operate(child, layout, renderer, &mut focus);
+			let editor = Id::from(crate::browser::editing::INPUT_ID);
+			let point = match event {
+				Event::Touch(iced::touch::Event::FingerPressed { position, .. }) => Some(*position),
+				_ => cursor.position(),
+			};
+
+			if focus.focused.contains(&editor)
+				&& point.is_some_and(|point| {
+					focus
+						.bounds
+						.iter()
+						.any(|(id, bounds)| *id == editor && !bounds.contains(point))
+				}) {
+				shell.publish(BrowserMessage::SaveEdit.into());
+			}
+		}
 		if !shell.is_event_captured()
 			&& let Event::Keyboard(key) = event
 		{
@@ -204,6 +230,45 @@ impl<R: Renderer> Widget<Message, iced::Theme, R> for Gate<'_, R> {
 			self.content
 				.as_widget_mut()
 				.operate(child, layout, renderer, &mut focus);
+			if self.enabled
+				&& let iced::keyboard::Event::KeyPressed { key, modifiers, .. } = key
+			{
+				use iced::keyboard::{Key, key::Named};
+
+				if focus
+					.focused
+					.contains(&Id::from(crate::browser::editing::INPUT_ID))
+				{
+					if key.as_ref() == Key::Named(Named::Escape) {
+						shell.publish(BrowserMessage::CancelEdit.into());
+						shell.capture_event();
+						return;
+					}
+					if key.as_ref() == Key::Named(Named::Tab) {
+						shell.publish(BrowserMessage::SaveEdit.into());
+					}
+				} else if !focus.is_editing() && !modifiers.alt() && !modifiers.logo() {
+					let message = match key.as_ref() {
+						Key::Named(Named::F2) if modifiers.is_empty() => {
+							Some(BrowserMessage::Rename)
+						}
+						Key::Character("n" | "N") if modifiers.control() => {
+							Some(if modifiers.shift() {
+								BrowserMessage::NewFolder
+							} else {
+								BrowserMessage::NewFile
+							})
+						}
+						_ => None,
+					};
+
+					if let Some(message) = message {
+						shell.publish(message.into());
+						shell.capture_event();
+						return;
+					}
+				}
+			}
 			if self.enabled
 				&& !self.entries.is_empty()
 				&& let iced::keyboard::Event::KeyPressed {
@@ -699,6 +764,181 @@ mod tests {
 			m,
 			Message::Browser(BrowserMessage::SelectionKey(..) | BrowserMessage::SelectionMove(..))
 		)));
+	}
+
+	#[test]
+	fn inline_name_input_receives_text_submit_and_escape_without_file_activation() {
+		use crate::browser::editing::INPUT_ID;
+
+		for (key, typed, expected) in [
+			(keyboard::Key::Character("x".into()), Some("x"), "input"),
+			(
+				keyboard::Key::Named(keyboard::key::Named::Enter),
+				None,
+				"save",
+			),
+			(
+				keyboard::Key::Named(keyboard::key::Named::Escape),
+				None,
+				"cancel",
+			),
+			(
+				keyboard::Key::Named(keyboard::key::Named::Tab),
+				None,
+				"save",
+			),
+		] {
+			let input = text_input::<Message, iced::Theme>("Name", "New File")
+				.id(INPUT_ID)
+				.on_input(|text| BrowserMessage::EditName(text).into())
+				.on_submit(BrowserMessage::SaveEdit.into());
+
+			let messages = dispatch_files(
+				input.into(),
+				INPUT_ID,
+				false,
+				typeahead::tests::key(key, typed, keyboard::Modifiers::empty()),
+				None,
+				vec![(Id::from("file"), "/file".into())],
+			);
+
+			assert!(
+				messages.iter().any(|message| match expected {
+					"input" => matches!(message, Message::Browser(BrowserMessage::EditName(_))),
+					"save" => matches!(message, Message::Browser(BrowserMessage::SaveEdit)),
+					_ => matches!(message, Message::Browser(BrowserMessage::CancelEdit)),
+				}),
+				"{messages:?}"
+			);
+			assert!(!messages.iter().any(|message| matches!(
+				message,
+				Message::Browser(
+					BrowserMessage::OpenEntry(_)
+						| BrowserMessage::SelectionKey(..)
+						| BrowserMessage::TypeAhead(_)
+				)
+			)));
+		}
+	}
+
+	#[test]
+	fn inline_input_blur_saves_before_the_clicked_destination() {
+		use crate::browser::editing::INPUT_ID;
+
+		for outside in [false, true] {
+			let input = text_input::<Message, iced::Theme>("Name", "New File")
+				.id(INPUT_ID)
+				.on_input(|text| BrowserMessage::EditName(text).into());
+			let destination = iced::widget::mouse_area(Space::new().width(200).height(50))
+				.on_press(BrowserMessage::GoTo("/destination".into()).into());
+			let mut gate = Gate {
+				content: iced::widget::column![input, destination].into(),
+				active: false,
+				enabled: true,
+				menu: None,
+				forward_keys: false,
+				blocked: false,
+				entries: Vec::new(),
+			};
+
+			let mut tree = Tree::new(&gate as &dyn Widget<Message, iced::Theme, ()>);
+			gate.diff(&mut tree);
+			let node = gate.layout(
+				&mut tree,
+				&(),
+				&layout::Limits::new(Size::ZERO, Size::new(200.0, 200.0)),
+			);
+
+			gate.operate(
+				&mut tree,
+				Layout::new(&node),
+				&(),
+				&mut operation::focusable::focus::<()>(Id::from(INPUT_ID)),
+			);
+
+			let mut focus = EditorFocus::default();
+			gate.operate(&mut tree, Layout::new(&node), &(), &mut focus);
+			let bounds = focus
+				.bounds
+				.iter()
+				.find(|(id, _)| *id == Id::from(INPUT_ID))
+				.unwrap()
+				.1;
+			let point = if outside {
+				iced::Point::new(10.0, bounds.y + bounds.height + 10.0)
+			} else {
+				bounds.center()
+			};
+
+			let mut bus = Bus::new();
+			gate.update(
+				&mut tree,
+				&Event::Mouse(mouse::Event::ButtonPressed(mouse::Button::Left)),
+				Layout::new(&node),
+				mouse::Cursor::Available(point),
+				&(),
+				&mut Shell::new(&window::Headless, Waker::noop(), &mut bus),
+				&Rectangle::with_size(Size::new(200.0, 200.0)),
+			);
+			let messages = bus.into_iter().collect::<Vec<_>>();
+
+			if outside {
+				assert!(
+					matches!(
+						messages.as_slice(),
+						[
+							Message::Browser(BrowserMessage::SaveEdit),
+							Message::Browser(BrowserMessage::GoTo(_))
+						]
+					),
+					"{messages:?}"
+				);
+			} else {
+				assert!(
+					messages.is_empty(),
+					"clicking inside input must not save: {messages:?}"
+				);
+			}
+		}
+	}
+
+	#[test]
+	fn file_pane_shortcuts_start_the_matching_editor() {
+		for (key, modifiers, expected) in [
+			(
+				keyboard::Key::Named(keyboard::key::Named::F2),
+				keyboard::Modifiers::empty(),
+				"rename",
+			),
+			(
+				keyboard::Key::Character("n".into()),
+				keyboard::Modifiers::CTRL,
+				"file",
+			),
+			(
+				keyboard::Key::Character("N".into()),
+				keyboard::Modifiers::CTRL | keyboard::Modifiers::SHIFT,
+				"folder",
+			),
+		] {
+			let messages = dispatch_files(
+				Space::new().into(),
+				"file",
+				false,
+				typeahead::tests::key(key, None, modifiers),
+				None,
+				vec![(Id::from("file"), "/file".into())],
+			);
+
+			assert!(
+				matches!(messages.as_slice(), [Message::Browser(message)] if match expected {
+					"rename" => matches!(message, BrowserMessage::Rename),
+					"file" => matches!(message, BrowserMessage::NewFile),
+					_ => matches!(message, BrowserMessage::NewFolder),
+				}),
+				"{messages:?}"
+			);
+		}
 	}
 
 	#[test]

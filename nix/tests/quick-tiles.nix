@@ -50,7 +50,7 @@
     };
   evaluate = menu: evaluateWithFavorites menu [];
   render = menu: (evaluate menu).config.xdg.configFile."subniri/config.kdl".text;
-  favorites = (evaluateWithFavorites {} ["copy" "new-folder"]).config.xdg.configFile."subniri/config.kdl".text;
+  favorites = (evaluateWithFavorites {} ["copy" "new-folder" "new-file"]).config.xdg.configFile."subniri/config.kdl".text;
   rows = render {
     rows = [
       [
@@ -82,7 +82,7 @@ in
   assert lib.hasInfix "    row\n" rows;
   assert lib.hasInfix ''widgets "wifi" "script.example"'' legacy;
   assert lib.any (check: !check.assertion) mixed.config.assertions;
-  assert lib.hasInfix ''favorites "copy" "new-folder"'' favorites; {
+  assert lib.hasInfix ''favorites "copy" "new-folder" "new-file"'' favorites; {
     passed = 7;
     generated = rows;
   }

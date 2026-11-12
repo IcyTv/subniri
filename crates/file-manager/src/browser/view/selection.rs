@@ -102,8 +102,17 @@ impl Operation<iced::Point> for WindowPoint {
 /// Focus and reveal a restored entry using its real post-layout bounds, so it
 /// works for both list rows and wrapped tiles without guessing row/column counts.
 pub(crate) fn reveal_selection(target: Id) -> Task<Message> {
+	reveal(target.clone(), target)
+}
+
+pub(crate) fn reveal_editor(target: Id) -> Task<Message> {
+	reveal(target, Id::from(crate::browser::editing::INPUT_ID))
+}
+
+fn reveal(target: Id, focus: Id) -> Task<Message> {
 	iced::advanced::widget::operate(Reveal {
 		target,
+		focus,
 		viewport: None,
 		selected: None,
 	})
@@ -111,6 +120,7 @@ pub(crate) fn reveal_selection(target: Id) -> Task<Message> {
 
 struct Reveal {
 	target: Id,
+	focus: Id,
 	viewport: Option<(Rectangle, Vector)>,
 	selected: Option<Rectangle>,
 }
@@ -119,6 +129,13 @@ impl Operation<Message> for Reveal {
 	fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation<Message>)) {
 		operate(self);
 	}
+
+	fn container(&mut self, id: Option<&Id>, bounds: Rectangle) {
+		if id == Some(&self.target) {
+			self.selected = Some(bounds);
+		}
+	}
+
 	fn scrollable(
 		&mut self, id: Option<&Id>, bounds: Rectangle, _content: Rectangle, translation: Vector,
 		_state: &mut dyn Scrollable,
@@ -127,14 +144,19 @@ impl Operation<Message> for Reveal {
 			self.viewport = Some((bounds, translation));
 		}
 	}
+
 	fn focusable(&mut self, id: Option<&Id>, bounds: Rectangle, state: &mut dyn Focusable) {
 		if id == Some(&self.target) {
 			self.selected = Some(bounds);
+		}
+
+		if id == Some(&self.focus) {
 			state.focus();
 		} else {
 			state.unfocus();
 		}
 	}
+
 	fn finish(&self) -> Outcome<Message> {
 		if let (Some((viewport, translation)), Some(selected)) = (self.viewport, self.selected) {
 			let y = reveal_offset(viewport, translation.y, selected);
@@ -165,6 +187,94 @@ fn reveal_offset(viewport: Rectangle, current: f32, selected: Rectangle) -> f32 
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn editing_reveals_icon_and_input_as_one_complete_item() {
+		use iced::{
+			Element, Size,
+			advanced::{Layout, layout, widget::Tree},
+			widget::{Space, column, container, scrollable, text_input},
+		};
+
+		for height in [46.0, 155.0] {
+			let editor = text_input::<Message, iced::Theme>("Name", "New File")
+				.id(crate::browser::editing::INPUT_ID)
+				.on_input(|name| crate::browser::Message::EditName(name).into());
+			let item = container(column![Space::new().height(height - 30.0), editor])
+				.id("editing-item")
+				.height(height);
+			let mut widget: Element<'_, Message, iced::Theme, ()> = scrollable(column![
+				Space::new().height(500),
+				item,
+				Space::new().height(1000),
+			])
+			.id(FILES_ID)
+			.height(300)
+			.into();
+			let mut tree = Tree::new(widget.as_widget());
+			widget.as_widget_mut().diff(&mut tree);
+			let node = widget.as_widget_mut().layout(
+				&mut tree,
+				&(),
+				&layout::Limits::new(Size::ZERO, Size::new(300.0, 300.0)),
+			);
+
+			let mut reveal = Reveal {
+				target: Id::from("editing-item"),
+				focus: Id::from(crate::browser::editing::INPUT_ID),
+				viewport: None,
+				selected: None,
+			};
+
+			widget.as_widget_mut().operate(
+				&mut tree,
+				Layout::new(&node),
+				&(),
+				&mut iced::advanced::widget::operation::black_box(&mut reveal),
+			);
+
+			let item = reveal
+				.selected
+				.expect("reveal must measure the entire editing container");
+			let (viewport, _) = reveal.viewport.expect("file viewport");
+			assert_eq!(item.y, 500.0);
+			assert_eq!(item.height, height);
+			assert_eq!(
+				reveal_offset(viewport, 510.0, item),
+				500.0,
+				"scroll upward to include the icon"
+			);
+			assert_eq!(
+				reveal_offset(viewport, 0.0, item),
+				500.0 + height - 300.0,
+				"include the complete bottom edge"
+			);
+
+			struct Focused(Option<Id>);
+			impl Operation for Focused {
+				fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn Operation)) {
+					operate(self);
+				}
+
+				fn focusable(&mut self, id: Option<&Id>, _: Rectangle, state: &mut dyn Focusable) {
+					if state.is_focused() {
+						self.0 = id.cloned();
+					}
+				}
+			}
+
+			let mut focused = Focused(None);
+			widget
+				.as_widget_mut()
+				.operate(&mut tree, Layout::new(&node), &(), &mut focused);
+
+			assert_eq!(
+				focused.0,
+				Some(Id::from(crate::browser::editing::INPUT_ID)),
+				"scrolling must retain input focus"
+			);
+		}
+	}
 
 	#[test]
 	fn navigation_uses_real_grid_rows_and_clamps_ragged_edges() {
