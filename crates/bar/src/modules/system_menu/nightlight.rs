@@ -295,6 +295,7 @@ impl Nightlight {
 				neo_toggle::<super::Message>()
 					.with_colors(colors)
 					.toggled(active)
+					.on_toggled(|_| super::Message::Nightlight(Message::Toggle))
 					.width(32)
 					.height(16)
 			]
@@ -473,6 +474,77 @@ impl Nightlight {
 			NightlightPreset::Day | NightlightPreset::Night => self.preset.as_str().to_string(),
 			NightlightPreset::Custom => format!("{:.02} - {} K", self.brightness, self.temperature),
 		}
+	}
+}
+
+#[cfg(test)]
+mod interaction_tests {
+	use super::*;
+	use iced::{
+		Event, Size,
+		advanced::{
+			Layout, Shell, layout,
+			shell::{Bus, Waker},
+			widget::Tree,
+		},
+		mouse, window,
+	};
+
+	fn toggle_bounds(layout: Layout<'_>) -> Option<Rectangle> {
+		if layout.bounds().size() == Size::new(32.0, 16.0) {
+			return Some(layout.bounds());
+		}
+		layout.children().find_map(toggle_bounds)
+	}
+
+	#[tokio::test]
+	async fn expanded_toggle_click_emits_exactly_one_toggle()
+	-> Result<(), crate::modules::layout_tests::Error> {
+		let renderer = crate::modules::layout_tests::renderer().await?;
+		let size = Size::new(400.0, 200.0);
+		let viewport = Rectangle::with_size(size);
+
+		for enabled in [false, true] {
+			let mut config = ConfigFile::default();
+			config.nightlight.enabled = enabled;
+			let nightlight = Nightlight::new(&config);
+			let mut content = nightlight.view_expanded(size, neo_widgets::style::DARK);
+			let mut tree = Tree::new(content.as_widget());
+			content.as_widget_mut().diff(&mut tree);
+			let node = content.as_widget_mut().layout(
+				&mut tree,
+				&renderer,
+				&layout::Limits::new(size, size),
+			);
+			let bounds = toggle_bounds(Layout::new(&node)).ok_or("Expanded toggle missing")?;
+			let mut bus = Bus::new();
+
+			for event in [
+				mouse::Event::ButtonPressed(mouse::Button::Left),
+				mouse::Event::ButtonReleased(mouse::Button::Left),
+			] {
+				content.as_widget_mut().update(
+					&mut tree,
+					&Event::Mouse(event),
+					Layout::new(&node),
+					mouse::Cursor::Available(bounds.center()),
+					&renderer,
+					&mut Shell::new(&window::Headless, Waker::noop(), &mut bus),
+					&viewport,
+				);
+			}
+
+			let messages = bus.into_iter().collect::<Vec<_>>();
+			assert!(
+				matches!(
+					messages.as_slice(),
+					[super::super::Message::Nightlight(Message::Toggle)]
+				),
+				"Expected one toggle with enabled={enabled}, got {messages:?}"
+			);
+		}
+
+		Ok(())
 	}
 }
 
