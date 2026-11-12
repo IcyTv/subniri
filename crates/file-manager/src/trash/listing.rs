@@ -101,7 +101,7 @@ pub(super) fn list_from_mounts(mounts: &Mountpoints, home: &Path) -> TrashListin
 				&shared,
 				invalid("Shared .Trash is a symlink, not a directory, or lacks the sticky bit"),
 			)),
-			Err(error) if absent(&error) => {}
+			Err(error) if absent(&error) || error.kind() == io::ErrorKind::PermissionDenied => {}
 			Err(error) => listing.issues.push(issue(&shared, error)),
 		}
 		list_location(
@@ -140,7 +140,7 @@ fn issue(path: &Path, error: io::Error) -> TrashIssue {
 fn list_location(
 	location: &TrashLocation, seen: &mut HashSet<(u64, u64)>, listing: &mut TrashListing,
 ) {
-	let result = (|| {
+	let result: io::Result<()> = (|| {
 		validate_private_dir(&location.directory)?;
 		let metadata = fs::symlink_metadata(&location.directory)?;
 		// A bind mount or repeated mount-table entry can expose the same trash.
@@ -238,6 +238,12 @@ fn list_location(
 		Ok(())
 	})();
 	if let Err(error) = result {
+		// Mounted trash discovery is best effort: inaccessible locations are
+		// normal. Keep home-trash failures and per-item errors actionable.
+		if location.topdir.is_some() && error.kind() == io::ErrorKind::PermissionDenied {
+			return;
+		}
+
 		// A missing root is normal, but missing files/ inside an existing root
 		// is corruption and must be reported rather than silently hidden.
 		if !absent(&error) || fs::symlink_metadata(&location.directory).is_ok() {
@@ -688,6 +694,74 @@ mod tests {
 				.all(|entry| entry.original_path.is_none() && !entry.issues.is_empty())
 		);
 		assert_eq!(fs::read(&outside).unwrap(), INFO);
+	}
+
+	#[test]
+	fn permission_denied_mount_discovery_is_silent() {
+		if unsafe { libc::geteuid() } == 0 {
+			return;
+		}
+		let dir = TestDir::new();
+		let home = location(dir.path().join("Trash"), None);
+		item(&home, "visible", Some(INFO));
+		let topdir = dir.path().join("inaccessible-volume");
+		fs::create_dir(&topdir).unwrap();
+		fs::set_permissions(&topdir, fs::Permissions::from_mode(0o000)).unwrap();
+
+		let result = list_from_mounts(&mounts(&[&topdir]), &home.directory);
+		fs::set_permissions(&topdir, fs::Permissions::from_mode(0o700)).unwrap();
+
+		assert_eq!(result.entries.len(), 1);
+		assert!(result.issues.is_empty(), "{:?}", result.issues);
+	}
+
+	#[test]
+	fn permission_denied_volume_trash_is_silent_but_home_errors_remain_visible() {
+		let dir = TestDir::new();
+		let home = location(dir.path().join("Trash"), None);
+		item(&home, "visible", Some(INFO));
+		let topdir = dir.path().join("volume");
+		fs::create_dir(&topdir).unwrap();
+		let private = topdir.join(format!(".Trash-{}", unsafe { libc::getuid() }));
+		fs::create_dir(&private).unwrap();
+		fs::set_permissions(&private, fs::Permissions::from_mode(0o777)).unwrap();
+
+		let result = list_from_mounts(&mounts(&[&topdir]), &home.directory);
+		assert_eq!(result.entries.len(), 1);
+		assert!(result.issues.is_empty(), "{:?}", result.issues);
+
+		fs::set_permissions(&home.directory, fs::Permissions::from_mode(0o777)).unwrap();
+		let result = list_from_mounts(&mounts(&[&topdir]), &home.directory);
+		assert_eq!(result.issues.len(), 1);
+		assert_eq!(result.issues[0].path, home.directory);
+		assert_eq!(
+			result.issues[0].error.kind(),
+			io::ErrorKind::PermissionDenied
+		);
+	}
+
+	#[test]
+	fn permission_denied_item_metadata_remains_visible() {
+		if unsafe { libc::geteuid() } == 0 {
+			return;
+		}
+		let dir = TestDir::new();
+		let topdir = dir.path().join("volume");
+		let private = topdir.join(format!(".Trash-{}", unsafe { libc::getuid() }));
+		let trash = location(private, Some(topdir.clone()));
+		item(&trash, "unreadable", Some(INFO));
+		let metadata = trash.directory.join("info/unreadable.trashinfo");
+		fs::set_permissions(&metadata, fs::Permissions::from_mode(0o000)).unwrap();
+
+		let result = list_from_mounts(&mounts(&[&topdir]), &dir.path().join("home-trash"));
+		fs::set_permissions(&metadata, fs::Permissions::from_mode(0o600)).unwrap();
+
+		assert_eq!(result.entries.len(), 1);
+		assert_eq!(result.entries[0].issues.len(), 1);
+		assert_eq!(
+			result.entries[0].issues[0].error.kind(),
+			io::ErrorKind::PermissionDenied
+		);
 	}
 
 	#[test]
