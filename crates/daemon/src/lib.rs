@@ -2,6 +2,7 @@
 
 pub mod appearance;
 pub mod calendar;
+pub mod discovery;
 pub mod homeassistant;
 pub mod nightlight;
 pub(crate) mod observed;

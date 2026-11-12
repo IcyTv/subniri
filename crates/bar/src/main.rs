@@ -746,6 +746,7 @@ impl Bar {
 		let mut subscriptions = vec![
 			self.appearance.subscription().map(BarMessage::Appearance),
 			neo_widgets::icons::background::updates().map(|()| BarMessage::Noop),
+			neo_widgets::icons::discovery_updates().map(|_| BarMessage::Noop),
 			self.shell_events.listen().filter_map(|event| {
 				if matches!(event, ShellEvent::Presented { .. }) {
 					None

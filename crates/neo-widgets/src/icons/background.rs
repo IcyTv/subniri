@@ -1,6 +1,6 @@
 //! Nonblocking view-time lookups. Subscribe to [`updates`] to rebuild when
 //! results arrive. Pending and missing icons use the caller's normal fallback.
-use super::{ApplicationIconResolver, ResolvedIcon, default_icon};
+use super::{ApplicationIconResolver, DiscoveryChange, ResolvedIcon, default_icon};
 use std::{
 	collections::HashMap,
 	path::{Path, PathBuf},
@@ -26,9 +26,41 @@ enum Entry {
 	Ready(Option<ResolvedIcon>),
 }
 
+#[derive(Default)]
+struct Cache {
+	entries: HashMap<Request, Entry>,
+	applications: u64,
+	icons: u64,
+}
+
+impl std::ops::Deref for Cache {
+	type Target = HashMap<Request, Entry>;
+
+	fn deref(&self) -> &Self::Target {
+		&self.entries
+	}
+}
+
+impl std::ops::DerefMut for Cache {
+	fn deref_mut(&mut self) -> &mut Self::Target {
+		&mut self.entries
+	}
+}
+
+impl Cache {
+	fn revision(&self, request: &Request) -> (u64, u64) {
+		let applications = if matches!(request.source, Source::Name(..)) {
+			0
+		} else {
+			self.applications
+		};
+		(applications, self.icons)
+	}
+}
+
 struct Service {
-	entries: Arc<Mutex<HashMap<Request, Entry>>>,
-	requests: async_channel::Sender<Request>,
+	entries: Arc<Mutex<Cache>>,
+	requests: async_channel::Sender<((u64, u64), Request)>,
 	changed: async_channel::Receiver<()>,
 	wake: async_channel::Sender<()>,
 }
@@ -62,9 +94,9 @@ impl Service {
 	where
 		F: FnMut(&Request) -> (u64, Option<ResolvedIcon>) + Send + 'static,
 	{
-		let entries = Arc::new(Mutex::new(HashMap::new()));
+		let entries = Arc::new(Mutex::new(Cache::default()));
 		// Bound outstanding work; duplicate requests never consume queue slots.
-		let (requests, incoming) = async_channel::bounded::<Request>(128);
+		let (requests, incoming) = async_channel::bounded::<((u64, u64), Request)>(128);
 		let (wake, changed) = async_channel::bounded(1);
 		let worker_entries = entries.clone();
 		let worker_wake = wake.clone();
@@ -73,12 +105,15 @@ impl Service {
 			.spawn(move || {
 				let mut lookup = initialize();
 				let mut generation = 0;
-				while let Ok(request) = incoming.recv_blocking() {
+				while let Ok((revision, request)) = incoming.recv_blocking() {
 					// Never hold the shared result lock while accessing the filesystem.
 					let (current_generation, result) = lookup(&request);
 					let Ok(mut entries) = worker_entries.lock() else {
 						break;
 					};
+					if entries.revision(&request) != revision {
+						continue;
+					}
 					if generation != current_generation {
 						// Queued requests will resolve against the new generation. Old
 						// ready entries must not hide newly available icons (or misses).
@@ -117,13 +152,35 @@ impl Service {
 			None => {}
 		}
 		entries.insert(request.clone(), Entry::Pending);
-		if self.requests.try_send(request.clone()).is_err() {
+		let revision = entries.revision(&request);
+		if self.requests.try_send((revision, request.clone())).is_err() {
 			// A queued completion will wake the UI to retry a full queue. A dead
 			// worker simply leaves the normal fallback, without a redraw loop.
 			entries.remove(&request);
 		}
 		None
 	}
+
+	fn invalidate(&self, change: DiscoveryChange) {
+		let Ok(mut entries) = self.entries.lock() else {
+			return;
+		};
+		if change.applications {
+			entries.applications = entries.applications.wrapping_add(1);
+		}
+		if change.icons {
+			entries.icons = entries.icons.wrapping_add(1);
+		}
+		entries.retain(|request, _| {
+			!change.icons && (!change.applications || matches!(request.source, Source::Name(..)))
+		});
+		drop(entries);
+		let _ = self.wake.try_send(());
+	}
+}
+
+pub(super) fn invalidate(change: DiscoveryChange) {
+	service().invalidate(change);
 }
 
 fn service() -> &'static Service {
@@ -205,6 +262,54 @@ mod tests {
 		std::thread::spawn(move || tx.send(service.lookup(request)).unwrap());
 		rx.recv_timeout(Duration::from_secs(1))
 			.expect("UI waited for icon worker")
+	}
+
+	#[test]
+	fn application_invalidation_preserves_named_results_and_rejects_in_flight_app_results() {
+		let (started, busy) = mpsc::channel();
+		let (release, gate) = mpsc::channel();
+		let service = Service::start(move || {
+			move |request: &Request| {
+				if matches!(request.source, Source::AppId(_)) {
+					started.send(()).unwrap();
+					gate.recv().unwrap();
+				}
+				(0, Some(default_icon()))
+			}
+		});
+		let named = name("retained");
+		service.lookup(named.clone());
+		service.changed.recv_blocking().unwrap();
+		let app = Request {
+			source: Source::AppId("changed".into()),
+			size: 24,
+			scale: 1,
+		};
+		service.lookup(app.clone());
+		busy.recv_timeout(Duration::from_secs(1)).unwrap();
+
+		service.invalidate(DiscoveryChange {
+			applications: true,
+			icons: false,
+		});
+		assert!(service.lookup(named.clone()).is_some());
+		release.send(()).unwrap();
+		// A later named request is a FIFO barrier behind the obsolete app lookup.
+		service.lookup(name("barrier"));
+		loop {
+			service.changed.recv_blocking().unwrap();
+			let entries = service.entries.lock().unwrap();
+			if matches!(entries.get(&name("barrier")), Some(Entry::Ready(_))) {
+				break;
+			}
+		}
+		assert!(!service.entries.lock().unwrap().contains_key(&app));
+
+		service.invalidate(DiscoveryChange {
+			applications: false,
+			icons: true,
+		});
+		assert!(service.entries.lock().unwrap().is_empty());
 	}
 
 	#[test]

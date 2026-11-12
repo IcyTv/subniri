@@ -3,7 +3,7 @@ use std::{cmp::Ordering, sync::Arc};
 
 use async_channel::Receiver;
 use iced::widget::text::Span;
-use neo_widgets::icons::ResolvedIcon;
+use neo_widgets::icons::{DiscoveryChange, ResolvedIcon};
 
 pub mod applications;
 pub mod calculator;
@@ -24,6 +24,14 @@ pub trait Provider: Send + Sync {
 	async fn update_query(
 		&self, session: SessionHandle, query: Query, ctx: Arc<dyn ProviderContext>,
 	) -> eyre::Result<()>;
+
+	/// Refresh provider-owned discovery without restarting unrelated providers.
+	async fn refresh(
+		&self, _session: SessionHandle, _query: Query, _change: DiscoveryChange,
+		_ctx: Arc<dyn ProviderContext>,
+	) -> eyre::Result<()> {
+		Ok(())
+	}
 
 	async fn activate(
 		&self, session: SessionHandle, candidate_id: &CandidateId, activation: &ActivationKey,
@@ -151,8 +159,14 @@ pub enum ProviderStatus {
 
 #[derive(Clone, Debug)]
 pub enum ProviderEvent {
+	CandidatesReplaced {
+		session: SessionHandle,
+		candidates: Vec<Candidate>,
+	},
 	CandidateUpsert(Candidate),
-	CandidateRemove { id: CandidateId },
+	CandidateRemove {
+		id: CandidateId,
+	},
 	PreviewUpdate(PreviewModel),
 	Status(ProviderStatus),
 	// Removes all existing candidates from the list...

@@ -3,6 +3,7 @@ use std::{
 	fs,
 	io::{self, Write},
 	os::{fd::AsRawFd, unix::net::UnixStream},
+	path::PathBuf,
 	process::Stdio,
 	sync::Arc,
 	time::Duration,
@@ -10,16 +11,19 @@ use std::{
 
 use async_channel::{Receiver, Sender};
 use config::LauncherTypoSearch;
-use freedesktop_desktop_entry::{DesktopEntry, desktop_entries, get_languages_from_env};
+use freedesktop_desktop_entry::{DesktopEntry, Iter, default_paths, get_languages_from_env};
 use iced::widget::{span, text::Span};
-use neo_widgets::icons::resolve_icon;
-use tokio::{process::Command, sync::RwLock};
+use neo_widgets::icons::{DiscoveryChange, resolve_icon};
+use tokio::{
+	process::Command,
+	sync::{Mutex, RwLock},
+};
 use utilities::matching::{self, SkimMatcherV2, TypoOptions};
 use zbus::zvariant::{OwnedObjectPath, Value};
 
 use crate::providers::{
 	Activation, ActivationKey, Candidate, CandidateId, CandidateKind, MatchKind, Provider,
-	ProviderContext, ProviderEvent, ProviderId, ProviderStatus, Query, SectionHint, SessionHandle,
+	ProviderContext, ProviderEvent, ProviderId, Query, SectionHint, SessionHandle,
 };
 
 const APP_PROVIDER_ID: ProviderId = ProviderId("apps");
@@ -28,9 +32,11 @@ pub struct ApplicationProvider {
 	sender: Sender<ProviderEvent>,
 	receiver: Receiver<ProviderEvent>,
 	languages: Vec<String>,
+	application_paths: Vec<PathBuf>,
 	entries: Arc<RwLock<Vec<DesktopEntry>>>,
 	matcher: Arc<SkimMatcherV2>,
 	typo_search: LauncherTypoSearch,
+	update_lock: Mutex<()>,
 }
 
 impl ApplicationProvider {
@@ -41,10 +47,58 @@ impl ApplicationProvider {
 			sender,
 			receiver,
 			languages,
+			application_paths: default_paths().collect(),
 			entries: Arc::new(RwLock::new(vec![])),
 			matcher: Arc::new(SkimMatcherV2::default()),
 			typo_search,
+			update_lock: Mutex::new(()),
 		}
+	}
+
+	async fn search(&self, session: SessionHandle, query: Query, reload: bool) -> eyre::Result<()> {
+		// Serialize scanning and publication, so a pre-refresh search cannot
+		// restore removed applications after the refreshed result batch.
+		let _guard = self.update_lock.lock().await;
+		if reload {
+			self.load_entries().await?;
+		}
+		let entries = self.entries.clone();
+		let languages = self.languages.clone();
+		let matcher = self.matcher.clone();
+		let typo_search = self.typo_search.clone();
+		let candidates = tokio::task::spawn_blocking(move || {
+			entries
+				.blocking_read()
+				.iter()
+				.filter(|entry| !entry.hidden())
+				.filter_map(|entry| {
+					get_match(&query.raw, &matcher, &typo_search, entry, &languages).map(
+						|matched| Self::entry_to_candidate(session, &languages, entry, matched),
+					)
+				})
+				.collect()
+		})
+		.await?;
+		self.sender
+			.send(ProviderEvent::CandidatesReplaced {
+				session,
+				candidates,
+			})
+			.await?;
+		Ok(())
+	}
+
+	async fn load_entries(&self) -> eyre::Result<()> {
+		let languages = self.languages.clone();
+		let paths = self.application_paths.clone();
+		let entries = tokio::task::spawn_blocking(move || {
+			Iter::new(paths.into_iter())
+				.filter_map(|path| DesktopEntry::from_path(path, Some(&languages)).ok())
+				.collect()
+		})
+		.await?;
+		*self.entries.write().await = entries;
+		Ok(())
 	}
 
 	fn entry_to_candidate(
@@ -157,10 +211,8 @@ impl Provider for ApplicationProvider {
 	}
 
 	async fn init(&self, _ctx: Arc<dyn ProviderContext>) -> eyre::Result<Receiver<ProviderEvent>> {
-		let langs = self.languages.clone();
-		let entries = tokio::task::spawn_blocking(move || desktop_entries(&langs)).await?;
-		let mut lock = self.entries.write().await;
-		*lock = entries;
+		let _guard = self.update_lock.lock().await;
+		self.load_entries().await?;
 
 		Ok(self.receiver.clone())
 	}
@@ -168,40 +220,14 @@ impl Provider for ApplicationProvider {
 	async fn update_query(
 		&self, session: SessionHandle, query: Query, _ctx: Arc<dyn ProviderContext>,
 	) -> eyre::Result<()> {
-		let search = query.raw.clone();
-		let entries = self.entries.clone();
-		let langs = self.languages.clone();
-		let matcher = self.matcher.clone();
-		let typo_search = self.typo_search.clone();
+		self.search(session, query, false).await
+	}
 
-		self.sender.send(ProviderEvent::Reset).await?;
-		self.sender
-			.send(ProviderEvent::Status(ProviderStatus::Loading))
-			.await?;
-
-		let sender = self.sender.clone();
-
-		tokio::task::spawn_blocking(move || {
-			let entries = entries.blocking_read();
-
-			log::trace!("Checking {} entries", entries.len());
-
-			for entry in entries.iter() {
-				if !entry.hidden() {
-					let app_match = get_match(&search, &matcher, &typo_search, entry, &langs);
-
-					if let Some(m) = app_match {
-						let cand = Self::entry_to_candidate(session, &langs, entry, m);
-						let _ = sender.send_blocking(ProviderEvent::CandidateUpsert(cand));
-					}
-				}
-			}
-		})
-		.await?;
-
-		self.sender.send(ProviderEvent::Done).await?;
-
-		Ok(())
+	async fn refresh(
+		&self, session: SessionHandle, query: Query, change: DiscoveryChange,
+		_ctx: Arc<dyn ProviderContext>,
+	) -> eyre::Result<()> {
+		self.search(session, query, change.applications).await
 	}
 
 	async fn activate(
@@ -580,6 +606,55 @@ fn typo_options(value: &LauncherTypoSearch) -> TypoOptions {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::providers::{Revision, SessionId};
+
+	#[tokio::test]
+	async fn discovery_refresh_replaces_live_results_for_the_unchanged_query() {
+		let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+			.join("../../.opencode/app-discovery/tests")
+			.join(format!(
+				"launcher-{}-{}",
+				std::process::id(),
+				std::time::SystemTime::now()
+					.duration_since(std::time::UNIX_EPOCH)
+					.unwrap()
+					.as_nanos()
+			));
+		fs::create_dir_all(&root).unwrap();
+		let entry = root.join("fixture.desktop");
+		let mut provider = ApplicationProvider::new(LauncherTypoSearch::default());
+		provider.application_paths = vec![root];
+		let session = SessionHandle {
+			session_id: SessionId(1),
+			revision: Revision(1),
+		};
+		let query = Query::new("Fixture", 0);
+
+		for name in [Some("Fixture"), Some("Fixture Updated"), None] {
+			if let Some(name) = name {
+				fs::write(
+					&entry,
+					format!("[Desktop Entry]\nType=Application\nName={name}\nExec=true\n"),
+				)
+				.unwrap();
+			} else {
+				fs::remove_file(&entry).unwrap();
+			}
+			provider.search(session, query.clone(), true).await.unwrap();
+			let ProviderEvent::CandidatesReplaced {
+				session: actual,
+				candidates,
+			} = provider.receiver.recv().await.unwrap()
+			else {
+				panic!("expected atomic results");
+			};
+			assert_eq!(actual, session);
+			assert_eq!(candidates.len(), usize::from(name.is_some()));
+			if let Some(name) = name {
+				assert_eq!(candidates[0].title.as_ref(), name);
+			}
+		}
+	}
 
 	#[test]
 	fn typo_match_accepts_one_substitution_in_title_prefix() {

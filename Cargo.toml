@@ -57,6 +57,7 @@ neo-widgets = { version = "0.0.1", path = "crates/neo-widgets" }
 niri-ipc = "26.4.0"
 nix = { version = "0.31.3", features = ["user"] }
 nmrs = "3.1.5"
+notify = "8.2.0"
 num-traits = "0.2.19"
 reqwest = "0.13.3"
 secret-store = { path = "crates/secret-store" }

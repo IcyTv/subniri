@@ -43,7 +43,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "6d520204aa732973536608fcb052258cf5eb83a9b57cf2cee680be4149c27aee";
+  nixifiedLockHash = "4b6b64aac68a0980c9852855f2cc41196f8a633a53012920b5ed122288d4167c";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -2521,12 +2521,15 @@ in
       daemon_common = (rustPackages."unknown".daemon-common."0.0.1" { inherit profileName; }).out;
       dirs = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".dirs."7.0.0" { inherit profileName; }).out;
       flate2 = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".flate2."1.1.10" { inherit profileName; }).out;
+      freedesktop_desktop_entry = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".freedesktop-desktop-entry."0.8.4" { inherit profileName; }).out;
       futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
       hass_rs = (rustPackages."git+https://github.com/IcyTv/hass-rs".hass-rs."0.5.0" { inherit profileName; }).out;
+      icon = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".icon."0.2.0" { inherit profileName; }).out;
       jiff = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".jiff."0.2.39" { inherit profileName; }).out;
       librespot_core = (rustPackages."git+https://github.com/librespot-org/librespot".librespot-core."0.8.0" { inherit profileName; }).out;
       log = (rustPackages."unknown".log."0.0.1" { inherit profileName; }).out;
       memmap2 = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".memmap2."0.9.12" { inherit profileName; }).out;
+      notify = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".notify."8.2.1" { inherit profileName; }).out;
       protobuf = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".protobuf."3.7.2" { inherit profileName; }).out;
       rand = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".rand."0.10.3" { inherit profileName; }).out;
       reqwest = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".reqwest."0.13.5" { inherit profileName; }).out;

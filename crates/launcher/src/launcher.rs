@@ -59,6 +59,7 @@ pub enum Message {
 	WindowFocused(Id),
 	WindowUnfocused(Id),
 	SearchChanged(String),
+	DiscoveryChanged(neo_widgets::icons::DiscoveryChange),
 	Cycle(bool),
 	Activate(ProviderId, CandidateId, ActivationKey),
 	ActivateIndex(usize),
@@ -214,6 +215,7 @@ impl Launcher {
 			resume,
 			dbus_health,
 			providers,
+			neo_widgets::icons::discovery_updates().map(Message::DiscoveryChanged),
 			iced,
 			frames,
 		])
@@ -263,6 +265,22 @@ impl Launcher {
 				if self.open == Some(id) && !self.keep_open_on_focus_loss =>
 			{
 				self.update(Message::Close)
+			}
+			Message::DiscoveryChanged(change) => {
+				let session = self.session_handle();
+				let query = Query::new(self.search.clone(), 0);
+				let providers = self.providers.clone();
+				Task::future(async move {
+					for provider in providers.iter() {
+						if let Err(error) = provider
+							.refresh(session, query.clone(), change, Arc::new(DummyCtx))
+							.await
+						{
+							log::warn!("Cannot refresh {}: {error}", provider.name());
+						}
+					}
+					Message::Noop
+				})
 			}
 			Message::SearchChanged(search) => {
 				self.search = search;
@@ -416,6 +434,21 @@ impl Launcher {
 	// we remove? Periodically? On event? On new session?
 	fn update_provider_event(&mut self, pid: ProviderId, event: ProviderEvent) -> Task<Message> {
 		match event {
+			ProviderEvent::CandidatesReplaced {
+				session,
+				candidates,
+			} => {
+				if session != self.session_handle() {
+					return Task::none();
+				}
+				self.candidates
+					.retain(|candidate| candidate.provider != pid);
+				self.candidates.extend(candidates);
+				self.candidates.sort_by(compare_candidates);
+				self.has_candidates
+					.go_mut(!self.candidates.is_empty(), Instant::now());
+				Task::none()
+			}
 			ProviderEvent::Status(ProviderStatus::Loading) => {
 				self.loading.insert(pid);
 				Task::none()
@@ -799,6 +832,78 @@ mod tests {
 	use super::*;
 	use iced::widget::span;
 	use neo_widgets::style::{DARK, LIGHT};
+
+	#[test]
+	fn discovery_batches_replace_only_their_provider_and_reject_old_queries_and_sessions() {
+		let (mut launcher, _) = Launcher::new(
+			&crate::Args {
+				open: false,
+				exit_on_close: false,
+				no_focus: false,
+				providers: vec![],
+			},
+			Arc::from([]),
+		);
+		let apps = ProviderId("apps");
+		let files = ProviderId("files");
+		let session = launcher.session_handle();
+		let candidate = |provider, title: &'static str| Candidate {
+			session_handle: session,
+			provider,
+			id: CandidateId(Arc::from(title)),
+			activation: ActivationKey(Arc::from(title)),
+			title: Arc::from(title),
+			title_spans: None,
+			subtitle: None,
+			right_text: None,
+			icon: None,
+			kind: CandidateKind::App,
+			section_hint: None,
+			match_kind: crate::providers::MatchKind::Unknown,
+			provider_score: 0.0,
+		};
+		launcher.candidates = vec![candidate(apps, "old-app"), candidate(files, "keep-file")];
+		let _ = launcher.update_provider_event(
+			apps,
+			ProviderEvent::CandidatesReplaced {
+				session,
+				candidates: vec![candidate(apps, "new-app")],
+			},
+		);
+		assert_eq!(launcher.candidates.len(), 2);
+		assert!(
+			launcher
+				.candidates
+				.iter()
+				.any(|candidate| candidate.title.as_ref() == "keep-file")
+		);
+		assert!(
+			launcher
+				.candidates
+				.iter()
+				.any(|candidate| candidate.title.as_ref() == "new-app")
+		);
+
+		launcher.revision.0 += 1;
+		let _ = launcher.update_provider_event(
+			apps,
+			ProviderEvent::CandidatesReplaced {
+				session,
+				candidates: vec![],
+			},
+		);
+		assert_eq!(launcher.candidates.len(), 2);
+		let session = launcher.session_handle();
+		launcher.session.0 += 1;
+		let _ = launcher.update_provider_event(
+			apps,
+			ProviderEvent::CandidatesReplaced {
+				session,
+				candidates: vec![],
+			},
+		);
+		assert_eq!(launcher.candidates.len(), 2);
+	}
 
 	#[test]
 	fn cached_highlights_follow_the_current_palette() {

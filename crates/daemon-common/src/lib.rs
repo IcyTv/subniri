@@ -6,6 +6,13 @@ use zbus::{
 };
 
 pub mod calendar;
+mod discovery;
+pub use discovery::{
+	Discovery, DiscoveryProxy, DiscoveryServer, DiscoveryServerSignals, DiscoveryState,
+};
+
+pub const DISCOVERY_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Discovery");
 
 mod appearance;
 pub use appearance::*;
