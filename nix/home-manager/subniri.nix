@@ -42,6 +42,10 @@
       package = packages.snowconf;
       description = "Snowconf settings application";
     };
+    fileberg = {
+      package = packages.fileberg;
+      description = "Fileberg file manager application";
+    };
     cli = {
       package = packages.subniri-cli;
       description = "Subniri CLI tool";
