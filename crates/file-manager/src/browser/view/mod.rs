@@ -160,6 +160,8 @@ impl FileManager {
 	fn layout(&self, width: f32) -> Element<'_, Message> {
 		let colors = self.appearance.colors();
 		let compact = width <= 800.0;
+		let content_compact = compact
+			|| (self.preview.visible(width) && width - self.preview.pane_width(width) < 1100.0);
 		let gutter = if width <= 1100.0 { 20 } else { 29 };
 
 		let identity = container(
@@ -182,9 +184,9 @@ impl FileManager {
 		.width(Length::Fill)
 		.style(move |_| style::panel(colors.decorative.yellow));
 		let mut content = column![
-			container(self.toolbar(compact)).padding([12, 20]),
+			container(self.toolbar(content_compact)).padding([12, 20]),
 			style::rule(colors),
-			container(self.content_heading(compact)).padding([24, gutter])
+			container(self.content_heading(content_compact)).padding([24, gutter])
 		]
 		.width(Length::Fill)
 		.height(Length::Fill);
@@ -507,7 +509,13 @@ impl FileManager {
 					}
 				),
 				style::divider(true, colors),
-				content
+				content,
+				crate::preview::divider(
+					self.preview.visible(width),
+					self.preview.pane_width(width),
+					colors.black
+				),
+				self.preview_panel(width)
 			]
 			.height(Length::Fill),
 			style::divider(false, colors),

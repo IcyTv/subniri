@@ -97,6 +97,7 @@ pub(crate) enum Message {
 	Tags(tags::Message),
 	Transfers(crate::transfers::Message),
 	Trash(crate::trash::Message),
+	Preview(crate::preview::Message),
 	PreferencesChanged,
 	FileDrag(browser::drag::Message),
 	NativeDrag(crate::transfers::native::Message),
@@ -144,6 +145,7 @@ pub(crate) struct FileManager {
 	pub(crate) trash_state: crate::trash::State,
 	pub(crate) drag: browser::drag::State,
 	pub(crate) native_drag: crate::transfers::native::State,
+	pub(crate) preview: crate::preview::State,
 }
 
 impl FileManager {
@@ -188,6 +190,7 @@ impl FileManager {
 			transfers: crate::transfers::State::default(),
 			drag: browser::drag::State::default(),
 			native_drag: crate::transfers::native::State::default(),
+			preview: crate::preview::State::default(),
 		};
 		let task = app.load_directory();
 		let drives = app.update_drives(crate::drives::Message::Refresh);
@@ -260,7 +263,13 @@ impl FileManager {
 	}
 
 	pub(crate) fn update(&mut self, message: impl Into<Message>) -> Task<Message> {
-		let message = message.into();
+		let task = self.update_inner(message.into());
+		let preview = self.reconcile_preview();
+
+		Task::batch([task, preview])
+	}
+
+	fn update_inner(&mut self, message: Message) -> Task<Message> {
 		if (self.dialogs.blocked() || self.transfers.blocked()) && message.is_parent_interaction() {
 			return Task::none();
 		}
@@ -284,6 +293,7 @@ impl FileManager {
 			Message::Tags(message) => return self.update_tags(message),
 			Message::Transfers(message) => return self.update_transfers(message),
 			Message::Trash(message) => return self.update_trash(message),
+			Message::Preview(message) => return self.update_preview(message),
 			Message::FileDrag(message) => return self.update_file_drag(message),
 			Message::NativeDrag(message) => return self.update_native_drag(message),
 			Message::PreferencesChanged => {

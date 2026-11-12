@@ -10,6 +10,7 @@
 | `context_menu/actions/` | One module per action, including its metadata, availability, and execution |
 | `tags/` | Tag messages and updates, persistence, editing, and tag views |
 | `filesystem/` | Directory entries, disk discovery, and storage usage |
+| `preview/` | Selection-driven preview lifecycle, bounded format loaders, sandboxed PDF/video converters, and right-pane rendering/resizing |
 | `ui/` | Shared styling, artwork, and keyboard/focus adapters |
 | `trash.rs` | Existing freedesktop trash implementation; unchanged by this refactor |
 
@@ -44,7 +45,8 @@ The top-level `app::Message` contains browser, context-menu, and tag message
 wrappers plus host lifecycle messages and the variants required by the shell
 backend macro. Each feature defines its own message enum and update handler.
 Widgets convert feature messages into application messages at the UI seam;
-`FileManager::update` only routes them. Feature effects return `Task<app::Message>`
+`FileManager::update` routes them, then reconciles the preview target against the
+resulting selection. Feature effects return `Task<app::Message>`
 so asynchronous completion returns through the same route.
 
 Shared application state remains explicit in `app::FileManager`: directory,
@@ -65,3 +67,11 @@ The skipped test accesses the real system D-Bus/UDisks2 service. Native popup
 checks require the private Weston/niri test environment described in repository
 guidance. Nix packaging also requires new source files to be in the Git-tracked
 build input; Cargo checks do not establish that packaging condition.
+
+Real PDF/video/SVG preview tests also exercise Bubblewrap, timeout, cancellation, and
+filesystem confinement. They are ignored in the default test run because they
+require the flake-supplied converter tools and unprivileged user namespaces:
+
+```sh
+cargo test -p file-manager preview -- --include-ignored
+```

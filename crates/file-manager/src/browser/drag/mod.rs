@@ -104,6 +104,17 @@ pub(crate) struct Origin {
 }
 
 impl State {
+	/// Delay geometry changes until pointer selection and double-click recognition settle.
+	pub(crate) fn preview_reflow_delay(&self) -> Option<Duration> {
+		if self.origin.is_some() || self.active {
+			return Some(Duration::from_millis(400));
+		}
+
+		self.last_click
+			.as_ref()
+			.and_then(|(_, time)| Duration::from_millis(400).checked_sub(time.elapsed()))
+	}
+
 	pub(crate) fn preview_entry(&self) -> Option<&DirEntry> {
 		self.preview_entry.as_ref()
 	}
