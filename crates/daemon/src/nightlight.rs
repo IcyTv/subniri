@@ -41,8 +41,9 @@ where
 	F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
 	tokio::pin!(shutdown_signal);
+	let emitter = SignalEmitter::new(&connection, NIGHTLIGHT_OBJECT_PATH)?.to_owned();
 	let service = tokio::select! {
-		result = NightlightDbus::new(config.clone()) => result?,
+		result = NightlightDbus::new(config.clone(), emitter) => result?,
 		result = &mut shutdown_signal => {
 			result?;
 			return Ok(());
@@ -307,6 +308,7 @@ struct NightlightDbus {
 }
 
 struct NightlightDbusInner {
+	emitter: SignalEmitter<'static>,
 	available: bool,
 	config: config::Nightlight,
 	controller: Option<NightlightController>,
@@ -321,7 +323,9 @@ struct SuspensionState {
 }
 
 impl NightlightDbus {
-	async fn new(config: config::Nightlight) -> Result<Self, Box<dyn std::error::Error>> {
+	async fn new(
+		config: config::Nightlight, emitter: SignalEmitter<'static>,
+	) -> Result<Self, Box<dyn std::error::Error>> {
 		let controller = if config.enabled {
 			Some(NightlightController::spawn(Duration::from_millis(config.debounce_ms)).await?)
 		} else {
@@ -330,6 +334,7 @@ impl NightlightDbus {
 
 		Ok(Self {
 			inner: Arc::new(NightlightDbusInner {
+				emitter,
 				available: config.enabled,
 				config,
 				controller,
@@ -360,6 +365,9 @@ impl NightlightDbus {
 			.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
 
 		*self.inner.state.lock().await = state;
+		// Scheduled changes must notify clients just like D-Bus writes.
+		self.emit_state_properties_changed().await?;
+
 		Ok(state)
 	}
 
@@ -420,11 +428,9 @@ impl NightlightDbus {
 		self.inner.suspension.lock().await.active
 	}
 
-	async fn emit_state_properties_changed(
-		&self, emitter: &SignalEmitter<'_>,
-	) -> zbus::fdo::Result<()> {
+	async fn emit_state_properties_changed(&self) -> zbus::fdo::Result<()> {
 		zbus::fdo::Properties::properties_changed(
-			emitter,
+			&self.inner.emitter,
 			zbus::names::InterfaceName::from_static_str_checked(
 				daemon_common::NightlightProperties::INTERFACE_NAME,
 			),
@@ -435,10 +441,10 @@ impl NightlightDbus {
 		.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))
 	}
 
-	async fn restore_scheduled_preset(&self, emitter: &SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+	async fn restore_scheduled_preset(&self) -> zbus::fdo::Result<()> {
 		let preset = current_preset(&self.inner.config);
 		self.apply_configured_preset(preset).await?;
-		self.emit_state_properties_changed(emitter).await
+		Ok(())
 	}
 
 	async fn state(&self) -> DesiredState {
@@ -462,12 +468,11 @@ impl Nightlight for NightlightDbus {
 	}
 
 	async fn set_enabled(
-		&self, enabled: bool, emitter: SignalEmitter<'_>,
+		&self, enabled: bool, _emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = enabled;
 		self.apply_state(state).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
@@ -477,14 +482,13 @@ impl Nightlight for NightlightDbus {
 
 	#[allow(clippy::cast_possible_truncation)]
 	async fn set_brightness(
-		&self, brightness: f64, emitter: SignalEmitter<'_>,
+		&self, brightness: f64, _emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = true;
 		state.brightness = brightness as f32;
 		state.preset = NightlightPreset::Custom;
 		self.apply_state(state).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
@@ -493,14 +497,13 @@ impl Nightlight for NightlightDbus {
 	}
 
 	async fn set_temperature(
-		&self, temperature: u32, emitter: SignalEmitter<'_>,
+		&self, temperature: u32, _emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = true;
 		state.temperature = temperature;
 		state.preset = NightlightPreset::Custom;
 		self.apply_state(state).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
@@ -508,7 +511,7 @@ impl Nightlight for NightlightDbus {
 		self.state().await.preset.as_str().to_string()
 	}
 
-	async fn set_preset(&self, preset: &str, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+	async fn set_preset(&self, preset: &str, _emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		let preset = NightlightPreset::parse(preset)?;
 		let NightlightSetting {
 			brightness,
@@ -524,7 +527,6 @@ impl Nightlight for NightlightDbus {
 		};
 
 		self.apply_preset(preset, brightness, temperature).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
@@ -532,23 +534,20 @@ impl Nightlight for NightlightDbus {
 		self.dbus_state().await
 	}
 
-	async fn toggle(&self, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+	async fn toggle(&self, _emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		let mut state = self.state().await;
 		state.active = !state.active;
 		self.apply_state(state).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 		Ok(())
 	}
 
 	async fn suspend(
-		&self, duration_secs: u64, emitter: SignalEmitter<'_>,
+		&self, duration_secs: u64, _emitter: SignalEmitter<'_>,
 	) -> zbus::fdo::Result<()> {
 		let generation = self.begin_suspension().await;
 		self.apply_configured_preset(NightlightPreset::Day).await?;
-		self.emit_state_properties_changed(&emitter).await?;
 
 		let service = self.clone();
-		let emitter = emitter.to_owned();
 		tokio::spawn(async move {
 			tokio::time::sleep(Duration::from_secs(duration_secs)).await;
 			if !service.end_suspension(generation).await {
@@ -557,7 +556,7 @@ impl Nightlight for NightlightDbus {
 
 			let preset = current_preset(&service.inner.config);
 			log::info!("Restoring nightlight preset after suspension: {preset:?}");
-			if let Err(error) = service.restore_scheduled_preset(&emitter).await {
+			if let Err(error) = service.restore_scheduled_preset().await {
 				log::warn!("Error restoring {preset:?} preset after suspension: {error}");
 			}
 		});
@@ -565,14 +564,14 @@ impl Nightlight for NightlightDbus {
 		Ok(())
 	}
 
-	async fn unsuspend(&self, emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
+	async fn unsuspend(&self, _emitter: SignalEmitter<'_>) -> zbus::fdo::Result<()> {
 		if !self.cancel_suspension().await {
 			return Ok(());
 		}
 
 		let preset = current_preset(&self.inner.config);
 		log::info!("Restoring nightlight preset after manual unsuspend: {preset:?}");
-		self.restore_scheduled_preset(&emitter).await
+		self.restore_scheduled_preset().await
 	}
 }
 
@@ -1086,12 +1085,117 @@ fn raw_temperature_to_rgb(temperature: u32) -> (f32, f32, f32) {
 #[cfg(test)]
 mod tests {
 	use super::GammaControlLock;
+	use futures::StreamExt;
+
+	async fn test_connections() -> (zbus::Connection, zbus::Connection) {
+		let (server_socket, client_socket) = tokio::net::UnixStream::pair().unwrap();
+		let server = zbus::connection::Builder::unix_stream(server_socket)
+			.p2p()
+			.server(zbus::Guid::generate())
+			.unwrap()
+			.build();
+		let client = zbus::connection::Builder::unix_stream(client_socket)
+			.p2p()
+			.build();
+		let (server, client) = tokio::join!(server, client);
+		(server.unwrap(), client.unwrap())
+	}
+
+	fn test_emitter(connection: &zbus::Connection) -> super::SignalEmitter<'static> {
+		super::SignalEmitter::new(connection, super::NIGHTLIGHT_OBJECT_PATH)
+			.unwrap()
+			.to_owned()
+	}
+
+	#[tokio::test]
+	async fn scheduled_presets_reach_bar_property_streams() {
+		let (server, client) = test_connections().await;
+
+		// Acknowledge gamma commands without touching Wayland or the running desktop.
+		let (command_tx, mut command_rx) = tokio::sync::mpsc::channel(8);
+		let controller = tokio::spawn(async move {
+			while let Some(super::Command::SetState { state, response_tx }) =
+				command_rx.recv().await
+			{
+				assert!(response_tx.send(Ok(state)).is_ok());
+			}
+		});
+		let config = config::Nightlight::default();
+		let service = super::NightlightDbus {
+			inner: std::sync::Arc::new(super::NightlightDbusInner {
+				emitter: test_emitter(&server),
+				available: true,
+				config: config.clone(),
+				controller: Some(super::NightlightController { command_tx }),
+				state: Default::default(),
+				suspension: Default::default(),
+			}),
+		};
+		server
+			.object_server()
+			.at(
+				super::NIGHTLIGHT_OBJECT_PATH,
+				super::NightlightServer(service.clone()),
+			)
+			.await
+			.unwrap();
+		let proxy = daemon_common::NightlightProxy::new(&client).await.unwrap();
+		let mut enabled = proxy.receive_enabled_changed().await;
+		let mut preset = proxy.receive_preset_changed().await;
+		let mut temperature = proxy.receive_temperature_changed().await;
+		let mut brightness = proxy.receive_brightness_changed().await;
+		let mut state = proxy.receive_state_changed().await;
+
+		// Consume initial values, just as the bar does when its subscription starts.
+		let initial = async {
+			enabled.next().await.unwrap().get().await.unwrap();
+			preset.next().await.unwrap().get().await.unwrap();
+			temperature.next().await.unwrap().get().await.unwrap();
+			brightness.next().await.unwrap().get().await.unwrap();
+			state.next().await.unwrap().get().await.unwrap();
+		};
+		tokio::time::timeout(super::Duration::from_secs(2), initial)
+			.await
+			.unwrap();
+
+		for scheduled in [super::NightlightPreset::Night, super::NightlightPreset::Day] {
+			super::apply_configured_preset(&service, &config, scheduled)
+				.await
+				.unwrap();
+			assert_eq!(service.state().await.preset, scheduled);
+
+			let updates = async {
+				let enabled = enabled.next().await.unwrap().get().await.unwrap();
+				let preset = preset.next().await.unwrap().get().await.unwrap();
+				let temperature = temperature.next().await.unwrap().get().await.unwrap();
+				let brightness = brightness.next().await.unwrap().get().await.unwrap();
+				let state = state.next().await.unwrap().get().await.unwrap();
+				(enabled, preset, temperature, brightness, state)
+			};
+			let (enabled, preset, temperature, brightness, state) =
+				tokio::time::timeout(super::Duration::from_secs(2), updates)
+					.await
+					.expect("scheduled preset changed daemon state but did not notify the bar");
+
+			let expected = super::preset_setting(&config, scheduled);
+			assert!(enabled);
+			assert_eq!(preset, scheduled.as_str());
+			assert_eq!(temperature, expected.temperature);
+			assert!((brightness - expected.brightness).abs() < 0.000_001);
+			assert_eq!(state, (true, true, brightness, temperature, preset));
+		}
+
+		service.shutdown().await;
+		controller.await.unwrap();
+	}
 
 	#[tokio::test]
 	async fn controller_loss_reaches_service_supervisor() {
+		let (server, _client) = test_connections().await;
 		let (command_tx, command_rx) = tokio::sync::mpsc::channel(8);
 		let service = super::NightlightDbus {
 			inner: std::sync::Arc::new(super::NightlightDbusInner {
+				emitter: test_emitter(&server),
 				available: true,
 				config: config::Nightlight::default(),
 				controller: Some(super::NightlightController { command_tx }),
@@ -1115,7 +1219,10 @@ mod tests {
 	#[tokio::test]
 	async fn disabled_service_does_not_report_controller_loss()
 	-> Result<(), Box<dyn std::error::Error>> {
-		let service = super::NightlightDbus::new(config::Nightlight::default()).await?;
+		let (server, _client) = test_connections().await;
+		let service =
+			super::NightlightDbus::new(config::Nightlight::default(), test_emitter(&server))
+				.await?;
 		let result = tokio::time::timeout(
 			std::time::Duration::from_millis(50),
 			super::wait_for_runtime_exit(&service, &mut None, std::future::pending()),
@@ -1129,7 +1236,10 @@ mod tests {
 
 	#[tokio::test]
 	async fn completed_reconciler_is_not_awaited_twice() -> Result<(), Box<dyn std::error::Error>> {
-		let service = super::NightlightDbus::new(config::Nightlight::default()).await?;
+		let (server, _client) = test_connections().await;
+		let service =
+			super::NightlightDbus::new(config::Nightlight::default(), test_emitter(&server))
+				.await?;
 		let mut reconciler = Some(tokio::spawn(async {}));
 		assert!(
 			super::wait_for_runtime_exit(&service, &mut reconciler, std::future::pending())
