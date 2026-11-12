@@ -9,8 +9,19 @@ use std::{
 	path::{Path, PathBuf},
 };
 
+mod actions;
+mod app;
 mod listing;
-pub(crate) use listing::{TrashEntry, TrashIssue, TrashListing, list_trash};
+mod locations;
+mod view;
+pub(crate) use actions::{Captured, Identity};
+pub(crate) use app::{Message, State};
+pub(crate) use listing::{TrashEntry, TrashListing, list_trash};
+
+#[cfg(test)]
+pub(crate) fn fixture_listing(home: &Path) -> TrashListing {
+	listing::fixture_listing(home)
+}
 
 /// Move an entry into freedesktop trash without copying or overwriting entries.
 /// On failure the source is never deliberately erased. No permanent-delete
@@ -19,6 +30,9 @@ pub(crate) fn trash(path: impl AsRef<Path>) -> io::Result<PathBuf> {
 	let path = absolute_path(path.as_ref())?;
 	let mounts = Mountpoints::from_proc_mounts()?;
 	let location = mounts.trash_location(&path, &base_trash_dir()?)?;
+	if let Some(topdir) = &location.topdir {
+		locations::remember(topdir)?;
+	}
 
 	move_to_trash(&path, &location)
 }
@@ -239,6 +253,7 @@ fn check_trash_relationship(source: &Path, trash: &Path) -> io::Result<()> {
 #[derive(Debug)]
 struct Mountpoint {
 	path: PathBuf,
+	virtual_fs: bool,
 }
 
 impl Mountpoint {
@@ -251,13 +266,24 @@ impl Mountpoint {
 		parts.next()?;
 
 		let escaped_path = parts.next()?;
+		let filesystem = parts.next()?;
 		let path = decode_mount_path(escaped_path)?;
 
 		if !path.is_absolute() {
 			return None;
 		}
 
-		Some(Self { path })
+		let virtual_fs = matches!(
+			filesystem,
+			b"proc"
+				| b"sysfs" | b"devpts"
+				| b"cgroup" | b"cgroup2"
+				| b"pstore" | b"securityfs"
+				| b"debugfs" | b"tracefs"
+				| b"configfs"
+				| b"bpf" | b"mqueue"
+		);
+		Some(Self { path, virtual_fs })
 	}
 }
 
@@ -576,6 +602,7 @@ mod test {
 		Mountpoints {
 			points: vec![Mountpoint {
 				path: topdir.to_owned(),
+				virtual_fs: false,
 			}],
 		}
 	}
@@ -794,8 +821,12 @@ mod test {
 			points: vec![
 				Mountpoint {
 					path: "/mnt/data".into(),
+					virtual_fs: false,
 				},
-				Mountpoint { path: "/".into() },
+				Mountpoint {
+					path: "/".into(),
+					virtual_fs: false,
+				},
 			],
 		};
 

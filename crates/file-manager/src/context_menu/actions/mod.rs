@@ -219,6 +219,18 @@ impl Action {
 		self, app: &FileManager, target: &Target, available: bool,
 	) -> Option<&'static str> {
 		let definition = self.parent().definition();
+		if app.trash_state.busy
+			&& matches!(
+				self.parent().menu_parent().unwrap_or(self.parent()),
+				Command::Delete
+					| Command::Trash
+					| Command::Copy | Command::Cut
+					| Command::Paste
+					| Command::AdvancedCopy
+					| Command::AdvancedMove
+			) {
+			return Some("Wait for the current trash operation to finish");
+		}
 		if !available {
 			return Some("Item no longer available");
 		}

@@ -125,13 +125,14 @@ impl HitTest {
 			Area::Entry { path, directory } => {
 				self.hit.entry = Some(path.clone());
 				self.hit.navigation = *directory;
-				directory.then(|| path.clone())
+				directory.then(|| super::Destination::Directory(path.clone()))
 			}
-			Area::Background(path) => Some(path.clone()),
+			Area::Background(path) => Some(super::Destination::Directory(path.clone())),
 			Area::Sidebar(path) => {
 				self.hit.navigation = true;
-				Some(path.clone())
+				Some(super::Destination::Directory(path.clone()))
 			}
+			Area::Trash => Some(super::Destination::Trash),
 		};
 	}
 }
@@ -433,7 +434,10 @@ mod tests {
 		);
 		sibling.traverse(&mut |_| {});
 		sibling.observe_area(bounds(10.0, 30.0), &Area::Sidebar("/sidebar".into()));
-		assert_eq!(sibling.hit.target, Some("/sidebar".into()));
+		assert_eq!(
+			sibling.hit.target,
+			Some(super::super::Destination::Directory("/sidebar".into()))
+		);
 		assert!(sibling.hit.entry.is_none());
 		assert!(sibling.hit.navigation);
 	}
@@ -490,7 +494,10 @@ mod tests {
 			);
 		});
 
-		assert_eq!(hit.hit.target, Some("/nested".into()));
+		assert_eq!(
+			hit.hit.target,
+			Some(super::super::Destination::Directory("/nested".into()))
+		);
 		assert_eq!(
 			hit.hit.scroll.as_ref().map(|scroll| scroll.bounds),
 			Some(bounds(50.0, 50.0))

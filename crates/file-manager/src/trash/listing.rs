@@ -34,6 +34,10 @@ pub(crate) struct TrashEntry {
 	pub deletion_date: Option<String>,
 	/// Nonempty means damaged metadata or an entry that could not be inspected.
 	pub issues: Vec<TrashIssue>,
+	pub(super) identity: Option<super::Identity>,
+	pub(super) info_identity: Option<super::Identity>,
+	pub(super) info_bytes: Option<Vec<u8>>,
+	pub(super) containers: Vec<(PathBuf, super::Identity)>,
 }
 
 #[derive(Debug)]
@@ -45,14 +49,27 @@ pub(crate) struct TrashIssue {
 /// List the current user's home trash and both trash locations on every known
 /// mount. Directories are single entries; their contents are not traversed.
 /// Missing locations are normal. Damaged entries remain visible with issues.
-/// Never creates trash directories. Unmounted volumes and undiscovered Btrfs
-/// subvolumes are not scanned. The result is a snapshot, not an atomic view.
+/// Never creates trash directories. Includes remembered roots used by Fileberg;
+/// offline volumes and other undiscovered subvolumes are not scanned.
+/// The result is a snapshot, not an atomic view.
 pub(crate) fn list_trash() -> io::Result<TrashListing> {
-	let mounts = Mountpoints::from_proc_mounts()?;
-	Ok(list_from_mounts(&mounts, &base_trash_dir()?))
+	let mut mounts = Mountpoints::from_proc_mounts()?;
+	let registration = super::locations::extend(&mut mounts);
+	let mut listing = list_from_mounts(&mounts, &base_trash_dir()?);
+	if let Err(error) = registration {
+		listing
+			.issues
+			.push(issue(Path::new("Fileberg trash locations"), error));
+	}
+	Ok(listing)
 }
 
-fn list_from_mounts(mounts: &Mountpoints, home: &Path) -> TrashListing {
+#[cfg(test)]
+pub(super) fn fixture_listing(home: &Path) -> TrashListing {
+	list_from_mounts(&Mountpoints { points: Vec::new() }, home)
+}
+
+pub(super) fn list_from_mounts(mounts: &Mountpoints, home: &Path) -> TrashListing {
 	let mut listing = TrashListing::default();
 	let mut seen = HashSet::new();
 	list_location(
@@ -64,7 +81,10 @@ fn list_from_mounts(mounts: &Mountpoints, home: &Path) -> TrashListing {
 		&mut listing,
 	);
 	let uid = unsafe { libc::getuid() };
-	for mount in &mounts.points {
+	// Kernel pseudo-filesystems cannot contain freedesktop trash. Probing their
+	// protected control directories produces noise, not missing user locations.
+	// tmpfs/ramfs remain eligible: volatile storage can hold actual user files.
+	for mount in mounts.points.iter().filter(|mount| !mount.virtual_fs) {
 		let shared = mount.path.join(".Trash");
 		match fs::symlink_metadata(&shared) {
 			Ok(_) if valid_shared_trash(&shared) => {
@@ -139,6 +159,14 @@ fn list_location(
 		let entries = fs::read_dir(&files)?;
 		let info = location.directory.join("info");
 		let info_error = validate_private_dir(&info).err();
+		let containers = [&location.directory, &files, &info]
+			.into_iter()
+			.filter_map(|path| {
+				fs::symlink_metadata(path)
+					.ok()
+					.map(|metadata| (path.clone(), super::Identity::new(&metadata)))
+			})
+			.collect::<Vec<_>>();
 		if let Some(error) = &info_error {
 			listing.issues.push(issue(
 				&info,
@@ -157,6 +185,16 @@ fn list_location(
 			let mut name = entry.file_name();
 			name.push(".trashinfo");
 			let info_path = info.join(name);
+			let identity = fs::symlink_metadata(&stored_path)
+				.ok()
+				.map(|metadata| super::Identity::new(&metadata));
+			let info_identity = if info_error.is_none() {
+				fs::symlink_metadata(&info_path)
+					.ok()
+					.map(|metadata| super::Identity::new(&metadata))
+			} else {
+				None
+			};
 			let mut item = TrashEntry {
 				stored_path,
 				info_path,
@@ -164,6 +202,10 @@ fn list_location(
 				original_path: None,
 				deletion_date: None,
 				issues: Vec::new(),
+				identity,
+				info_identity,
+				info_bytes: None,
+				containers: containers.clone(),
 			};
 			match entry.file_type() {
 				Ok(kind) => item.file_type = Some(kind),
@@ -177,6 +219,7 @@ fn list_location(
 			} else {
 				match read_info(&item.info_path) {
 					Ok(bytes) => {
+						item.info_bytes = Some(bytes.clone());
 						let parsed = parse_info(&bytes, &location);
 						item.original_path = parsed.original_path;
 						item.deletion_date = parsed.deletion_date;
@@ -203,7 +246,7 @@ fn list_location(
 	}
 }
 
-fn read_info(path: &Path) -> io::Result<Vec<u8>> {
+pub(super) fn read_info(path: &Path) -> io::Result<Vec<u8>> {
 	// Do not follow metadata symlinks or block opening FIFOs/device nodes.
 	let file = fs::OpenOptions::new()
 		.read(true)
@@ -373,6 +416,7 @@ mod tests {
 				.iter()
 				.map(|path| Mountpoint {
 					path: path.to_path_buf(),
+					virtual_fs: false,
 				})
 				.collect(),
 		}

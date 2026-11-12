@@ -51,6 +51,10 @@ mod tests {
 }
 
 impl Store {
+	pub(super) fn deletions_root(&self) -> PathBuf {
+		self.root.join("trash-deletions")
+	}
+
 	/// Serialize mutating jobs without blocking the UI or failing merely because
 	/// a concurrent history read briefly holds the cooperative journal lock.
 	pub fn open_wait(root: PathBuf, cancelled: &std::sync::atomic::AtomicBool) -> io::Result<Self> {
@@ -171,7 +175,11 @@ impl Store {
 			.custom_flags(libc::O_NOFOLLOW)
 			.open(self.root.join(format!("{id}.json")))?;
 		let journal: Journal = serde_json::from_reader(file)?;
-		if journal.version != 1 || journal.id != id {
+		let supported = matches!(
+			(journal.version, journal.restoration.is_some()),
+			(1, false) | (2, true)
+		);
+		if !supported || journal.id != id {
 			return Err(fs::invalid("Unsupported or mismatched transfer journal"));
 		}
 

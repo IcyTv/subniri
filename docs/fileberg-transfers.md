@@ -92,6 +92,36 @@ offline storage, or errors prevent restoration, Fileberg preserves surviving
 data, attempts independent reversals, and retains the journal for retry. A
 Needs recovery outcome is not a claim that everything was restored.
 
+## Trash
+
+Open **Trash** in the sidebar to manage home trash and discoverable mounted-volume
+trash. Fileberg also remembers volume roots it uses, including nested subvolumes
+absent from the mount table. It does not recursively search every directory for
+trash created by other applications. Offline locations are not included.
+
+Drop an internal selection onto the Trash sidebar item to trash it immediately,
+regardless of Ctrl/Shift. The context-menu **Move to Trash** uses the same
+background operation. Native drops from other applications or Fileberg instances
+are rejected over Trash. Failed trashing never falls back to permanent deletion.
+
+Select entries to **Restore** or **Delete Permanently**. Restore uses the original
+name and location, not a collision-renamed trash filename. Conflicts offer Replace,
+Keep both, Skip, and Cancel; Restore does not merge directories. Replace preserves
+the old destination for recovery. Restore asks before recreating missing parent
+folders and rejects symlinked destination ancestors. Unknown original paths disable
+Restore; damaged dates alone do not. Damaged entries remain visible and deletable.
+
+Restore participates in History, Ctrl+Z, cancellation, and the recovery limits
+above. Undo returns both payload and trash metadata, and removes recreated parent
+folders only when they remain owned and empty. Reused trash slots block recovery
+rather than overwriting newer data.
+
+**Delete Permanently** and **Empty Trash** require confirmation and cannot be undone.
+They delete only the captured batch, excluding newly arrived items and offline
+locations. An interrupted deletion keeps a private record; **Retry deletion**
+continues that previously confirmed operation. Failed cleanup is reported and
+preserved rather than silently discarded.
+
 ## Supported data and limits
 
 Local file URIs and document-portal file transfers are supported. Outgoing portal

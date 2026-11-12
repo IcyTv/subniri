@@ -196,6 +196,9 @@ impl FileManager {
 				&& (key.as_ref() == Key::Named(Named::ContextMenu)
 					|| (key.as_ref() == Key::Named(Named::F10) && modifiers.shift()))
 			{
+				if self.page != crate::browser::Page::Files {
+					return Task::none();
+				}
 				return self.keyboard_menu();
 			}
 			if id == self.host {

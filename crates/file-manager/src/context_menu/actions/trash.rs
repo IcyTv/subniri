@@ -22,12 +22,6 @@ fn unavailable(_: &FileManager, target: &Target, _: Action) -> Option<&'static s
 	None
 }
 
-fn execute(_: &mut FileManager, target: Target, _: Action) -> Task<Message> {
-	for path in target.paths() {
-		match crate::trash::trash(&path) {
-			Ok(_) => log::info!("Trashed {}", path.display()),
-			Err(e) => log::error!("Failed to trash {}: {}", path.display(), e),
-		}
-	}
-	Task::done(crate::browser::Message::Refresh.into())
+fn execute(app: &mut FileManager, target: Target, _: Action) -> Task<Message> {
+	app.update_trash(crate::trash::Message::Trash(target))
 }

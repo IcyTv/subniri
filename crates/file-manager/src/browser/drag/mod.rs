@@ -20,12 +20,34 @@ pub(crate) enum Area {
 	Entry { path: PathBuf, directory: bool },
 	Background(PathBuf),
 	Sidebar(PathBuf),
+	Trash,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Destination {
+	Directory(PathBuf),
+	Trash,
+}
+
+impl Destination {
+	pub(crate) fn directory(&self) -> Option<&PathBuf> {
+		match self {
+			Self::Directory(path) => Some(path),
+			Self::Trash => None,
+		}
+	}
+}
+
+impl From<PathBuf> for Destination {
+	fn from(path: PathBuf) -> Self {
+		Self::Directory(path)
+	}
 }
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Hit {
 	pub entry: Option<PathBuf>,
-	pub target: Option<PathBuf>,
+	pub target: Option<Destination>,
 	pub navigation: bool,
 	pub scroll: Option<Scroll>,
 }
@@ -61,12 +83,12 @@ pub(crate) struct State {
 	pub external: bool,
 	pub external_copy: bool,
 	pub origin: Option<Origin>,
-	pub target: Option<PathBuf>,
+	pub target: Option<Destination>,
 	pub valid: bool,
 	pub sources: Vec<PathBuf>,
 	pub generation: u64,
 	guard: Option<Target>,
-	pending: Option<(PathBuf, Operation)>,
+	pending: Option<(Destination, Operation)>,
 	position: Point,
 	preview_entry: Option<DirEntry>,
 	hit: Hit,
@@ -91,10 +113,26 @@ impl State {
 	}
 
 	pub(crate) fn highlights(&self, path: &std::path::Path) -> bool {
-		self.active && self.valid && self.target.as_deref() == Some(path)
+		self.active
+			&& self.valid
+			&& self
+				.target
+				.as_ref()
+				.and_then(Destination::directory)
+				.is_some_and(|target| target == path)
 	}
 
-	fn accepts(&self, target: &std::path::Path) -> bool {
+	pub(crate) fn highlights_trash(&self) -> bool {
+		self.active && self.valid && self.target == Some(Destination::Trash)
+	}
+
+	fn accepts(&self, destination: &Destination) -> bool {
+		if matches!(destination, Destination::Trash) {
+			return !self.external && !self.sources.is_empty();
+		}
+		let Some(target) = destination.directory() else {
+			return false;
+		};
 		if self.external {
 			return self.external_copy;
 		}
@@ -112,10 +150,10 @@ impl State {
 		self.target = hit.target.clone();
 		self.valid = self
 			.target
-			.as_deref()
-			.is_some_and(|path| self.accepts(path));
+			.as_ref()
+			.is_some_and(|destination| self.accepts(destination));
 		if self.valid && hit.navigation {
-			if let Some(target) = &self.target {
+			if let Some(target) = self.target.as_ref().and_then(Destination::directory) {
 				if self.hover.as_ref().is_none_or(|(path, _)| path != target) {
 					self.hover = Some((target.clone(), Instant::now()));
 				}
@@ -179,6 +217,8 @@ impl FileManager {
 		match message {
 			Message::Pressed(path, point) => {
 				if self.transfers.busy
+					|| self.trash_state.busy
+					|| self.page != super::Page::Files
 					|| !self.transfers.loaded
 					|| self.dialogs.blocked()
 					|| self.transfers.blocked()
@@ -383,6 +423,10 @@ impl FileManager {
 			return Task::none();
 		};
 		self.drag.pending = None;
+		let destination = match destination {
+			Destination::Trash => return self.update_trash(crate::trash::Message::Trash(guard)),
+			Destination::Directory(path) => path,
+		};
 		let request = transfers::Request {
 			sources: guard.paths(),
 			destination,
@@ -440,7 +484,7 @@ mod geometry_tests {
 			let _ = app.update_file_drag(Message::Motion(
 				point,
 				Hit {
-					target: Some(destination.clone()),
+					target: Some(Destination::Directory(destination.clone())),
 					navigation: true,
 					..Hit::default()
 				},
@@ -480,10 +524,10 @@ mod geometry_tests {
 			sources: vec![PathBuf::from("/home/user/folder")],
 			..State::default()
 		};
-		assert!(!state.accepts(std::path::Path::new("/home/user/folder")));
-		assert!(!state.accepts(std::path::Path::new("/home/user/folder/child")));
-		assert!(!state.accepts(std::path::Path::new("/home/user")));
-		assert!(state.accepts(std::path::Path::new("/home/user/other")));
+		assert!(!state.accepts(&Destination::Directory("/home/user/folder".into())));
+		assert!(!state.accepts(&Destination::Directory("/home/user/folder/child".into())));
+		assert!(!state.accepts(&Destination::Directory("/home/user".into())));
+		assert!(state.accepts(&Destination::Directory("/home/user/other".into())));
 	}
 
 	#[test]

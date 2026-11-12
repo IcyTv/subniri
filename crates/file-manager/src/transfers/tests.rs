@@ -166,6 +166,7 @@ fn oversized_recovery_requires_explicit_job_scoped_durable_consent() {
 		approved_recovery_bytes: 0,
 		changes: Vec::new(),
 		problems: Vec::new(),
+		restoration: None,
 	};
 	store.save(&journal).unwrap();
 	let bytes = 6 * 1024 * 1024 * 1024;

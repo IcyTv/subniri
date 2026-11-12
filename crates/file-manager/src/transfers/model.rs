@@ -49,6 +49,8 @@ pub(crate) enum ConflictReason {
 	},
 	CentralRecovery,
 	VolatileMove,
+	MissingParents,
+	RestoreEntry,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +197,8 @@ pub(crate) struct Journal {
 	pub approved_recovery_bytes: u64,
 	pub(super) changes: Vec<Change>,
 	pub problems: Vec<String>,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub(super) restoration: Option<super::restore::Restoration>,
 }
 
 #[derive(Debug, Clone)]

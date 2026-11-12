@@ -14,6 +14,14 @@ use crate::{
 use iced::keyboard;
 use std::path::PathBuf;
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Page {
+	#[default]
+	Files,
+	History,
+	Trash,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
 	Clicked(PathBuf),

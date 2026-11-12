@@ -65,7 +65,7 @@ impl FileManager {
 			style::dark_control(text("Paste").size(11).color(foreground), colors)
 				.id("transfer-paste")
 				.on_press(Message::Paste(self.path.clone()).into())
-				.enabled(state.can_paste()),
+				.enabled(state.can_paste() && !self.trash_state.busy),
 			style::dark_control(text("Cancel").size(11).color(foreground), colors)
 				.id("transfer-cancel-prepared")
 				.on_press(Message::CancelPrepared.into()),
@@ -160,7 +160,12 @@ impl FileManager {
 				Status::Expiring | Status::RolledBack => None,
 			};
 			let mut heading = row![
-				text(status_label(journal.status)).size(12),
+				text(if journal.restoration.is_some() {
+					format!("Restore · {}", status_label(journal.status))
+				} else {
+					status_label(journal.status).to_owned()
+				})
+				.size(12),
 				text(journal.id.as_str())
 					.size(11)
 					.color(colors.secondary)
@@ -172,7 +177,11 @@ impl FileManager {
 				heading = heading.push(
 					style::control(text(action).size(12), false, colors)
 						.on_press(Message::Undo(journal.id.clone()).into())
-						.enabled(!state.busy && state.loaded && !state.blocked()),
+						.enabled(
+							!state.busy
+								&& !self.trash_state.busy
+								&& state.loaded && !state.blocked(),
+						),
 				);
 			}
 
@@ -252,6 +261,11 @@ impl FileManager {
 			{
 				"Move into volatile storage?"
 			}
+			DialogContent::Conflict(conflict)
+				if conflict.reason == super::model::ConflictReason::MissingParents =>
+			{
+				"Recreate original folders?"
+			}
 			DialogContent::Conflict(_) => "Destination already exists",
 		};
 		let title = mouse_area(
@@ -305,6 +319,9 @@ impl FileManager {
 					} else if conflict.reason == super::model::ConflictReason::VolatileMove {
 						body = body.push(text("This destination is volatile storage. Moving removes your originals, and the destination data may disappear after restart or power loss. Cancel and use Copy to keep your originals, or explicitly accept this risk for this job.").size(13));
 						true
+					} else if conflict.reason == super::model::ConflictReason::MissingParents {
+						body = body.push(text("The original parent folders no longer exist. Create the missing folders and restore this item there? Cancelling leaves the item in Trash.").size(13));
+						true
 					} else {
 						body = body.push(apply);
 						false
@@ -320,7 +337,10 @@ impl FileManager {
 						("Keep both", Choice::KeepBoth),
 						("Cancel", Choice::Cancel),
 						(
-							if conflict.reason == super::model::ConflictReason::VolatileMove {
+							if conflict.reason == super::model::ConflictReason::MissingParents {
+								"Create folders"
+							} else if conflict.reason == super::model::ConflictReason::VolatileMove
+							{
 								"Move anyway"
 							} else if conflict.reason
 								== super::model::ConflictReason::CentralRecovery

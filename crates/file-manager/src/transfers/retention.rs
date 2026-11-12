@@ -131,6 +131,9 @@ fn retained_bytes(record: &Journal) -> (u64, Vec<String>) {
 			continue;
 		};
 		let result = (|| {
+			if retired_workspace_missing(record, change)? {
+				return Ok(0);
+			}
 			let root = workspace(change)?;
 			if !validate_workspace(change, &root, record.status == Status::Expiring)? {
 				return Ok(0);
@@ -277,7 +280,11 @@ fn cleanup(store: &Store, record: &mut Journal) -> io::Result<()> {
 		return Err(fs::invalid("Cannot expire unfinished or failed recovery"));
 	}
 	// Preflight every workspace before making undo unavailable.
+	super::restore::preflight_expiry(record)?;
 	for change in &record.changes {
+		if retired_workspace_missing(record, change)? {
+			continue;
+		}
 		preflight(change, retry, record.status)?;
 	}
 
@@ -285,7 +292,11 @@ fn cleanup(store: &Store, record: &mut Journal) -> io::Result<()> {
 		record.status = Status::Expiring;
 		store.save(record)?;
 	}
+	super::restore::expire(record)?;
 	for change in &record.changes {
+		if retired_workspace_missing(record, change)? {
+			continue;
+		}
 		if change.empty_directory {
 			continue;
 		}
@@ -314,6 +325,57 @@ fn cleanup(store: &Store, record: &mut Journal) -> io::Result<()> {
 	}
 
 	store.forget(record)
+}
+
+fn retired_workspace_missing(record: &Journal, change: &Change) -> io::Result<bool> {
+	let retired = record
+		.restoration
+		.as_ref()
+		.is_some_and(|state| state.retired_workspaces.contains(&change.stage));
+	Ok(retired && !fs::exists(&workspace(change)?)?)
+}
+
+/// Persist retirement intent before removing empty workspaces. A crash after
+/// removal must not make later rollback or retention require their ancestors.
+pub(super) fn retire_restore_workspaces(store: &Store, record: &mut Journal) -> io::Result<()> {
+	if record
+		.restoration
+		.as_ref()
+		.is_none_or(|state| state.parents.is_empty())
+	{
+		return Ok(());
+	}
+
+	for index in 0..record.changes.len() {
+		let change = record.changes[index].clone();
+		if change.empty_directory
+			|| change.step != super::model::Step::Undone
+			|| retired_workspace_missing(record, &change)?
+		{
+			continue;
+		}
+		let root = workspace(&change)?;
+		preflight(&change, false, Status::RolledBack)?;
+		if stdfs::read_dir(&root)?.next().is_some() {
+			return Err(fs::invalid(
+				"Restore workspace still contains recovery data",
+			));
+		}
+
+		let state = record
+			.restoration
+			.as_mut()
+			.ok_or_else(|| fs::invalid("Missing restore state"))?;
+		if !state.retired_workspaces.contains(&change.stage) {
+			state.retired_workspaces.push(change.stage.clone());
+			store.save(record)?;
+		}
+
+		validate_workspace(&change, &root, false)?;
+		stdfs::remove_dir(&root)?;
+		fs::sync_parent(&root)?;
+	}
+	Ok(())
 }
 
 fn preflight(change: &Change, retry: bool, status: Status) -> io::Result<()> {
@@ -435,6 +497,7 @@ mod tests {
 			durability: Durability::Buffered,
 			approved_recovery_bytes: 0,
 			problems: Vec::new(),
+			restoration: None,
 			changes: vec![Change {
 				source: StoredPath::new(&root.path().join(format!("source-{number}"))),
 				destination: StoredPath::new(&destination),

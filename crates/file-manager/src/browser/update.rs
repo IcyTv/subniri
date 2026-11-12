@@ -7,6 +7,14 @@ use iced::{
 
 impl FileManager {
 	pub(crate) fn update_browser(&mut self, message: Message) -> Task<crate::Message> {
+		if self.page == super::Page::Trash {
+			if let Message::Keyboard(event) = message {
+				return self.trash_keyboard(event);
+			}
+			if matches!(message, Message::Refresh) {
+				return self.update_trash(crate::trash::Message::Refresh);
+			}
+		}
 		match message {
 			Message::TypeAhead(edit) => {
 				if self.menu.is_some() {
@@ -194,7 +202,7 @@ impl FileManager {
 								),
 							);
 						}
-						Key::Character("v") if !self.transfers.show_history => {
+						Key::Character("v") if self.page == super::Page::Files => {
 							return self.update_transfers(crate::transfers::Message::Paste(
 								self.path.clone(),
 							));

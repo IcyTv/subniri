@@ -43,10 +43,22 @@ impl FileManager {
 		self.request_confirmation(ConfirmationAction::Drive(operation))
 	}
 
+	pub(crate) fn request_trash_delete_confirmation(
+		&mut self, items: Vec<crate::trash::Captured>, empty: bool,
+	) -> Task<crate::Message> {
+		if items.is_empty() {
+			return Task::none();
+		}
+		self.request_confirmation(ConfirmationAction::TrashDelete { items, empty })
+	}
+
 	fn request_confirmation(&mut self, action: ConfirmationAction) -> Task<crate::Message> {
 		if self.dialogs.blocked()
 			|| self.dialogs.deleting.is_some()
 			|| self.drives.busy.is_some()
+			|| self.transfers.busy
+			|| self.transfers.blocked()
+			|| self.trash_state.busy
 			|| self.closing.is_some()
 		{
 			return Task::none();
@@ -101,6 +113,7 @@ impl FileManager {
 						size: Some(match pending.action {
 							ConfirmationAction::Delete(_) => PixelSize::px(480, 230),
 							ConfirmationAction::Drive(_) => PixelSize::px(520, 340),
+							ConfirmationAction::TrashDelete { .. } => PixelSize::px(560, 300),
 						}),
 						client_side_decorations: true,
 					},
@@ -173,6 +186,9 @@ impl FileManager {
 							return restore.chain(self.perform_drive_operation(operation));
 						}
 						ConfirmationAction::Delete(target) => target,
+						ConfirmationAction::TrashDelete { items, .. } => {
+							return restore.chain(self.perform_trash_delete(items));
+						}
 					};
 					let action = Action::Command(Command::Delete);
 					if let Some(reason) = action.unavailable(self, &target, target.available()) {

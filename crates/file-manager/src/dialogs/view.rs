@@ -39,6 +39,45 @@ impl FileManager {
 					"Permanently Delete",
 				)
 			}
+			ConfirmationAction::TrashDelete { items, empty } => {
+				let names = items
+					.iter()
+					.take(5)
+					.map(|item| {
+						item.original
+							.as_ref()
+							.unwrap_or(&item.payload.path)
+							.file_name()
+							.unwrap_or_default()
+							.to_string_lossy()
+							.into_owned()
+					})
+					.collect::<Vec<_>>()
+					.join("\n");
+				let extra = if items.len() > 5 {
+					format!("\n…and {} more", items.len() - 5)
+				} else {
+					String::new()
+				};
+				(
+					if *empty {
+						"Empty Trash?"
+					} else {
+						"Delete permanently?"
+					},
+					format!(
+						"Permanently delete {} captured trash {}?\n\n{names}{extra}",
+						items.len(),
+						if items.len() == 1 { "item" } else { "items" }
+					),
+					"This cannot be undone. Folders and their contents will be deleted. Offline locations and newly arrived items are not included.",
+					if *empty {
+						"Empty Trash"
+					} else {
+						"Delete Permanently"
+					},
+				)
+			}
 		};
 
 		let title = mouse_area(
@@ -100,6 +139,7 @@ impl FileManager {
 			{
 				Some(ConfirmationAction::Delete(_)) => "Confirm Permanent Deletion — Fileberg",
 				Some(ConfirmationAction::Drive(_)) => "Confirm Storage Operation — Fileberg",
+				Some(ConfirmationAction::TrashDelete { .. }) => "Confirm Trash Deletion — Fileberg",
 				None => "fileberg",
 			}
 			.into(),

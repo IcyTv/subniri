@@ -53,7 +53,7 @@ impl FileManager {
 				.into(),
 			self.typeahead.is_active(),
 			!self.loading
-				&& !self.transfers.show_history
+				&& self.page == crate::browser::Page::Files
 				&& self.menu.is_none()
 				&& self.drives.menu.is_none(),
 			self.visible_entries()
@@ -74,7 +74,9 @@ impl FileManager {
 		let content = typeahead::host_gate(content, self.popups.topmost());
 		let preview = if self.drag.active && !self.drag.external {
 			self.drag.preview_entry().map(|entry| {
-				let action = if self.modifiers.control() {
+				let action = if self.drag.highlights_trash() {
+					"Move to Trash"
+				} else if self.modifiers.control() {
 					"Copy"
 				} else if self.modifiers.shift() {
 					"Move"
@@ -85,8 +87,19 @@ impl FileManager {
 					row![
 						file_art(entry, 0.6, colors),
 						column![
-							text(format!("{action} · {} items", self.drag.sources.len())).size(12),
-							text(if self.drag.valid {
+							text(format!(
+								"{action} · {} {}",
+								self.drag.sources.len(),
+								if self.drag.sources.len() == 1 {
+									"item"
+								} else {
+									"items"
+								}
+							))
+							.size(12),
+							text(if self.drag.highlights_trash() {
+								"Release to trash"
+							} else if self.drag.valid {
 								"Release to transfer"
 							} else {
 								"Choose a destination folder"
@@ -413,8 +426,16 @@ impl FileManager {
 		content = content.push(self.selection_inspector(gutter));
 		let folders = visible.iter().filter(|entry| entry.is_dir).count();
 		let mut status_content = row![
-			text(if self.transfers.show_history {
+			text(if self.page == crate::browser::Page::History {
 				format!("{} transfers", self.transfers.history.len())
+			} else if self.page == crate::browser::Page::Trash {
+				format!(
+					"{} trashed items",
+					self.trash_state
+						.listing
+						.as_ref()
+						.map_or(0, |listing| listing.contents.entries.len())
+				)
 			} else {
 				format!(
 					"{} items · {folders} folders, {} files",
@@ -427,7 +448,10 @@ impl FileManager {
 			Space::new().width(Length::Fill)
 		]
 		.align_y(Alignment::Center);
-		if let Some(usage) = self.storage {
+		if let Some(usage) = self
+			.storage
+			.filter(|_| self.page == crate::browser::Page::Files)
+		{
 			status_content = status_content.push(
 				row![
 					svg(ui_icon!("hard-drive"))
@@ -449,7 +473,7 @@ impl FileManager {
 			.padding([8, 16])
 			.width(Length::Fill)
 			.style(move |_| style::panel(colors.surface));
-		let content: Element<'_, Message> = if self.transfers.show_history {
+		let content: Element<'_, Message> = if self.page == crate::browser::Page::History {
 			column![
 				self.transfer_history_view(),
 				self.selection_inspector(gutter)
@@ -457,6 +481,8 @@ impl FileManager {
 			.height(Length::Fill)
 			.width(Length::Fill)
 			.into()
+		} else if self.page == crate::browser::Page::Trash {
+			self.trash_view()
 		} else {
 			content.into()
 		};
@@ -799,7 +825,8 @@ impl FileManager {
 			("Pictures", ui_icon!("image"), dirs::picture_dir()),
 		] {
 			if let Some(path) = path {
-				let active = !self.transfers.show_history && active_place.as_ref() == Some(&path);
+				let active = self.page == crate::browser::Page::Files
+					&& active_place.as_ref() == Some(&path);
 				let background = if self.drag.highlights(&path) {
 					colors.decorative.green
 				} else if active {
@@ -848,7 +875,7 @@ impl FileManager {
 				));
 			}
 		}
-		let background = if self.transfers.show_history {
+		let background = if self.page == crate::browser::Page::History {
 			colors.decorative.blue
 		} else {
 			colors.surface
@@ -875,19 +902,72 @@ impl FileManager {
 				.width(Length::Fill);
 		}
 		places = places.push(hint::place_hint(
-			control(history_label, self.transfers.show_history, colors)
-				.id("transfer-history-tab")
-				.background(background)
-				.width(Length::Fill)
-				.padding(if compact {
-					iced::Padding::from(9)
-				} else {
-					iced::Padding::from([10, 12])
-				})
-				.on_press(crate::transfers::Message::ShowHistory(true).into()),
+			control(
+				history_label,
+				self.page == crate::browser::Page::History,
+				colors,
+			)
+			.id("transfer-history-tab")
+			.background(background)
+			.width(Length::Fill)
+			.padding(if compact {
+				iced::Padding::from(9)
+			} else {
+				iced::Padding::from([10, 12])
+			})
+			.on_press(crate::transfers::Message::ShowHistory(true).into()),
 			"History",
 			compact,
 			colors,
+		));
+		let trash_active = self.page == crate::browser::Page::Trash;
+		let trash_background = if self.drag.highlights_trash() {
+			colors.decorative.green
+		} else if trash_active {
+			colors.decorative.blue
+		} else {
+			colors.surface
+		};
+		let trash_foreground = colors.text_on(trash_background);
+		let mut trash_label =
+			row![
+				svg(ui_icon!("trash"))
+					.width(21)
+					.height(21)
+					.style(move |_, _| svg::Style {
+						color: Some(trash_foreground)
+					})
+			]
+			.spacing(11)
+			.align_y(Alignment::Center);
+		if !compact {
+			trash_label = trash_label
+				.push(
+					text("Trash")
+						.size(14)
+						.weight(font::Weight::Semibold)
+						.color(trash_foreground),
+				)
+				.width(Length::Fill);
+		}
+		places = places.push(crate::browser::drag::widget::zone(
+			hint::place_hint(
+				control(trash_label, trash_active, colors)
+					.id("trash-sidebar")
+					.background(trash_background)
+					.width(Length::Fill)
+					.padding(if compact {
+						iced::Padding::from(9)
+					} else {
+						iced::Padding::from([10, 12])
+					})
+					.on_press(crate::trash::Message::Show.into()),
+				"Trash",
+				compact,
+				colors,
+			)
+			.into(),
+			crate::browser::drag::Area::Trash,
 		));
 		if !compact {
 			places = places

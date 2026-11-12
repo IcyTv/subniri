@@ -269,6 +269,7 @@ impl FileManager {
 			}) => {
 				let mime = preferred_mime(&mime_types);
 				if self.transfers.busy
+					|| self.trash_state.busy
 					|| self.native_drag.pending_count() >= 8
 					|| !self.transfers.loaded
 					|| self.dialogs.blocked()
@@ -315,7 +316,11 @@ impl FileManager {
 					if point != state.point {
 						return Task::none();
 					}
-					state.destination = hit.target.clone();
+					state.destination = hit
+						.target
+						.as_ref()
+						.and_then(drag::Destination::directory)
+						.cloned();
 					self.drag.external_hit(point, hit);
 					self.drag.valid &= state.copy;
 					return Task::done(AppMessage::DndAccept {
@@ -351,6 +356,7 @@ impl FileManager {
 			Message::Event(Event::Drop { offer, x, y, copy }) => {
 				if !copy
 					|| self.transfers.busy
+					|| self.trash_state.busy
 					|| self.dialogs.blocked()
 					|| self.transfers.blocked()
 				{
@@ -369,14 +375,23 @@ impl FileManager {
 					|| self.transfers.busy
 					|| self.transfers.blocked()
 					|| self.dialogs.blocked()
-					|| hit.target.is_none()
+					|| self.trash_state.busy
+					|| hit
+						.target
+						.as_ref()
+						.and_then(drag::Destination::directory)
+						.is_none()
 				{
 					return self.reject_native_offer(offer);
 				}
 				let Some(state) = self.native_drag.offers.get_mut(&offer) else {
 					return self.reject_native_offer(offer);
 				};
-				state.destination = hit.target;
+				state.destination = hit
+					.target
+					.as_ref()
+					.and_then(drag::Destination::directory)
+					.cloned();
 				return Task::done(AppMessage::DndReceive {
 					id: self.host,
 					offer,
@@ -443,7 +458,11 @@ impl FileManager {
 						return self.reject_native_offer(offer);
 					}
 				};
-				if self.transfers.busy || !self.transfers.loaded || self.closing.is_some() {
+				if self.transfers.busy
+					|| self.trash_state.busy
+					|| !self.transfers.loaded
+					|| self.closing.is_some()
+				{
 					return self.reject_native_offer(offer);
 				}
 				let Some(state) = self.native_drag.offers.get_mut(&offer) else {
@@ -738,6 +757,45 @@ mod tests {
 			cancelled: Arc::new(AtomicBool::new(false)),
 			_receipt: None,
 		}
+	}
+
+	#[test]
+	fn trash_hover_and_drop_are_rejected_instead_of_using_previous_directory() {
+		let (_root, mut app) = fixture();
+		app.native_drag
+			.offers
+			.insert(7, offer(app.path.clone(), false));
+		app.native_drag.current_hover = Some(7);
+		app.drag.begin_external(true);
+		let hit = drag::Hit {
+			target: Some(drag::Destination::Trash),
+			..drag::Hit::default()
+		};
+		let _ = app.update_native_drag(Message::Hover(7, Point::ORIGIN, hit.clone()));
+		assert!(app.native_drag.offers[&7].destination.is_none());
+		assert!(!app.drag.valid);
+		let _ = app.update_native_drag(Message::Drop(7, app.path.clone(), hit));
+		assert!(!app.native_drag.offers.contains_key(&7));
+		assert!(!app.transfers.busy);
+		assert!(!app.trash_state.busy);
+	}
+
+	#[test]
+	fn payload_which_arrives_during_a_trash_operation_does_not_start_a_transfer() {
+		let (_root, mut app) = fixture();
+		app.native_drag
+			.offers
+			.insert(7, offer(app.path.clone(), true));
+		app.trash_state.busy = true;
+		let _ = app.update_native_drag(Message::Files(
+			7,
+			Ok(Files {
+				paths: vec![app.path.join("source")],
+				receipt: None,
+			}),
+		));
+		assert!(!app.transfers.busy);
+		assert!(!app.native_drag.offers.contains_key(&7));
 	}
 
 	#[test]

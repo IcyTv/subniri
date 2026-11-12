@@ -33,7 +33,6 @@ pub(crate) struct State {
 	pub policy: Durability,
 	pub loaded: bool,
 	pub history: Vec<Journal>,
-	pub show_history: bool,
 	pub latest: Option<Outcome>,
 	pub dialog: Option<Dialog>,
 	pub apply_remaining: bool,
@@ -60,7 +59,6 @@ impl Default for State {
 			policy: Durability::Auto,
 			loaded: false,
 			history: Vec::new(),
-			show_history: false,
 			latest: None,
 			dialog: None,
 			apply_remaining: false,
@@ -158,6 +156,7 @@ pub(crate) enum Message {
 	CancelPrepared,
 	Start(Request),
 	StartGuarded(Request, Target),
+	Restore(Vec<crate::trash::Captured>),
 	Cancel,
 	DismissDialog,
 	ApplyRemaining(bool),
@@ -220,7 +219,7 @@ impl FileManager {
 				}
 			}
 			Message::RefreshHistory => {
-				if self.transfers.busy {
+				if self.transfers.busy || self.trash_state.busy {
 					return Task::none();
 				}
 				return Task::perform(
@@ -258,7 +257,11 @@ impl FileManager {
 				Err(error) => self.error = Some(format!("Transfer history: {error}")),
 			},
 			Message::ShowHistory(show) => {
-				self.transfers.show_history = show;
+				self.page = if show {
+					crate::browser::Page::History
+				} else {
+					crate::browser::Page::Files
+				};
 				if show {
 					return self.update_transfers(Message::RefreshHistory);
 				}
@@ -291,7 +294,7 @@ impl FileManager {
 					|| self.transfers.blocked()
 					|| self.dialogs.blocked()
 					|| self.selection.paths.is_empty()
-					|| self.transfers.show_history
+					|| self.page != crate::browser::Page::Files
 				{
 					return Task::none();
 				}
@@ -362,13 +365,19 @@ impl FileManager {
 			Message::Start(mut request) => {
 				// Drag/drop never carries a hidden per-job policy override.
 				request.durability = self.transfers.policy;
-				return self.launch_transfer(Some(request), None, None, None);
+				return self.launch_transfer(Some(request), None, None, None, None);
 			}
 			Message::StartGuarded(mut request, guard) => {
 				request.durability = self.transfers.policy;
-				return self.launch_transfer(Some(request), Some(guard), None, None);
+				return self.launch_transfer(Some(request), Some(guard), None, None, None);
 			}
-			Message::Undo(id) => return self.launch_transfer(None, None, None, Some(id)),
+			Message::Undo(id) => return self.launch_transfer(None, None, None, Some(id), None),
+			Message::Restore(items) => {
+				if items.is_empty() || self.trash_mutation_blocked() {
+					return Task::none();
+				}
+				return self.launch_transfer(None, None, None, None, Some(items));
+			}
 			Message::Cancel => {
 				self.transfers.cancel();
 				self.transfers.phase = Some(Phase::RollingBack);
@@ -468,6 +477,13 @@ impl FileManager {
 							close,
 							native_finish,
 							self.load_directory(),
+							if self.page == crate::browser::Page::Trash
+								|| self.trash_state.listing.is_some()
+							{
+								self.update_trash(crate::trash::Message::Refresh)
+							} else {
+								Task::none()
+							},
 							self.update_transfers(Message::RefreshHistory),
 						]);
 					}
@@ -529,7 +545,11 @@ impl FileManager {
 				if let Some(dialog) = &self.transfers.dialog {
 					match &dialog.content {
 						DialogContent::Conflict(conflict) => {
-							if conflict.reason != super::model::ConflictReason::Entry {
+							if !matches!(
+								conflict.reason,
+								super::model::ConflictReason::Entry
+									| super::model::ConflictReason::RestoreEntry
+							) {
 								ids.extend([
 									super::view::choice_id(Choice::Cancel),
 									super::view::choice_id(Choice::ApproveRecovery),
@@ -584,8 +604,13 @@ impl FileManager {
 			return Task::none();
 		};
 		let request = pending.request(destination, self.transfers.policy);
-		let task =
-			self.launch_transfer(Some(request), Some(pending.target), destination_guard, None);
+		let task = self.launch_transfer(
+			Some(request),
+			Some(pending.target),
+			destination_guard,
+			None,
+			None,
+		);
 		if self.transfers.busy {
 			self.transfers.running_pending = Some(pending.generation);
 		}
@@ -632,8 +657,13 @@ impl FileManager {
 	fn launch_transfer(
 		&mut self, request: Option<Request>, guard: Option<Target>,
 		destination_guard: Option<Target>, undo: Option<String>,
+		restoration: Option<Vec<crate::trash::Captured>>,
 	) -> Task<crate::Message> {
-		if self.transfers.busy || !self.transfers.loaded || self.closing.is_some() {
+		if self.transfers.busy
+			|| self.trash_state.busy
+			|| !self.transfers.loaded
+			|| self.closing.is_some()
+		{
 			return Task::none();
 		}
 		self.transfers.generation += 1;
@@ -653,6 +683,7 @@ impl FileManager {
 		});
 		self.transfers.cancelled = Arc::new(AtomicBool::new(false));
 		let cancelled = self.transfers.cancelled.clone();
+		let policy = self.transfers.policy;
 		let (response, answers) = mpsc::channel::<Decision>();
 		self.transfers.response = Some(response);
 		let (sender, receiver) = async_channel::bounded(32);
@@ -709,46 +740,54 @@ impl FileManager {
 								.map_err(|error| error.to_string());
 						}
 						let mut remaining: Option<(bool, Choice)> = None;
-						super::execute(
-							&store,
-							request.ok_or_else(|| "Missing transfer request".to_string())?,
-							&cancelled,
-							|conflict| {
-								let entry_conflict =
-									conflict.reason == super::model::ConflictReason::Entry;
-								if let Some((directories, choice)) = remaining {
-									if entry_conflict && directories == conflict.directories {
-										return choice;
-									}
+						let decide = |conflict: Conflict| {
+							let entry_conflict = matches!(
+								conflict.reason,
+								super::model::ConflictReason::Entry
+									| super::model::ConflictReason::RestoreEntry
+							);
+							if let Some((directories, choice)) = remaining {
+								if entry_conflict && directories == conflict.directories {
+									return choice;
 								}
-								let directories = conflict.directories;
-								if sender
-									.send_blocking(Notice::Event(Event::Conflict(conflict)))
-									.is_err()
-								{
+							}
+							let directories = conflict.directories;
+							if sender
+								.send_blocking(Notice::Event(Event::Conflict(conflict)))
+								.is_err()
+							{
+								return Choice::Cancel;
+							}
+							loop {
+								if cancelled.load(Ordering::Acquire) {
 									return Choice::Cancel;
 								}
-								loop {
-									if cancelled.load(Ordering::Acquire) {
-										return Choice::Cancel;
-									}
-									match answers.recv_timeout(Duration::from_millis(100)) {
-										Ok(decision) => {
-											if entry_conflict
-												&& decision.remaining && decision.choice
-												!= Choice::ApproveRecovery
-											{
-												remaining = Some((directories, decision.choice));
-											}
-											return decision.choice;
+								match answers.recv_timeout(Duration::from_millis(100)) {
+									Ok(decision) => {
+										if entry_conflict
+											&& decision.remaining && decision.choice
+											!= Choice::ApproveRecovery
+										{
+											remaining = Some((directories, decision.choice));
 										}
-										Err(mpsc::RecvTimeoutError::Timeout) => {}
-										Err(_) => return Choice::Cancel,
+										return decision.choice;
 									}
+									Err(mpsc::RecvTimeoutError::Timeout) => {}
+									Err(_) => return Choice::Cancel,
 								}
-							},
-							report,
-						)
+							}
+						};
+						if let Some(items) = restoration {
+							super::restore_trash(&store, items, policy, &cancelled, decide, report)
+						} else {
+							super::execute(
+								&store,
+								request.ok_or_else(|| "Missing transfer request".to_string())?,
+								&cancelled,
+								decide,
+								report,
+							)
+						}
 						.map_err(|error| error.to_string())
 					})();
 					let _ = sender.send_blocking(Notice::Done(result));

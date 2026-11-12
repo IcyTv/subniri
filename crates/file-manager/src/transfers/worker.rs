@@ -31,6 +31,143 @@ pub(crate) fn execute(
 	execute_with_flush(store, request, cancelled, conflict, events, fs::sync_tree)
 }
 
+pub(crate) fn restore_trash(
+	store: &Store, items: Vec<crate::trash::Captured>, policy: Durability, cancelled: &AtomicBool,
+	mut conflict: impl FnMut(Conflict) -> Choice, mut events: impl FnMut(Event),
+) -> io::Result<Outcome> {
+	if items.is_empty() {
+		return Err(fs::invalid("Select at least one trash item"));
+	}
+	for item in &items {
+		item.validate()?;
+	}
+	let mut journal = Journal {
+		version: 2,
+		id: journal::new_id()?,
+		created: journal::now()?,
+		status: Status::Running,
+		durability: policy,
+		approved_recovery_bytes: 0,
+		changes: Vec::new(),
+		problems: Vec::new(),
+		restoration: Some(super::restore::Restoration::default()),
+	};
+	store.save(&journal)?;
+	events(Event::Progress {
+		phase: Phase::Preparing,
+		bytes: 0,
+		total: None,
+	});
+	let forward = (|| {
+		let mut totals = Vec::new();
+		for (index, item) in items.iter().enumerate() {
+			check_cancelled(cancelled)?;
+			let record = super::restore::Record::prepare(item, &journal.id, index)?;
+			journal
+				.restoration
+				.as_mut()
+				.ok_or_else(|| fs::invalid("Missing restore journal"))?
+				.items
+				.push(record);
+			store.save(&journal)?;
+			totals.push(transfer_total(
+				std::slice::from_ref(&item.payload.path),
+				cancelled,
+			)?);
+		}
+		let total = totals.iter().try_fold(0u64, |total, bytes| {
+			total
+				.checked_add(*bytes)
+				.ok_or_else(|| fs::invalid("Transfer byte total overflow"))
+		})?;
+		let records = journal
+			.restoration
+			.as_ref()
+			.ok_or_else(|| fs::invalid("Missing restore journal"))?
+			.items
+			.clone();
+		let mut flush = fs::sync_tree;
+		let mut worker = Worker {
+			store,
+			journal: &mut journal,
+			cancelled,
+			conflict: &mut conflict,
+			events: &mut events,
+			flush: &mut flush,
+			bytes: 0,
+			total,
+		};
+		let mut acknowledge_volatile = false;
+		for ((item, record), bytes) in items.iter().zip(&records).zip(totals) {
+			worker.check_cancel()?;
+			item.validate()?;
+			let source = record.source.path();
+			let destination = record.destination.path();
+			super::restore::ensure_parent(
+				store,
+				worker.journal,
+				&destination,
+				&source,
+				cancelled,
+				worker.conflict,
+			)?;
+			let parent = destination
+				.parent()
+				.ok_or_else(|| fs::invalid("Missing restore parent"))?;
+			let directory = fs::open_directory(parent)?;
+			let class = classification::classify(parent)?;
+			if class == StorageClass::Volatile {
+				if policy == Durability::Durable {
+					return Err(fs::invalid(
+						"Volatile storage cannot provide durable completion",
+					));
+				}
+				if !acknowledge_volatile {
+					if (worker.conflict)(Conflict {
+						source: source.clone(),
+						destination: destination.clone(),
+						directories: false,
+						reason: super::model::ConflictReason::VolatileMove,
+					}) != Choice::ApproveRecovery
+					{
+						return Err(io::ErrorKind::Interrupted.into());
+					}
+					acknowledge_volatile = true;
+				}
+			}
+			use std::os::unix::fs::MetadataExt;
+			let actual = stdfs::symlink_metadata(parent)?;
+			let expected = directory.metadata()?;
+			if !actual.is_dir() || (actual.dev(), actual.ino()) != (expected.dev(), expected.ino())
+			{
+				return Err(fs::invalid("Restore parent changed while waiting"));
+			}
+			let request = Request {
+				sources: vec![source.clone()],
+				destination: parent.into(),
+				operation: Operation::Move,
+				durability: policy,
+				acknowledge_volatile,
+			};
+			let previous = worker.journal.changes.len();
+			worker.transfer(&source, &destination, &request, Some(bytes))?;
+			if worker.journal.changes.len() > previous {
+				record.commit()?;
+			}
+		}
+		Ok(())
+	})();
+	if let Err(error) = forward {
+		journal.problems.push(error.to_string());
+		store.save(&journal)?;
+		rollback(store, &mut journal, &mut events)?;
+	} else {
+		journal.status = Status::Complete;
+		store.save(&journal)?;
+	}
+	Ok(outcome(&journal))
+}
+
 pub(super) fn execute_with_flush(
 	store: &Store, mut request: Request, cancelled: &AtomicBool,
 	mut conflict: impl FnMut(Conflict) -> Choice, mut events: impl FnMut(Event),
@@ -118,6 +255,7 @@ pub(super) fn execute_with_flush(
 		approved_recovery_bytes: 0,
 		changes: Vec::new(),
 		problems: Vec::new(),
+		restoration: None,
 	};
 	store.save(&journal)?;
 	let mut worker = Worker {
@@ -311,8 +449,12 @@ where
 			match (self.conflict)(Conflict {
 				source: source.into(),
 				destination: destination.clone(),
-				directories,
-				reason: super::model::ConflictReason::Entry,
+				directories: directories && self.journal.restoration.is_none(),
+				reason: if self.journal.restoration.is_some() {
+					super::model::ConflictReason::RestoreEntry
+				} else {
+					super::model::ConflictReason::Entry
+				},
 			}) {
 				Choice::Cancel => return Err(io::ErrorKind::Interrupted.into()),
 				Choice::ApproveRecovery => {
@@ -322,7 +464,7 @@ where
 				}
 				Choice::Skip => return Ok(()),
 				Choice::KeepBoth => destination = unique_name(&destination)?,
-				Choice::Merge if directories => {
+				Choice::Merge if directories && self.journal.restoration.is_none() => {
 					fs::unchanged(&destination, &old)?;
 					let names = stdfs::read_dir(source)?
 						.map(|entry| entry.map(|e| e.file_name()))
@@ -895,13 +1037,27 @@ fn rollback(
 			.get_mut(index)
 			.ok_or_else(|| fs::invalid("Missing rollback record"))? = change.clone();
 		store.save(journal)?;
-		let result = reverse_change(&mut change, journal.durability, |change| {
-			*journal
-				.changes
-				.get_mut(index)
-				.ok_or_else(|| fs::invalid("Missing rollback record"))? = change.clone();
-			store.save(journal)
-		});
+		let metadata = journal
+			.restoration
+			.as_ref()
+			.and_then(|state| state.items.iter().find(|item| item.source == change.source))
+			.cloned();
+		let result = (|| {
+			if let Some(metadata) = &metadata {
+				metadata.preflight_inverse()?;
+			}
+			reverse_change(&mut change, journal.durability, |change| {
+				*journal
+					.changes
+					.get_mut(index)
+					.ok_or_else(|| fs::invalid("Missing rollback record"))? = change.clone();
+				store.save(journal)
+			})?;
+			if let Some(metadata) = &metadata {
+				metadata.finish_inverse()?;
+			}
+			Ok::<(), io::Error>(())
+		})();
 		if let Err(error) = result {
 			blocked.push(format!("{}: {error}", change.destination.path().display()));
 		} else {
@@ -912,6 +1068,11 @@ fn rollback(
 			.get_mut(index)
 			.ok_or_else(|| fs::invalid("Missing rollback record"))? = change;
 		store.save(journal)?;
+	}
+	if blocked.is_empty() {
+		if let Err(error) = super::restore::cleanup_parents(store, journal) {
+			blocked.push(error.to_string());
+		}
 	}
 	journal.status = if blocked.is_empty() {
 		Status::RolledBack

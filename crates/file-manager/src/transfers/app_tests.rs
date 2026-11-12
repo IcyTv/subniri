@@ -490,14 +490,14 @@ fn show_history_switches_view_and_folder_navigation_exits_history() {
 	fs::create_dir(&folder).unwrap();
 
 	let _ = app.update(Message::ShowHistory(true));
-	assert!(app.transfers.show_history);
+	assert_eq!(app.page, browser::Page::History);
 	let _ = app.update(Message::ShowHistory(false));
-	assert!(!app.transfers.show_history);
+	assert_eq!(app.page, browser::Page::Files);
 	let _ = app.update(Message::ShowHistory(true));
 	let _ = app.update(browser::Message::GoTo(folder.clone()));
 
 	assert_eq!(app.path, folder);
-	assert!(!app.transfers.show_history);
+	assert_eq!(app.page, browser::Page::Files);
 }
 
 #[test]

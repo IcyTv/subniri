@@ -96,6 +96,7 @@ pub(crate) enum Message {
 	ContextMenu(context_menu::Message),
 	Tags(tags::Message),
 	Transfers(crate::transfers::Message),
+	Trash(crate::trash::Message),
 	PreferencesChanged,
 	FileDrag(browser::drag::Message),
 	NativeDrag(crate::transfers::native::Message),
@@ -113,6 +114,7 @@ pub(crate) struct FileManager {
 	pub(crate) menu: Option<context_menu::Menu>,
 	pub(crate) popups: neo_widgets::popup::Popups<()>,
 	pub(crate) path: PathBuf,
+	pub(crate) page: browser::Page,
 	pub(crate) history: History,
 	pub(crate) entries: Vec<DirEntry>,
 	/// Keyboard cursor, which may be outside selection membership after Ctrl+arrows.
@@ -138,6 +140,7 @@ pub(crate) struct FileManager {
 	pub(crate) storage: Option<storage::Usage>,
 	pub(crate) typeahead: typeahead::TypeAhead,
 	pub(crate) transfers: crate::transfers::State,
+	pub(crate) trash_state: crate::trash::State,
 	pub(crate) drag: browser::drag::State,
 	pub(crate) native_drag: crate::transfers::native::State,
 }
@@ -147,6 +150,8 @@ impl FileManager {
 		let path = std::path::absolute(&args.path).unwrap_or(args.path);
 		let mut app = Self {
 			appearance: Appearance::default(),
+			page: browser::Page::Files,
+			trash_state: crate::trash::State::default(),
 			drives: crate::drives::Drives::default(),
 			dialogs: crate::dialogs::Dialogs::default(),
 			favorites: favorites::Favorites::default(),
@@ -260,6 +265,7 @@ impl FileManager {
 			Message::ContextMenu(message) => return self.update_context_menu(message),
 			Message::Tags(message) => return self.update_tags(message),
 			Message::Transfers(message) => return self.update_transfers(message),
+			Message::Trash(message) => return self.update_trash(message),
 			Message::FileDrag(message) => return self.update_file_drag(message),
 			Message::NativeDrag(message) => return self.update_native_drag(message),
 			Message::PreferencesChanged => {
@@ -274,6 +280,7 @@ impl FileManager {
 				}
 				let close = self.cancel_dialog_for_shutdown();
 				self.transfers.cancel();
+				self.trash_state.cancel_waiting();
 				let drag_cancel = self.update_file_drag(browser::drag::Message::Cancel);
 				let native_cancel = self.shutdown_native_drag();
 				let transfer_dialog = self.close_transfer_dialog();
@@ -302,6 +309,7 @@ impl FileManager {
 			|| self.creating_folder
 			|| self.favorites.running()
 			|| self.transfers.busy
+			|| self.trash_state.busy
 		{
 			return Task::none();
 		}

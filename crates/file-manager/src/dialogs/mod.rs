@@ -36,6 +36,10 @@ pub(super) struct Confirmation {
 
 pub(super) enum ConfirmationAction {
 	Delete(Target),
+	TrashDelete {
+		items: Vec<crate::trash::Captured>,
+		empty: bool,
+	},
 	Drive(crate::filesystem::volumes::Operation),
 }
 

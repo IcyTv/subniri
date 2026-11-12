@@ -489,7 +489,7 @@ fn open_relative(root: &File, relative: &Path) -> io::Result<File> {
 	Ok(directory)
 }
 
-fn open_directory(path: &Path) -> io::Result<File> {
+pub(super) fn open_directory(path: &Path) -> io::Result<File> {
 	if !path.is_absolute() {
 		return Err(invalid("Expected an absolute directory"));
 	}

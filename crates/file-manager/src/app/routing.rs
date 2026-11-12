@@ -6,6 +6,12 @@ use iced::{Task, event::Status, keyboard, window};
 impl Message {
 	pub(super) fn is_parent_interaction(&self) -> bool {
 		match self {
+			Self::Trash(message) => !matches!(
+				message,
+				crate::trash::Message::Loaded(..)
+					| crate::trash::Message::Captured(..)
+					| crate::trash::Message::Finished(..)
+			),
 			Self::Drives(message) => !matches!(
 				message,
 				crate::drives::Message::Refresh

@@ -41,7 +41,7 @@ fn select_pair(app: &mut FileManager, root: &Path) -> BTreeSet<PathBuf> {
 
 fn target_hit(path: &Path, navigation: bool) -> Hit {
 	Hit {
-		target: Some(path.into()),
+		target: Some(Destination::Directory(path.into())),
 		navigation,
 		..Hit::default()
 	}
@@ -56,6 +56,49 @@ fn start_drag(app: &mut FileManager, source: &Path, destination: &Path) {
 	assert!(app.drag.active);
 	assert!(app.drag.valid);
 	assert!(app.drag.guard.is_none());
+}
+
+#[test]
+fn trash_drop_is_internal_move_even_with_copy_modifier_and_delayed_capture() {
+	let (root, mut app) = fixture();
+	let source = root.path().join("first");
+	let _ = app.update(Message::Pressed(source.clone(), Point::ORIGIN));
+	let trash_hit = Hit {
+		target: Some(Destination::Trash),
+		..Hit::default()
+	};
+	let _ = app.update(Message::Motion(Point::new(10.0, 0.0), trash_hit.clone()));
+	assert!(app.drag.highlights_trash());
+	assert!(app.drag.hover.is_none());
+	let generation = app.drag.generation;
+	let _ = app.update(BrowserMessage::Modifiers(keyboard::Modifiers::CTRL));
+	let _ = app.update(Message::Released(Point::new(10.0, 0.0), trash_hit));
+	assert!(!app.trash_state.busy);
+	assert!(app.drag.pending.is_some());
+	let guard = Target::capture(&source, Context::File).unwrap();
+	let _ = app.update(Message::Prepared(generation, Ok(guard)));
+
+	assert!(app.trash_state.busy);
+	assert!(!app.transfers.busy);
+	assert!(!app.dialogs.blocked());
+	assert_eq!(fs::read(source).unwrap(), b"first source");
+}
+
+#[test]
+fn trash_is_never_an_accepted_external_drop_or_spring_navigation_target() {
+	let mut state = State::default();
+	state.begin_external(true);
+	state.external_hit(
+		Point::ORIGIN,
+		Hit {
+			target: Some(Destination::Trash),
+			navigation: false,
+			..Hit::default()
+		},
+	);
+	assert!(!state.valid);
+	assert!(!state.highlights_trash());
+	assert!(state.hover.is_none());
 }
 
 #[test]
@@ -220,12 +263,18 @@ fn release_before_prepared_freezes_destination_and_release_modifiers() {
 		assert!(!app.drag.active);
 		assert!(app.drag.origin.is_none());
 		assert!(app.drag.guard.is_none());
-		assert_eq!(app.drag.pending, Some((destination.clone(), operation)));
+		assert_eq!(
+			app.drag.pending,
+			Some((Destination::Directory(destination.clone()), operation))
+		);
 		assert!(!app.transfers.busy);
 
 		let _ = app.update(BrowserMessage::Modifiers(later_modifiers));
 		let _ = app.update(BrowserMessage::GoTo(root.path().join("other")));
-		assert_eq!(app.drag.pending, Some((destination.clone(), operation)));
+		assert_eq!(
+			app.drag.pending,
+			Some((Destination::Directory(destination.clone()), operation))
+		);
 		assert_eq!(app.drag.sources, vec![source.clone()]);
 
 		let guard = Target::capture(&source, Context::File).unwrap();
