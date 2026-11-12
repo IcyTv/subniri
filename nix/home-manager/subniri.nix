@@ -229,8 +229,15 @@
           ]
         ))
       ]
-      ++ lib.optionals (settings.fileberg.favorites != []) [
-        (plain "fileberg" [(node "favorites" settings.fileberg.favorites [])])
+      ++ lib.optionals (settings.fileberg.favorites != [] || settings.fileberg.transfer_durability != "auto") [
+        (plain "fileberg" (
+          lib.optionals (settings.fileberg.transfer_durability != "auto") [
+            (leaf "transfer_durability" settings.fileberg.transfer_durability)
+          ]
+          ++ lib.optionals (settings.fileberg.favorites != []) [
+            (node "favorites" settings.fileberg.favorites [])
+          ]
+        ))
       ]
       ++ lib.optionals cfg.icepickd.enable [
         (plain "indexing" [
@@ -432,6 +439,18 @@ in {
           ];
         };
 
+        fileberg.transfer_durability = mkOption {
+          type = types.enum ["auto" "durable" "buffered"];
+          default = "auto";
+          description = ''
+            Fileberg transfer durability policy. Auto uses buffered writes only for
+            proven fixed local storage; unknown, removable, and network destinations
+            are flushed before reporting completion. Durable always flushes;
+            buffered never explicitly flushes and may lose completed transfers on
+            power loss or unsafe removal.
+          '';
+        };
+
         fileberg.favorites = mkOption {
           type = types.listOf (types.enum [
             "open"
@@ -439,6 +458,14 @@ in {
             "open-window"
             "cut"
             "copy"
+            "advanced-copy"
+            "advanced-move"
+            "advanced-copy-auto"
+            "advanced-copy-durable"
+            "advanced-copy-buffered"
+            "advanced-move-auto"
+            "advanced-move-durable"
+            "advanced-move-buffered"
             "duplicate"
             "rename"
             "trash"

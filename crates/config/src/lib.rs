@@ -78,7 +78,7 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub indexing: Indexing,
-	/// Fileberg's prototype context-menu preferences.
+	/// Fileberg's context-menu and file-transfer preferences.
 	#[config(default)]
 	#[garde(dive)]
 	pub fileberg: Fileberg,
@@ -90,6 +90,14 @@ pub const FILEBERG_ACTION_IDS: &[&str] = &[
 	"open-window",
 	"cut",
 	"copy",
+	"advanced-copy",
+	"advanced-move",
+	"advanced-copy-auto",
+	"advanced-copy-durable",
+	"advanced-copy-buffered",
+	"advanced-move-auto",
+	"advanced-move-durable",
+	"advanced-move-buffered",
 	"duplicate",
 	"rename",
 	"trash",
@@ -104,10 +112,33 @@ pub const FILEBERG_ACTION_IDS: &[&str] = &[
 
 #[derive(Default, Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]
 pub struct Fileberg {
+	/// Auto buffers only proven fixed local storage; other destinations are flushed.
+	#[config(default)]
+	#[garde(skip)]
+	pub transfer_durability: FilebergDurability,
+
 	/// Stable command IDs in user-defined order, shared across menu contexts.
 	#[config(list_style = children)]
 	#[garde(custom(validate_fileberg_favorites))]
 	pub favorites: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Config, ConfigSerialize)]
+pub enum FilebergDurability {
+	#[default]
+	Auto,
+	Durable,
+	Buffered,
+}
+
+impl FilebergDurability {
+	pub const fn as_str(self) -> &'static str {
+		match self {
+			Self::Auto => "auto",
+			Self::Durable => "durable",
+			Self::Buffered => "buffered",
+		}
+	}
 }
 
 fn validate_fileberg_favorites(values: &[String], _ctx: &()) -> garde::Result {
@@ -458,6 +489,13 @@ impl ConfigFile {
 			|value| value.to_string(),
 		);
 
+		nix_assignment(
+			&mut out,
+			"services.subniri.settings.fileberg.transfer_durability",
+			self.fileberg.transfer_durability,
+			declarative.fileberg.transfer_durability,
+			|value| nix_string(value.as_str()),
+		);
 		nix_assignment(
 			&mut out,
 			"services.subniri.settings.fileberg.favorites",
@@ -1421,12 +1459,160 @@ mod tests {
 	fn fileberg_favorites_validate_unique_known_command_ids() {
 		let mut settings = Fileberg {
 			favorites: vec!["open".into(), "open".into()],
+			..Fileberg::default()
 		};
 		assert!(settings.validate().is_err());
 		settings.favorites = vec!["not-an-action".into()];
 		assert!(settings.validate().is_err());
-		settings.favorites = vec!["open".into(), "tags".into()];
+		settings.favorites = vec![
+			"open".into(),
+			"tags".into(),
+			"advanced-copy".into(),
+			"advanced-move".into(),
+		];
 		assert!(settings.validate().is_ok());
+	}
+
+	#[test]
+	fn fileberg_policy_leaf_favorites_validate_and_round_trip() {
+		let ids = [
+			"advanced-copy-auto",
+			"advanced-copy-durable",
+			"advanced-copy-buffered",
+			"advanced-move-auto",
+			"advanced-move-durable",
+			"advanced-move-buffered",
+		];
+		let favorites = ids
+			.iter()
+			.map(|id| format!("\"{id}\""))
+			.collect::<Vec<_>>()
+			.join(" ");
+		let input = format!("fileberg {{ favorites {favorites}; }}");
+		let (_, config) = ConfigFile::parse_validated(&input).unwrap();
+		let mut doc = KdlDocument::new();
+
+		config.apply_to_kdl_document(&mut doc).unwrap();
+		let (_, restored) = ConfigFile::parse_validated(&doc.to_string()).unwrap();
+
+		assert_eq!(restored.fileberg.favorites, ids);
+		assert!(
+			ConfigFile::parse_validated(
+				"fileberg { favorites \"advanced-copy-auto\" \"advanced-copy-auto\"; }"
+			)
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn fileberg_durability_defaults_to_auto() {
+		assert_eq!(
+			Fileberg::default().transfer_durability,
+			FilebergDurability::Auto
+		);
+
+		for input in ["", "fileberg {}", "fileberg { favorites \"copy\"; }"] {
+			let (_, config) = ConfigFile::parse_validated(input).unwrap();
+
+			assert_eq!(
+				config.fileberg.transfer_durability,
+				FilebergDurability::Auto
+			);
+		}
+	}
+
+	#[test]
+	fn fileberg_durability_round_trips_and_exports_policy_changes() {
+		let defaults = ConfigFile::default();
+
+		for policy in [
+			FilebergDurability::Auto,
+			FilebergDurability::Durable,
+			FilebergDurability::Buffered,
+		] {
+			let input = format!(
+				"fileberg {{ transfer_durability \"{}\"; favorites \"advanced-copy\" \"advanced-move\"; }}",
+				policy.as_str()
+			);
+			let (_, config) = ConfigFile::parse_validated(&input).unwrap();
+			let mut doc = KdlDocument::new();
+
+			config.apply_to_kdl_document(&mut doc).unwrap();
+			let (_, restored) = ConfigFile::parse_validated(&doc.to_string()).unwrap();
+
+			assert_eq!(restored.fileberg, config.fileberg);
+			assert_eq!(restored.fileberg.transfer_durability, policy);
+			assert!(!config.nix_diff(&config).contains("settings.fileberg"));
+
+			let export = config.nix_diff(&defaults);
+			assert!(export.contains(
+				"services.subniri.settings.fileberg.favorites = [\"advanced-copy\" \"advanced-move\"];"
+			));
+			if policy == FilebergDurability::Auto {
+				assert!(!export.contains("transfer_durability"));
+			} else {
+				assert!(export.contains(&format!(
+					"services.subniri.settings.fileberg.transfer_durability = \"{}\";",
+					policy.as_str()
+				)));
+				assert!(defaults.nix_diff(&config).contains(
+					"services.subniri.settings.fileberg.transfer_durability = \"auto\";"
+				));
+			}
+		}
+	}
+
+	#[test]
+	fn fileberg_durability_rejects_invalid_policy() {
+		for input in [
+			"fileberg { transfer_durability \"unknown\"; }",
+			"fileberg { transfer_durability 1; }",
+		] {
+			assert!(ConfigFile::parse_validated(input).is_err());
+		}
+	}
+
+	#[test]
+	fn fileberg_durability_preserves_base_and_override_semantics() {
+		let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+		let _environment = TestEnvironment::new("fileberg-durability");
+		let base_path = ConfigFile::path().unwrap();
+		let base_contents = "fileberg { transfer_durability \"durable\"; }\n";
+		std::fs::write(&base_path, base_contents).unwrap();
+
+		assert!(!ConfigFile::override_active());
+		assert_eq!(
+			ConfigFile::load().unwrap().1.fileberg.transfer_durability,
+			FilebergDurability::Durable
+		);
+
+		ConfigFile::update(|config| {
+			config.fileberg.transfer_durability = FilebergDurability::Buffered;
+		})
+		.unwrap();
+		let (_, loaded) = ConfigFile::load().unwrap();
+		let (_, base) = ConfigFile::load_declarative().unwrap();
+
+		assert!(ConfigFile::override_active());
+		assert_eq!(
+			loaded.fileberg.transfer_durability,
+			FilebergDurability::Buffered
+		);
+		assert_eq!(
+			base.fileberg.transfer_durability,
+			FilebergDurability::Durable
+		);
+		assert_eq!(std::fs::read_to_string(&base_path).unwrap(), base_contents);
+		assert!(
+			loaded
+				.nix_diff(&base)
+				.contains("services.subniri.settings.fileberg.transfer_durability = \"buffered\";")
+		);
+
+		ConfigFile::clear_override().unwrap();
+
+		assert!(!ConfigFile::override_active());
+		assert_eq!(ConfigFile::load().unwrap().1, base);
 	}
 
 	#[test]

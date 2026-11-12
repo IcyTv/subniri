@@ -7,12 +7,14 @@ use iced::{
 };
 use neo_widgets::{phosphor_icon, style::Colors, widgets::neo_card};
 
+mod fileberg;
 mod homeassistant;
 mod nightlight;
 mod spotify;
 
 #[derive(Clone, Debug)]
 pub enum Message {
+	Fileberg(fileberg::Message),
 	Nightlight(nightlight::Message),
 	Spotify(spotify::Message),
 	Homeassistant(homeassistant::Message),
@@ -25,6 +27,7 @@ pub struct Tab {
 
 pub enum TabContents {
 	Appearance,
+	Fileberg(fileberg::Fileberg),
 	Nightlight(nightlight::Nightlight),
 	Homeassistant(homeassistant::Homeassistant),
 	Spotify(spotify::Spotify),
@@ -46,6 +49,13 @@ impl Tab {
 		Self {
 			selected: Self::default_animation(),
 			contents: TabContents::Appearance,
+		}
+	}
+
+	pub fn fileberg() -> Self {
+		Self {
+			selected: Self::default_animation(),
+			contents: TabContents::Fileberg(fileberg::Fileberg),
 		}
 	}
 
@@ -117,13 +127,18 @@ impl Tab {
 		match message {
 			message @ (Message::Nightlight(nightlight::Message::UpdateConfig)
 			| Message::Spotify(spotify::Message::UpdateConfig)
-			| Message::Homeassistant(homeassistant::Message::UpdateConfig)) => {
+			| Message::Homeassistant(homeassistant::Message::UpdateConfig)
+			| Message::Fileberg(fileberg::Message::UpdateConfig(_))) => {
 				// Commit only this integration's edit under the shared writer lock.
 				// Other processes may have changed appearance or menu configuration.
 				let result = ConfigFile::update(|fresh| match message {
 					Message::Nightlight(_) => fresh.nightlight = config.nightlight.clone(),
 					Message::Spotify(_) => fresh.spotify = config.spotify.clone(),
 					Message::Homeassistant(_) => fresh.homeassistant = config.homeassistant.clone(),
+					Message::Fileberg(fileberg::Message::UpdateConfig(policy)) => {
+						fileberg::apply_durability(fresh, policy);
+					}
+					Message::Fileberg(fileberg::Message::SelectDurability(_)) => {}
 				});
 
 				match result {
@@ -136,10 +151,10 @@ impl Tab {
 
 				Task::none()
 			}
-			message
-			@ (Message::Nightlight(_) | Message::Spotify(_) | Message::Homeassistant(_)) => {
-				self.contents.update(config, message)
-			}
+			message @ (Message::Nightlight(_)
+			| Message::Spotify(_)
+			| Message::Homeassistant(_)
+			| Message::Fileberg(_)) => self.contents.update(config, message),
 		}
 	}
 
@@ -152,6 +167,7 @@ impl TabContents {
 	fn icon<'a>(&self) -> Svg<'a> {
 		match self {
 			Self::Appearance => svg(phosphor_icon!("palette")),
+			Self::Fileberg(_) => fileberg::Fileberg::icon(),
 			Self::Nightlight(_) => nightlight::Nightlight::icon(),
 			Self::Spotify(_) => spotify::Spotify::icon(),
 			Self::Homeassistant(_) => homeassistant::Homeassistant::icon(),
@@ -162,6 +178,7 @@ impl TabContents {
 	fn name(&self) -> &'static str {
 		match self {
 			Self::Appearance => "Appearance",
+			Self::Fileberg(_) => "Fileberg",
 			Self::Nightlight(_) => "Nightlight",
 			Self::Homeassistant(_) => "Homeassistant",
 			Self::Spotify(_) => "Spotify",
@@ -172,6 +189,7 @@ impl TabContents {
 	fn accent(&self, colors: Colors) -> Color {
 		match self {
 			Self::Appearance => colors.decorative.purple,
+			Self::Fileberg(_) => fileberg::Fileberg::accent_color(colors),
 			Self::Nightlight(_) => nightlight::Nightlight::accent_color(colors),
 			Self::Homeassistant(_) => homeassistant::Homeassistant::accent_color(colors),
 			Self::Spotify(_) => spotify::Spotify::accent_color(colors),
@@ -191,6 +209,9 @@ impl TabContents {
 
 	fn update(&mut self, config: &mut ConfigFile, message: Message) -> Task<Message> {
 		match (self, message) {
+			(Self::Fileberg(fileberg), Message::Fileberg(message)) => {
+				fileberg.update(config, message).map(Message::Fileberg)
+			}
 			(Self::Nightlight(nightlight), Message::Nightlight(message)) => {
 				nightlight.update(config, message).map(Message::Nightlight)
 			}
@@ -206,6 +227,7 @@ impl TabContents {
 
 	fn view<'a>(&'a self, config: &'a ConfigFile, colors: Colors) -> Element<'a, Message> {
 		match self {
+			Self::Fileberg(fileberg) => fileberg.view(config, colors).map(Message::Fileberg),
 			Self::Nightlight(nightlight) => {
 				nightlight.view(config, colors).map(Message::Nightlight)
 			}

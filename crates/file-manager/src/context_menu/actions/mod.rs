@@ -3,6 +3,8 @@ use super::{Context, Target};
 use crate::{FileManager, Message, tags::TagId};
 use iced::Task;
 
+mod advanced_copy;
+mod advanced_move;
 mod copy;
 mod cut;
 mod delete;
@@ -27,6 +29,14 @@ pub enum Command {
 	OpenWindow,
 	Cut,
 	Copy,
+	AdvancedCopy,
+	AdvancedMove,
+	AdvancedCopyAuto,
+	AdvancedCopyDurable,
+	AdvancedCopyBuffered,
+	AdvancedMoveAuto,
+	AdvancedMoveDurable,
+	AdvancedMoveBuffered,
 	Delete,
 	Duplicate,
 	Rename,
@@ -59,12 +69,20 @@ pub(super) enum Scope {
 }
 
 impl Command {
-	pub const ALL: [Self; 16] = [
+	pub const ALL: [Self; 24] = [
 		Self::Open,
 		Self::OpenWith,
 		Self::OpenWindow,
 		Self::Cut,
 		Self::Copy,
+		Self::AdvancedCopy,
+		Self::AdvancedMove,
+		Self::AdvancedCopyAuto,
+		Self::AdvancedCopyDurable,
+		Self::AdvancedCopyBuffered,
+		Self::AdvancedMoveAuto,
+		Self::AdvancedMoveDurable,
+		Self::AdvancedMoveBuffered,
 		Self::Delete,
 		Self::Duplicate,
 		Self::Rename,
@@ -85,6 +103,14 @@ impl Command {
 			Self::OpenWindow => &open_window::DEFINITION,
 			Self::Cut => &cut::DEFINITION,
 			Self::Copy => &copy::DEFINITION,
+			Self::AdvancedCopy => &advanced_copy::DEFINITION,
+			Self::AdvancedMove => &advanced_move::DEFINITION,
+			Self::AdvancedCopyAuto => &advanced_copy::AUTO,
+			Self::AdvancedCopyDurable => &advanced_copy::DURABLE,
+			Self::AdvancedCopyBuffered => &advanced_copy::BUFFERED,
+			Self::AdvancedMoveAuto => &advanced_move::AUTO,
+			Self::AdvancedMoveDurable => &advanced_move::DURABLE,
+			Self::AdvancedMoveBuffered => &advanced_move::BUFFERED,
 			Self::Delete => &delete::DEFINITION,
 			Self::Duplicate => &duplicate::DEFINITION,
 			Self::Rename => &rename::DEFINITION,
@@ -120,7 +146,25 @@ impl Command {
 	}
 
 	pub fn submenu(self) -> bool {
-		matches!(self, Self::OpenWith | Self::Tags | Self::Sort | Self::View)
+		matches!(
+			self,
+			Self::OpenWith
+				| Self::Tags | Self::Sort
+				| Self::View | Self::AdvancedCopy
+				| Self::AdvancedMove
+		)
+	}
+
+	pub fn menu_parent(self) -> Option<Self> {
+		match self {
+			Self::AdvancedCopyAuto | Self::AdvancedCopyDurable | Self::AdvancedCopyBuffered => {
+				Some(Self::AdvancedCopy)
+			}
+			Self::AdvancedMoveAuto | Self::AdvancedMoveDurable | Self::AdvancedMoveBuffered => {
+				Some(Self::AdvancedMove)
+			}
+			_ => None,
+		}
 	}
 
 	pub fn choices(self, app: &FileManager) -> Vec<(Action, String)> {
@@ -129,6 +173,8 @@ impl Command {
 			Self::Tags => tags::choices(app),
 			Self::Sort => sort::choices(),
 			Self::View => view::choices(),
+			Self::AdvancedCopy => advanced_copy::choices(),
+			Self::AdvancedMove => advanced_move::choices(),
 			_ => Vec::new(),
 		}
 	}
@@ -175,6 +221,18 @@ impl Action {
 		let definition = self.parent().definition();
 		if !available {
 			return Some("Item no longer available");
+		}
+		if app.transfers.busy
+			&& matches!(
+				self.parent().menu_parent().unwrap_or(self.parent()),
+				Command::Delete
+					| Command::Trash
+					| Command::Copy | Command::Cut
+					| Command::Paste
+					| Command::AdvancedCopy
+					| Command::AdvancedMove
+			) {
+			return Some("Wait for the current transfer or rollback to finish");
 		}
 		if !target.others.is_empty() && !definition.multiple {
 			return Some("Not available for multiple items");
@@ -263,6 +321,14 @@ mod tests {
 		for command in [
 			Command::Cut,
 			Command::Copy,
+			Command::AdvancedCopy,
+			Command::AdvancedMove,
+			Command::AdvancedCopyAuto,
+			Command::AdvancedCopyDurable,
+			Command::AdvancedCopyBuffered,
+			Command::AdvancedMoveAuto,
+			Command::AdvancedMoveDurable,
+			Command::AdvancedMoveBuffered,
 			Command::Duplicate,
 			Command::Rename,
 			Command::Trash,
@@ -284,6 +350,80 @@ mod tests {
 				Action::Command(command).unavailable(&app, &target, true),
 				Some("Not available for multiple items"),
 				"{command:?}"
+			);
+		}
+	}
+
+	#[test]
+	fn policy_leaf_ids_are_unique_config_valid_favorites() {
+		let ids: std::collections::HashSet<_> = Command::ALL.into_iter().map(Command::id).collect();
+		assert_eq!(ids.len(), Command::ALL.len());
+
+		for command in Command::ALL
+			.into_iter()
+			.filter(|c| c.menu_parent().is_some())
+		{
+			assert_eq!(Command::parse(command.id()), Some(command));
+			assert!(config::FILEBERG_ACTION_IDS.contains(&command.id()));
+			assert!(!command.submenu());
+			assert!(command.menu_parent().unwrap().submenu());
+		}
+	}
+
+	#[test]
+	fn paste_requires_one_destination_and_clipboard_and_checks_busy_first() {
+		let dir = TestDir::new();
+		let file = dir.path().join("file");
+		std::fs::write(&file, "data").unwrap();
+		let (mut app, _) = FileManager::new(Args {
+			path: dir.path().into(),
+		});
+		let paste = Action::Command(Command::Paste);
+
+		for context in [Context::Background, Context::Folder] {
+			let target = Target::capture(dir.path(), context).unwrap();
+			assert_eq!(
+				paste.unavailable(&app, &target, true),
+				Some("Clipboard has no files to paste")
+			);
+			assert_eq!(paste.execute(&mut app, target).units(), 0);
+			assert_eq!(
+				app.error.as_deref(),
+				Some("Clipboard has no files to paste")
+			);
+		}
+
+		let target = Target::capture(&file, Context::File).unwrap();
+		assert_eq!(
+			paste.unavailable(&app, &target, true),
+			Some("Select a folder or right-click empty space")
+		);
+
+		let mut target = Target::capture(dir.path(), Context::Folder).unwrap();
+		target.others.push(target.clone());
+		assert_eq!(
+			paste.unavailable(&app, &target, true),
+			Some("Not available for multiple items")
+		);
+
+		target.others.clear();
+		app.transfers.busy = true;
+		for command in [
+			Command::Copy,
+			Command::Cut,
+			Command::Paste,
+			Command::AdvancedCopy,
+			Command::AdvancedMove,
+			Command::AdvancedCopyAuto,
+			Command::AdvancedCopyDurable,
+			Command::AdvancedCopyBuffered,
+			Command::AdvancedMoveAuto,
+			Command::AdvancedMoveDurable,
+			Command::AdvancedMoveBuffered,
+		] {
+			assert_eq!(
+				Action::Command(command).unavailable(&app, &target, true),
+				Some("Wait for the current transfer or rollback to finish")
 			);
 		}
 	}

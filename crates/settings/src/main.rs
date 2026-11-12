@@ -77,6 +77,7 @@ impl Settings {
 			tabs: vec![
 				first,
 				Tab::nightlight(),
+				Tab::fileberg(),
 				Tab::spotify(),
 				Tab::homeassistant(),
 				Tab::more_soon(),

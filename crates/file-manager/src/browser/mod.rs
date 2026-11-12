@@ -1,5 +1,6 @@
 //! Directory browsing, selection, navigation, and inline folder creation.
 mod directory;
+pub(crate) mod drag;
 pub(crate) mod navigation;
 pub(crate) mod selection;
 pub(crate) mod typeahead;

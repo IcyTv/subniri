@@ -174,6 +174,63 @@ impl FileManager {
 			Message::DismissError => self.error = None,
 			Message::ToggleInfo => self.show_info = !self.show_info,
 			Message::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
+				if modifiers.control()
+					&& !modifiers.shift()
+					&& !modifiers.alt()
+					&& !modifiers.logo()
+				{
+					match key.as_ref() {
+						Key::Character("c") => {
+							return self.update_transfers(
+								crate::transfers::Message::PrepareSelection(
+									crate::transfers::Operation::Copy,
+								),
+							);
+						}
+						Key::Character("x") => {
+							return self.update_transfers(
+								crate::transfers::Message::PrepareSelection(
+									crate::transfers::Operation::Move,
+								),
+							);
+						}
+						Key::Character("v") if !self.transfers.show_history => {
+							return self.update_transfers(crate::transfers::Message::Paste(
+								self.path.clone(),
+							));
+						}
+						_ => {}
+					}
+				}
+				if modifiers.control()
+					&& !modifiers.shift()
+					&& key.as_ref() == Key::Character("z")
+					&& !self.transfers.busy
+				{
+					let latest = self
+						.transfers
+						.latest
+						.as_ref()
+						.filter(|outcome| outcome.status == crate::transfers::Status::Complete)
+						.map(|outcome| outcome.id.clone());
+					let id = latest.or_else(|| {
+						self.transfers
+							.history
+							.iter()
+							.find(|journal| {
+								journal.status == crate::transfers::Status::Complete
+									&& self
+										.transfers
+										.latest
+										.as_ref()
+										.is_none_or(|latest| latest.id != journal.id)
+							})
+							.map(|journal| journal.id.clone())
+					});
+					if let Some(id) = id {
+						return self.update_transfers(crate::transfers::Message::Undo(id));
+					}
+				}
 				if modifiers.control() && key.as_ref() == Key::Character("k") {
 					self.typeahead.clear();
 					return iced::widget::operation::focus("search");

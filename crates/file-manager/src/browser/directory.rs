@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 impl FileManager {
 	pub(crate) fn goto(&mut self, path: PathBuf) -> Task<Message> {
+		self.transfers.show_history = false;
 		self.typeahead.clear();
 		let selected = self.selection_snapshot();
 		self.history
@@ -19,6 +20,7 @@ impl FileManager {
 			.map_or_else(Task::none, |visit| self.navigation_changed(visit))
 	}
 	pub(crate) fn navigation_changed(&mut self, visit: Visit) -> Task<Message> {
+		self.transfers.show_history = false;
 		let close = self.menu_lifecycle(neo_widgets::popup::Event::CloseAll);
 		self.typeahead.clear();
 		self.path = visit.path;

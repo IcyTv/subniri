@@ -8,6 +8,7 @@ mod filesystem;
 mod tags;
 #[cfg(test)]
 mod test_support;
+mod transfers;
 mod trash;
 mod ui;
 

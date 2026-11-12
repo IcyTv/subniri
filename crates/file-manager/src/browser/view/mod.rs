@@ -29,6 +29,9 @@ impl FileManager {
 		if self.dialogs.owns(id) {
 			return self.confirmation_view(id);
 		}
+		if self.transfers.owns(id) {
+			return self.transfer_dialog_view(id);
+		}
 		if id != self.host {
 			return if self.drives.menu.as_ref().is_some_and(|m| m.id == id) {
 				self.drive_menu_view(id)
@@ -49,13 +52,72 @@ impl FileManager {
 				})
 				.into(),
 			self.typeahead.is_active(),
-			!self.loading && self.menu.is_none() && self.drives.menu.is_none(),
+			!self.loading
+				&& !self.transfers.show_history
+				&& self.menu.is_none()
+				&& self.drives.menu.is_none(),
 			self.visible_entries()
 				.iter()
 				.map(|e| (e.id.clone(), e.path.clone()))
 				.collect(),
 		);
+		let content = crate::browser::drag::widget::gate(
+			content,
+			!self.transfers.busy
+				&& self.transfers.loaded
+				&& self.menu.is_none()
+				&& self.drives.menu.is_none()
+				&& self.native_drag.active_source.is_none()
+				&& !self.drag.external,
+			self.drag.origin.is_some() || self.drag.active,
+		);
 		let content = typeahead::host_gate(content, self.popups.topmost());
+		let preview = if self.drag.active && !self.drag.external {
+			self.drag.preview_entry().map(|entry| {
+				let action = if self.modifiers.control() {
+					"Copy"
+				} else if self.modifiers.shift() {
+					"Move"
+				} else {
+					"Move or copy"
+				};
+				container(
+					row![
+						file_art(entry, 0.6, colors),
+						column![
+							text(format!("{action} · {} items", self.drag.sources.len())).size(12),
+							text(if self.drag.valid {
+								"Release to transfer"
+							} else {
+								"Choose a destination folder"
+							})
+							.size(10)
+							.color(colors.secondary),
+						]
+						.spacing(4),
+					]
+					.spacing(10)
+					.align_y(Alignment::Center),
+				)
+				.padding(8)
+				.style(move |_| container::Style {
+					border: iced::Border {
+						color: colors.border,
+						width: 1.5,
+						radius: 0.0.into(),
+					},
+					..style::panel(colors.surface)
+				})
+				.into()
+			})
+		} else {
+			None
+		};
+		let content = if let Some(preview) = preview {
+			crate::browser::drag::preview::with_preview(content, preview, self.drag.position())
+		} else {
+			content
+		};
 
 		// Keep the overlay at a stable tree position across modal transitions.
 		let dim =
@@ -64,7 +126,11 @@ impl FileManager {
 					background: Some(
 						colors
 							.black
-							.scale_alpha(if self.dialogs.blocked() { 0.28 } else { 0.0 })
+							.scale_alpha(if self.dialogs.blocked() || self.transfers.blocked() {
+								0.28
+							} else {
+								0.0
+							})
 							.into(),
 					),
 					..Default::default()
@@ -72,7 +138,7 @@ impl FileManager {
 			});
 		typeahead::modal_gate(
 			iced::widget::stack![content, dim].into(),
-			self.dialogs.blocked(),
+			self.dialogs.blocked() || self.transfers.blocked(),
 		)
 	}
 
@@ -233,6 +299,22 @@ impl FileManager {
 				.height(Length::Fill)
 				.into()
 		};
+		let drop_highlight = self.drag.highlights(&self.path);
+		let files = container(files)
+			.width(Length::Fill)
+			.height(Length::Fill)
+			.style(move |_| container::Style {
+				border: iced::Border {
+					color: colors.decorative.blue,
+					width: if drop_highlight { 2.0 } else { 0.0 },
+					radius: 0.0.into(),
+				},
+				..Default::default()
+			});
+		let files = crate::browser::drag::widget::zone(
+			files.into(),
+			crate::browser::drag::Area::Background(self.path.clone()),
+		);
 		// Keep the scrollable at the same tree position when the preview opens or
 		// closes; dismissal must not reset the viewport around the selected file.
 		let mut files = iced::widget::stack![
@@ -292,15 +374,54 @@ impl FileManager {
 					.align_y(Alignment::End),
 			);
 		}
+		if self.drag.active && self.drag.external {
+			let action = if self.drag.external || self.modifiers.control() {
+				"Copy"
+			} else if self.modifiers.shift() {
+				"Move"
+			} else {
+				"Move on same filesystem; otherwise copy"
+			};
+			let count = if self.drag.external {
+				"Files from another application".to_string()
+			} else {
+				format!("{} items", self.drag.sources.len())
+			};
+			let feedback = container(
+				text(format!(
+					"{action} · {count} · {}",
+					if self.drag.valid {
+						"Release to transfer"
+					} else {
+						"Choose a destination folder"
+					}
+				))
+				.size(12),
+			)
+			.padding(8)
+			.style(move |_| style::panel(colors.surface));
+			files = files.push(
+				container(feedback)
+					.padding(8)
+					.width(Length::Fill)
+					.height(Length::Fill)
+					.align_x(Alignment::End)
+					.align_y(Alignment::End),
+			);
+		}
 		content = content.push(container(files).padding([12, gutter]).height(Length::Fill));
 		content = content.push(self.selection_inspector(gutter));
 		let folders = visible.iter().filter(|entry| entry.is_dir).count();
 		let mut status_content = row![
-			text(format!(
-				"{} items · {folders} folders, {} files",
-				visible.len(),
-				visible.len() - folders
-			))
+			text(if self.transfers.show_history {
+				format!("{} transfers", self.transfers.history.len())
+			} else {
+				format!(
+					"{} items · {folders} folders, {} files",
+					visible.len(),
+					visible.len() - folders
+				)
+			})
 			.size(11)
 			.color(colors.secondary),
 			Space::new().width(Length::Fill)
@@ -328,13 +449,26 @@ impl FileManager {
 			.padding([8, 16])
 			.width(Length::Fill)
 			.style(move |_| style::panel(colors.surface));
+		let content: Element<'_, Message> = if self.transfers.show_history {
+			column![
+				self.transfer_history_view(),
+				self.selection_inspector(gutter)
+			]
+			.height(Length::Fill)
+			.width(Length::Fill)
+			.into()
+		} else {
+			content.into()
+		};
 		column![
 			identity,
 			style::divider(false, colors),
 			row![
 				self.sidebar(
-					compact,
-					if compact {
+					compact && !(self.transfers.busy && self.transfers.progress_visible),
+					if compact && self.transfers.busy && self.transfers.progress_visible {
+						185
+					} else if compact {
 						61
 					} else if width <= 1100.0 {
 						185
@@ -665,8 +799,10 @@ impl FileManager {
 			("Pictures", ui_icon!("image"), dirs::picture_dir()),
 		] {
 			if let Some(path) = path {
-				let active = active_place.as_ref() == Some(&path);
-				let background = if active {
+				let active = !self.transfers.show_history && active_place.as_ref() == Some(&path);
+				let background = if self.drag.highlights(&path) {
+					colors.decorative.green
+				} else if active {
 					colors.decorative.blue
 				} else {
 					colors.surface
@@ -693,30 +829,81 @@ impl FileManager {
 						)
 						.width(Length::Fill);
 				}
-				places = places.push(hint::place_hint(
-					control(label, active, colors)
-						.background(background)
-						.width(Length::Fill)
-						.padding(if compact {
-							iced::Padding::from(9)
-						} else {
-							iced::Padding::from([10, 12])
-						})
-						.on_press(BrowserMessage::GoTo(path).into()),
-					name,
-					compact,
-					colors,
+				places = places.push(crate::browser::drag::widget::zone(
+					hint::place_hint(
+						control(label, active, colors)
+							.background(background)
+							.width(Length::Fill)
+							.padding(if compact {
+								iced::Padding::from(9)
+							} else {
+								iced::Padding::from([10, 12])
+							})
+							.on_press(BrowserMessage::GoTo(path.clone()).into()),
+						name,
+						compact,
+						colors,
+					),
+					crate::browser::drag::Area::Sidebar(path),
 				));
 			}
 		}
+		let background = if self.transfers.show_history {
+			colors.decorative.blue
+		} else {
+			colors.surface
+		};
+		let foreground = colors.text_on(background);
+		let mut history_label = row![
+			svg(ui_icon!("clock-counter-clockwise"))
+				.width(21)
+				.height(21)
+				.style(move |_, _| svg::Style {
+					color: Some(foreground)
+				}),
+		]
+		.spacing(11)
+		.align_y(Alignment::Center);
+		if !compact {
+			history_label = history_label
+				.push(
+					text("History")
+						.size(14)
+						.weight(font::Weight::Semibold)
+						.color(foreground),
+				)
+				.width(Length::Fill);
+		}
+		places = places.push(hint::place_hint(
+			control(history_label, self.transfers.show_history, colors)
+				.id("transfer-history-tab")
+				.background(background)
+				.width(Length::Fill)
+				.padding(if compact {
+					iced::Padding::from(9)
+				} else {
+					iced::Padding::from([10, 12])
+				})
+				.on_press(crate::transfers::Message::ShowHistory(true).into()),
+			"History",
+			compact,
+			colors,
+		));
 		if !compact {
 			places = places
 				.push(Space::new().height(22))
 				.push(self.tag_sidebar(false));
 		}
-		let mut sidebar = column![scrollable(places).height(Length::FillPortion(3))]
-			.spacing(16)
-			.height(Length::Fill);
+		let mut sidebar = column![
+			scrollable(places)
+				.id("fileberg-sidebar")
+				.height(Length::FillPortion(3))
+		]
+		.spacing(16)
+		.height(Length::Fill);
+		if self.transfers.busy && self.transfers.progress_visible {
+			sidebar = sidebar.push(self.sidebar_transfers());
+		}
 		if !compact {
 			sidebar = sidebar.push(self.drive_cards());
 		}
@@ -739,7 +926,7 @@ impl FileManager {
 	}
 
 	fn file_tile<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
-		let colors = self.appearance.colors();
+		let colors = self.entry_colors(entry);
 
 		self.entry_button(
 			entry,
@@ -774,7 +961,7 @@ impl FileManager {
 	}
 
 	fn file_row<'a>(&self, entry: &'a DirEntry) -> Element<'a, Message> {
-		let colors = self.appearance.colors();
+		let colors = self.entry_colors(entry);
 
 		self.entry_button(
 			entry,
@@ -815,6 +1002,7 @@ impl FileManager {
 		// Mouse selection and keyboard activation are deliberately separate. Enter on
 		// a focused file opens it; a single mouse click only selects it.
 		let selected = self.selection.paths.contains(&entry.path);
+		let prepared = self.transfers.prepared_operation(&entry.path);
 		let tile = container(content)
 			.padding(8)
 			.width(Length::Fill)
@@ -853,11 +1041,29 @@ impl FileManager {
 		} else {
 			tile.into()
 		};
+		let content = if prepared == Some(crate::transfers::Operation::Move) {
+			iced::widget::stack![
+				content,
+				container(Space::new())
+					.width(Length::Fill)
+					.height(Length::Fill)
+					.style(move |_| style::panel(colors.body.scale_alpha(0.45))),
+			]
+			.into()
+		} else {
+			content
+		};
 		let pointer = iced::widget::mouse_area(content)
 			.on_press(BrowserMessage::Clicked(entry.path.clone()).into())
 			.on_double_click(BrowserMessage::OpenEntry(entry.path.clone()).into())
 			.interaction(iced::mouse::Interaction::Pointer);
-		control(pointer, selected, colors)
+		let target = self.drag.highlights(&entry.path);
+		crate::browser::drag::widget::zone(
+			control(
+				pointer,
+				selected || target || prepared == Some(crate::transfers::Operation::Copy),
+				colors,
+			)
 			.padding(0)
 			.id(entry.id.clone())
 			.on_context_menu_with_mouse_position({
@@ -867,6 +1073,28 @@ impl FileManager {
 			.on_press(BrowserMessage::OpenEntry(entry.path.clone()).into())
 			.width(Length::Fill)
 			.height(height)
-			.into()
+			.into(),
+			crate::browser::drag::Area::Entry {
+				path: entry.path.clone(),
+				directory: entry.is_dir,
+			},
+		)
+	}
+
+	fn entry_colors(&self, entry: &DirEntry) -> neo_widgets::style::Colors {
+		let mut colors = self.appearance.colors();
+		if self.transfers.prepared_operation(&entry.path) == Some(crate::transfers::Operation::Move)
+		{
+			colors.text = colors.secondary;
+			colors.decorative.blue = colors.secondary;
+			colors.decorative.green = colors.secondary;
+			colors.decorative.yellow = colors.secondary;
+			colors.decorative.pink = colors.secondary;
+			colors.decorative.blue90 = colors.body;
+			colors.decorative.green90 = colors.body;
+			colors.decorative.coral90 = colors.body;
+			colors.decorative.purple90 = colors.body;
+		}
+		colors
 	}
 }

@@ -41,6 +41,13 @@ impl FileManager {
 	pub(super) fn route_input(
 		&mut self, id: window::Id, event: iced::Event, status: Status,
 	) -> Task<Message> {
+		if self.transfers.owns(id) {
+			return if let iced::Event::Keyboard(event) = event {
+				self.update_transfers(crate::transfers::Message::Key(id, event))
+			} else {
+				Task::none()
+			};
+		}
 		if self.dialogs.owns(id) {
 			return if let iced::Event::Keyboard(event) = event {
 				self.update_dialog(dialogs::Message::Key(id, event))
@@ -48,7 +55,7 @@ impl FileManager {
 				Task::none()
 			};
 		}
-		if self.dialogs.blocked() {
+		if self.dialogs.blocked() || self.transfers.blocked() {
 			return Task::none();
 		}
 		if self.drives.menu.as_ref().is_some_and(|m| m.id == id) {
@@ -86,6 +93,9 @@ impl FileManager {
 	pub(super) fn route_window_event(
 		&mut self, id: window::Id, event: window::Event,
 	) -> Task<Message> {
+		if self.transfers.owns(id) {
+			return self.update_transfers(crate::transfers::Message::Window(id, event));
+		}
 		if self.dialogs.owns(id) {
 			return self.dialog_window_event(id, event);
 		}
@@ -99,10 +109,7 @@ impl FileManager {
 					let close = self.menu_lifecycle(neo_widgets::popup::Event::CloseAll);
 					close.chain(self.update(Message::CloseRequested(id)))
 				}
-				window::Event::Closed => {
-					let close = self.cancel_dialog_for_shutdown();
-					close.chain(iced::exit())
-				}
+				window::Event::Closed => self.update(Message::CloseRequested(id)),
 				window::Event::Unfocused => {
 					self.typeahead.clear();
 					self.modifiers = keyboard::Modifiers::empty();

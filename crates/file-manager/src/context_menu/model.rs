@@ -67,6 +67,21 @@ impl Target {
 		paths.extend(self.others.iter().map(|t| t.path.clone()));
 		paths
 	}
+
+	/// Reopen the pinned objects, not their potentially replaced pathname. The
+	/// document portal receives readable descriptors and retains object identity.
+	/// Call only from a background worker.
+	pub(crate) fn readable_files(&self) -> Result<Vec<File>, String> {
+		use std::os::fd::AsRawFd;
+		std::iter::once(self).chain(&self.others).map(|target| {
+			let metadata = target.file.metadata().map_err(|error| error.to_string())?;
+			if !metadata.is_file() && !metadata.is_dir() { return Err("Portal export supports files and directories, not symlink referents or special files".into()); }
+			let file = File::open(format!("/proc/self/fd/{}", target.file.as_raw_fd())).map_err(|error| error.to_string())?;
+			let opened = file.metadata().map_err(|error| error.to_string())?;
+			if (opened.dev(), opened.ino()) != target.identity { return Err("Portal source identity changed".into()); }
+			Ok(file)
+		}).collect()
+	}
 }
 
 pub struct Page {
@@ -183,6 +198,38 @@ mod tests {
 	}
 
 	#[test]
+	fn readable_handles_reopen_the_pinned_object_not_a_replacement_path() {
+		use std::io::Read;
+		let dir = TestDir::new();
+		let path = dir.path().join("source");
+		std::fs::write(&path, "original").unwrap();
+		let target = Target::capture(&path, Context::File).unwrap();
+		std::fs::rename(&path, dir.path().join("saved")).unwrap();
+		std::fs::write(&path, "replacement").unwrap();
+
+		let mut handles = target.readable_files().unwrap();
+		let mut contents = String::new();
+		handles
+			.first_mut()
+			.unwrap()
+			.read_to_string(&mut contents)
+			.unwrap();
+		assert_eq!(contents, "original");
+		assert!(!target.available());
+	}
+
+	#[test]
+	fn readable_handles_never_follow_a_symlink_for_portal_export() {
+		let dir = TestDir::new();
+		let path = dir.path().join("link");
+		std::fs::write(dir.path().join("target"), "private").unwrap();
+		std::os::unix::fs::symlink("target", &path).unwrap();
+		let target = Target::capture(&path, Context::File).unwrap();
+
+		assert!(target.readable_files().is_err());
+	}
+
+	#[test]
 	fn background_snapshot_follows_and_protects_a_symlinked_directory() {
 		let dir = TestDir::new();
 		let real = dir.path().join("real");
@@ -216,12 +263,125 @@ mod tests {
 					reachable.insert(c);
 				}
 			}
+			for parent in [Command::AdvancedCopy, Command::AdvancedMove] {
+				app.menu
+					.as_mut()
+					.unwrap()
+					.page_mut(id)
+					.unwrap()
+					.parent_action = Some(parent);
+				for row in app.menu_rows(id) {
+					if let Action::Command(c) = row.action {
+						reachable.insert(c);
+					}
+				}
+			}
+			app.menu
+				.as_mut()
+				.unwrap()
+				.page_mut(id)
+				.unwrap()
+				.parent_action = None;
 		}
-		// Tags are deliberately unavailable until their asynchronous store arrives.
+		// Tags need their asynchronous store; paste needs a prepared clipboard.
 		for command in Command::ALL {
-			if command != Command::Tags {
+			if !matches!(command, Command::Tags | Command::Paste) {
 				assert!(reachable.contains(&command), "{command:?}");
 			}
 		}
+	}
+
+	#[test]
+	fn policy_leaves_live_in_submenus_or_pinned_root_slots_and_search_once() {
+		let (dir, mut app, id) = app();
+		app.menu.as_mut().unwrap().target = Target::capture(dir.path(), Context::Folder).unwrap();
+		let leaves: Vec<_> = Command::ALL
+			.into_iter()
+			.filter(|c| c.menu_parent().is_some())
+			.collect();
+
+		assert_eq!(leaves.len(), 6);
+		assert!(
+			app.menu_rows(id)
+				.iter()
+				.all(|row| row.action.parent().menu_parent().is_none())
+		);
+
+		app.favorites
+			.observe(Ok(vec!["advanced-copy-durable".into()]));
+		let rows = app.menu_rows(id);
+		assert_eq!(
+			rows[0].action,
+			Action::Command(Command::AdvancedCopyDurable)
+		);
+		assert_eq!(rows[0].label, "Advanced Copy: Durable");
+		assert_eq!(
+			rows.iter()
+				.filter(|row| row.action.parent().menu_parent().is_some())
+				.count(),
+			1
+		);
+
+		for parent in [Command::AdvancedCopy, Command::AdvancedMove] {
+			app.menu
+				.as_mut()
+				.unwrap()
+				.page_mut(id)
+				.unwrap()
+				.parent_action = Some(parent);
+			let rows = app.menu_rows(id);
+
+			assert_eq!(rows.len(), 3);
+			assert_eq!(
+				rows.iter()
+					.map(|row| row.label.as_str())
+					.collect::<Vec<_>>(),
+				["Auto", "Durable", "Buffered"]
+			);
+			assert!(
+				rows.iter()
+					.all(|row| row.action.parent().menu_parent() == Some(parent)
+						&& row.disabled.is_none())
+			);
+		}
+
+		let page = app.menu.as_mut().unwrap().page_mut(id).unwrap();
+		page.parent_action = None;
+		page.query = "durable".into();
+		let rows = app.menu_rows(id);
+		for command in [Command::AdvancedCopyDurable, Command::AdvancedMoveDurable] {
+			assert_eq!(
+				rows.iter()
+					.filter(|row| row.action == Action::Command(command))
+					.count(),
+				1
+			);
+		}
+	}
+
+	#[test]
+	fn policy_submenu_rows_keep_target_identity_and_busy_checks() {
+		let (dir, mut app, id) = app();
+		app.menu.as_mut().unwrap().target = Target::capture(dir.path(), Context::Folder).unwrap();
+		let page = app.menu.as_mut().unwrap().page_mut(id).unwrap();
+		page.parent_action = Some(Command::AdvancedCopy);
+		page.query = "durable".into();
+		app.transfers.busy = true;
+
+		assert!(
+			app.menu_rows(id)
+				.iter()
+				.filter(|row| row.action.parent().menu_parent().is_some())
+				.all(|row| row.disabled
+					== Some("Wait for the current transfer or rollback to finish"))
+		);
+
+		app.transfers.busy = false;
+		app.menu.as_mut().unwrap().available = false;
+		assert!(
+			app.menu_rows(id)
+				.iter()
+				.all(|row| row.disabled == Some("Item no longer available"))
+		);
 	}
 }

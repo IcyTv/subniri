@@ -174,6 +174,11 @@ impl FileManager {
 	}
 
 	pub(crate) fn perform_drive_operation(&mut self, operation: Operation) -> Task<crate::Message> {
+		if self.transfers.busy {
+			self.drives.problem =
+				Some("Wait for the transfer or rollback before changing storage mounts".into());
+			return Task::none();
+		}
 		if self.drives.busy.is_some() || self.closing.is_some() {
 			return Task::none();
 		}

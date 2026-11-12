@@ -61,7 +61,12 @@ impl FileManager {
 				.height(16)
 				.style(move |_, _| svg::Style { color: Some(color) })
 		};
-		let strip = container(
+		let strip: Element<'_, Message> = if self.transfers.pending.is_some()
+			|| self.transfers.busy
+			|| self.native_drag.pending_count() > 0
+		{
+			self.transfer_controls()
+		} else {
 			row![
 				svg(ui_icon!("check-circle"))
 					.width(16)
@@ -126,16 +131,18 @@ impl FileManager {
 				.disabled_background(colors.disabled_background),
 			]
 			.spacing(8)
-			.align_y(Alignment::Center),
-		)
-		.padding([4, 13])
-		.width(Length::Fill)
-		.height(Length::Fill)
-		.center_y(Length::Fill)
-		.style(move |_| container::Style {
-			text_color: Some(colors.text_on(colors.black)),
-			..style::panel(colors.black)
-		});
+			.align_y(Alignment::Center)
+			.into()
+		};
+		let strip = container(strip)
+			.padding([4, 13])
+			.width(Length::Fill)
+			.height(Length::Fill)
+			.center_y(Length::Fill)
+			.style(move |_| container::Style {
+				text_color: Some(colors.text_on(colors.black)),
+				..style::panel(colors.black)
+			});
 
 		container(inspector_layout(strip.into(), details, self.show_info))
 			.padding(iced::Padding {
@@ -195,5 +202,32 @@ mod tests {
 			}
 			assert_eq!(heights, vec![Some(if expanded { 348.0 } else { 460.0 }); 3]);
 		}
+	}
+
+	#[test]
+	fn prepared_and_busy_strip_content_keeps_the_same_reserved_height() {
+		let mut heights = Vec::new();
+		for strip_height in [0, 30, 300] {
+			let mut view: Element<'_, (), iced::Theme, ()> = iced::widget::column![
+				scrollable(Space::new().height(2000)).height(Length::Fill),
+				inspector_layout(
+					Space::new().height(strip_height).into(),
+					Space::new().into(),
+					false,
+				),
+			]
+			.height(500)
+			.into();
+			let mut tree = Tree::new(view.as_widget());
+			view.as_widget_mut().diff(&mut tree);
+			let node = view.as_widget_mut().layout(
+				&mut tree,
+				&(),
+				&layout::Limits::new(Size::ZERO, Size::new(500.0, 500.0)),
+			);
+			heights.push(node.children().first().map(|node| node.size().height));
+		}
+
+		assert_eq!(heights, vec![Some(460.0); 3]);
 	}
 }

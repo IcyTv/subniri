@@ -95,6 +95,10 @@ pub(crate) enum Message {
 	Browser(browser::Message),
 	ContextMenu(context_menu::Message),
 	Tags(tags::Message),
+	Transfers(crate::transfers::Message),
+	PreferencesChanged,
+	FileDrag(browser::drag::Message),
+	NativeDrag(crate::transfers::native::Message),
 	WindowEvent(iced::window::Id, iced::window::Event),
 	CloseRequested(iced::window::Id),
 }
@@ -133,6 +137,9 @@ pub(crate) struct FileManager {
 	pub(crate) closing: Option<iced::window::Id>,
 	pub(crate) storage: Option<storage::Usage>,
 	pub(crate) typeahead: typeahead::TypeAhead,
+	pub(crate) transfers: crate::transfers::State,
+	pub(crate) drag: browser::drag::State,
+	pub(crate) native_drag: crate::transfers::native::State,
 }
 
 impl FileManager {
@@ -171,12 +178,26 @@ impl FileManager {
 			closing: None,
 			storage: None,
 			typeahead: typeahead::TypeAhead::default(),
+			transfers: crate::transfers::State::default(),
+			drag: browser::drag::State::default(),
+			native_drag: crate::transfers::native::State::default(),
 		};
 		let task = app.load_directory();
 		let drives = app.update_drives(crate::drives::Message::Refresh);
+		let transfer_settings = app.update_transfers(crate::transfers::Message::Load);
+		let transfer_history = app.update_transfers(crate::transfers::Message::RefreshHistory);
+		let native_drag = app.listen_native_drag();
 		(
 			app,
-			Task::batch([task, drives, Self::load_tags(), favorites::load(0)]),
+			Task::batch([
+				task,
+				drives,
+				Self::load_tags(),
+				favorites::load(0),
+				transfer_settings,
+				transfer_history,
+				native_drag,
+			]),
 		)
 	}
 
@@ -201,11 +222,7 @@ impl FileManager {
 						})
 						.boxed()
 					},
-					|watch| {
-						watch
-							.map(|_| ContextMenuMessage::FavoritesReload.into())
-							.boxed()
-					},
+					|watch| watch.map(|_| Message::PreferencesChanged).boxed(),
 				)
 			}),
 		];
@@ -220,12 +237,18 @@ impl FileManager {
 					.map(|(id, _)| ContextMenuMessage::MenuPoll(id).into()),
 			);
 		}
+		if self.drag.active {
+			subscriptions.push(
+				iced::time::every(std::time::Duration::from_millis(40))
+					.map(|now| browser::drag::Message::Tick(now).into()),
+			);
+		}
 		Subscription::batch(subscriptions)
 	}
 
 	pub(crate) fn update(&mut self, message: impl Into<Message>) -> Task<Message> {
 		let message = message.into();
-		if self.dialogs.blocked() && message.is_parent_interaction() {
+		if (self.dialogs.blocked() || self.transfers.blocked()) && message.is_parent_interaction() {
 			return Task::none();
 		}
 		match message {
@@ -236,14 +259,27 @@ impl FileManager {
 			Message::Browser(message) => return self.update_browser(message),
 			Message::ContextMenu(message) => return self.update_context_menu(message),
 			Message::Tags(message) => return self.update_tags(message),
+			Message::Transfers(message) => return self.update_transfers(message),
+			Message::FileDrag(message) => return self.update_file_drag(message),
+			Message::NativeDrag(message) => return self.update_native_drag(message),
+			Message::PreferencesChanged => {
+				let favorites = self.update_context_menu(ContextMenuMessage::FavoritesReload);
+				let transfers = self.update_transfers(crate::transfers::Message::Load);
+				return Task::batch([favorites, transfers]);
+			}
 			Message::WindowEvent(id, event) => return self.route_window_event(id, event),
 			Message::CloseRequested(id) => {
 				if id != self.host {
 					return Task::none();
 				}
 				let close = self.cancel_dialog_for_shutdown();
+				self.transfers.cancel();
+				let drag_cancel = self.update_file_drag(browser::drag::Message::Cancel);
+				let native_cancel = self.shutdown_native_drag();
+				let transfer_dialog = self.close_transfer_dialog();
 				self.closing = Some(id);
-				return close.chain(self.finish_pending_close());
+				return Task::batch([close, transfer_dialog, drag_cancel, native_cancel])
+					.chain(self.finish_pending_close());
 			}
 			_ => {}
 		}
@@ -265,6 +301,7 @@ impl FileManager {
 			|| self.tag_busy
 			|| self.creating_folder
 			|| self.favorites.running()
+			|| self.transfers.busy
 		{
 			return Task::none();
 		}

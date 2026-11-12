@@ -2492,12 +2492,13 @@ dependencies = [
 [[package]]
 name = "exwlshellev"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "calloop 0.14.5",
  "calloop-wayland-source 0.4.1",
  "log 0.4.35",
  "raw-window-handle",
+ "rustix 1.1.6",
  "smithay-client-toolkit 0.21.1",
  "tempfile",
  "thiserror 2.0.21",
@@ -2569,7 +2570,9 @@ dependencies = [
  "nix 0.31.3",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tokio",
+ "url",
  "utilities",
  "xdg-mime",
  "zbus",
@@ -3572,7 +3575,7 @@ dependencies = [
 [[package]]
 name = "iced_exdevtools"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "iced_debug",
  "iced_devtools",
@@ -3585,7 +3588,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "enumflags2",
  "exwlshellev",
@@ -3611,7 +3614,7 @@ dependencies = [
 [[package]]
 name = "iced_exwlshell_macros"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "darling 0.24.1",
  "manyhow",
@@ -3706,7 +3709,7 @@ dependencies = [
 [[package]]
 name = "iced_wayland_subscriber"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "futures",
  "iced_core",
@@ -10080,7 +10083,7 @@ dependencies = [
 [[package]]
 name = "waycrate_xkbkeycode"
 version = "0.20.1"
-source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8#7d4b8f1cd0a0adf0d352a3f8c3726ab1904eeee8"
+source = "git+https://github.com/IcyTv/exwlshelleventloop?rev=dc415c311609e38e332ede5de0b4bec87aa91374#dc415c311609e38e332ede5de0b4bec87aa91374"
 dependencies = [
  "calloop 0.14.5",
  "log 0.4.35",

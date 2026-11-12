@@ -23,7 +23,11 @@ impl FileManager {
 		let searching = !page.query.is_empty();
 		let mut rows = Vec::new();
 		for command in Command::ALL {
-			if searching || page.parent_action.is_none() {
+			let root_visible =
+				command.menu_parent().is_none() || self.favorites.order.contains(&command);
+			if (searching && command.menu_parent().is_none())
+				|| (!searching && page.parent_action.is_none() && root_visible)
+			{
 				rows.push(self.menu_row(Action::Command(command), command.label().into()));
 			}
 			if searching || page.parent_action == Some(command) {
@@ -78,6 +82,7 @@ impl FileManager {
 		});
 		scored.into_iter().map(|r| r.0).collect()
 	}
+
 	fn menu_row(&self, action: Action, label: String) -> Row {
 		let Some(menu) = self.menu.as_ref() else {
 			return Row {

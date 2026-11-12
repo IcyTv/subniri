@@ -87,6 +87,9 @@ impl FileManager {
 	}
 
 	pub(crate) fn title(&self, id: iced::window::Id) -> Option<String> {
+		if self.transfers.owns(id) {
+			return Some("Transfer — Fileberg".into());
+		}
 		Some(
 			match self
 				.dialogs

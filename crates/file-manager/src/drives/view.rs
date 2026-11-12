@@ -125,18 +125,30 @@ impl FileManager {
 			);
 		}
 
-		let mut card = style::control(content, false, colors)
-			.id(format!(
-				"drive-card-{}-{destination}",
-				identity.as_ref().map_or("root", |i| i.object.as_str())
-			))
-			.enabled(
-				!matches!(&message, crate::Message::Drives(Message::Request(..)))
-					|| self.drives.busy.is_none(),
-			)
-			.padding([12, 11])
-			.width(Length::Fill)
-			.on_press(message);
+		let drop_target =
+			if let crate::Message::Browser(crate::browser::Message::GoTo(path)) = &message {
+				Some(path.clone())
+			} else {
+				None
+			};
+		let mut card = style::control(
+			content,
+			drop_target
+				.as_ref()
+				.is_some_and(|path| self.drag.highlights(path)),
+			colors,
+		)
+		.id(format!(
+			"drive-card-{}-{destination}",
+			identity.as_ref().map_or("root", |i| i.object.as_str())
+		))
+		.enabled(
+			!matches!(&message, crate::Message::Drives(Message::Request(..)))
+				|| self.drives.busy.is_none(),
+		)
+		.padding([12, 11])
+		.width(Length::Fill)
+		.on_press(message);
 		if let Some(identity) = identity {
 			card = card.on_context_menu_with_mouse_position(move |point| {
 				Message::MenuAt(Some(identity.clone()), point).into()
@@ -146,7 +158,7 @@ impl FileManager {
 			card = card.on_context_menu(Message::NoAction.into());
 		}
 
-		container(card)
+		let card = container(card)
 			.padding(1.5)
 			.width(Length::Fill)
 			.style(move |_| container::Style {
@@ -158,7 +170,12 @@ impl FileManager {
 				},
 				..style::panel(colors.body)
 			})
-			.into()
+			.into();
+		if let Some(path) = drop_target {
+			crate::browser::drag::widget::zone(card, crate::browser::drag::Area::Sidebar(path))
+		} else {
+			card
+		}
 	}
 
 	pub(crate) fn drive_menu_view(&self, id: iced::window::Id) -> Element<'_, crate::Message> {
