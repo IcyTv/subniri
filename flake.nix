@@ -473,6 +473,7 @@
               (mkWrappedGuiOverride {
                 name = "file-manager";
                 binName = "fileberg";
+                wrapArgs = lib.concatLists (lib.mapAttrsToList (name: value: ["--set" name (toString value)]) filebergPreviewEnvironment);
                 desktopEntry = {
                   desktopName = "Fileberg";
                   genericName = "File Manager";
@@ -528,6 +529,16 @@
             mkdir -p $out
             cp -r SVGs\ Flat/* $out/
           '';
+        };
+
+        filebergPreviewEnvironment = {
+          FILEBERG_PDFINFO = "${pkgs.poppler-utils}/bin/pdfinfo";
+          FILEBERG_PDFTOPPM = "${pkgs.poppler-utils}/bin/pdftoppm";
+          FILEBERG_FFMPEG = "${pkgs.ffmpeg-headless}/bin/ffmpeg";
+          FILEBERG_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
+          FILEBERG_RESVG = "${pkgs.resvg}/bin/resvg";
+          FILEBERG_PREVIEW_FONT = "${./crates/file-manager/assets/fonts/DMSans.ttf}";
+          FILEBERG_FONTCONFIG_FILE = pkgs.makeFontsConf {fontDirectories = [pkgs.dejavu_fonts];};
         };
 
         workspacePackageList = [
@@ -595,46 +606,47 @@
         apps = {
         };
 
-        devShells.default = pkgs.mkShell {
-          inherit (commonArgs) RUSTFLAGS;
+        devShells.default = pkgs.mkShell (filebergPreviewEnvironment
+          // {
+            inherit (commonArgs) RUSTFLAGS;
 
-          LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
-            wayland
-            libxkbcommon
-            fontconfig
-            vulkan-loader
-            libGL
-          ]);
-          LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
-
-          PHOSPHOR_ICONS = "${phosphorIcons}";
-
-          SUBNIRI_LOG_BACKEND = "console";
-
-          # Extra inputs can be added here; cargo and rustc are provided by default.
-          packages =
-            commonArgs.buildInputs
-            ++ commonArgs.nativeBuildInputs
-            ++ (with pkgs; [
-              rustDevshellToolchain
-              cargo-hakari
-              cargo-expand
-              cargo-machete
-              prek
-              uv
-              python314
+            LD_LIBRARY_PATH = lib.makeLibraryPath (with pkgs; [
+              wayland
+              libxkbcommon
+              fontconfig
+              vulkan-loader
               libGL
-              cachix
-              cargo2nix.packages.${system}.cargo2nix
-              (nvim.lib.makeNeovimWithLanguages {
-                inherit pkgs system;
-                languages.rust = {
-                  enable = true;
-                  toolchain = rustDevshellToolchain;
-                };
-              })
             ]);
-        };
+            LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+            PHOSPHOR_ICONS = "${phosphorIcons}";
+
+            SUBNIRI_LOG_BACKEND = "console";
+
+            # Extra inputs can be added here; cargo and rustc are provided by default.
+            packages =
+              commonArgs.buildInputs
+              ++ commonArgs.nativeBuildInputs
+              ++ (with pkgs; [
+                rustDevshellToolchain
+                cargo-hakari
+                cargo-expand
+                cargo-machete
+                prek
+                uv
+                python314
+                libGL
+                cachix
+                cargo2nix.packages.${system}.cargo2nix
+                (nvim.lib.makeNeovimWithLanguages {
+                  inherit pkgs system;
+                  languages.rust = {
+                    enable = true;
+                    toolchain = rustDevshellToolchain;
+                  };
+                })
+              ]);
+          });
       }
     );
   in

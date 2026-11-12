@@ -5,6 +5,7 @@ mod context_menu;
 mod dialogs;
 mod drives;
 mod filesystem;
+mod preview;
 mod tags;
 #[cfg(test)]
 mod test_support;

@@ -40,8 +40,8 @@ cargo run -p file-manager -- /path/to/directory
   Spaces can refine a prefix without
   accidentally opening the focused file. Text fields keep their normal typing.
 - Grid/list switching preserves selection and filters. Sorting keeps folders first.
-- A compact selection/action strip is always present, so first selection does not
-  resize the file viewport or move double-click targets. Details start collapsed;
+- A compact selection/action strip is always present, so selection does not
+  change the file viewport height. Details start collapsed;
   **Info** or context-menu **Properties** expands a fixed-height, internally
   scrollable inspector. Its expansion state survives selection changes, clearing,
   refresh, and navigation for the current window; **Hide info** collapses it.
@@ -66,6 +66,35 @@ cargo run -p file-manager -- /path/to/directory
 
 Directory scans and file operations run off the UI thread. Stale scans cannot
 replace the current directory. Read, creation, and launch errors are displayed.
+
+## File previews
+
+Selecting exactly one file opens a resizable preview pane on the right. Drag its
+divider to change the width. The pane hides when selection clears, contains
+multiple files, or the window becomes narrower than 1000 logical pixels. Initial
+opening waits for the double-click interval so the split cannot move a click
+target between clicks. Double-click and Enter still open files normally.
+The top-right dismiss button hides the pane without clearing selection; selecting
+another file or clearing and reselecting an item enables previews again.
+
+- UTF-8 text and source files show read-only monospace text. Large previews are
+  explicitly truncated at 256 KiB, 2,000 lines, or 2,000 characters per line.
+- Markdown renders headings, lists, tables, and highlighted fenced code. It loads
+  up to 16 bounded local images confined to the document's directory. Remote
+  images and links never trigger network requests; links are inert.
+- Raster images fit the pane, with a 1600-pixel preview edge. Animated images show
+  their first frame. SVG supports text using the bundled font and renders in a
+  memory-limited sandbox. SVGs referencing linked resources or embedded images
+  are rejected. Source and decoder allocation limits reject oversized images.
+- PDFs offer Previous/Next page controls. Video files show a still frame, not
+  playback. Nix supplies Poppler, FFmpeg, resvg, and Bubblewrap. Conversion runs without
+  network access, with read-only selected input, private output, and time/resource
+  limits. If sandboxing is unavailable, content preview fails closed.
+- Folders, symbolic links, unsupported formats, and errors show metadata or a
+  clear explanation. Office documents and archives are not previewed yet.
+
+Preview work runs off the UI thread. Changing selection cancels obsolete work;
+late results cannot replace the current preview. Previews never edit files.
 
 ## Tags
 

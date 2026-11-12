@@ -6,6 +6,10 @@ use iced::{Task, event::Status, keyboard, window};
 impl Message {
 	pub(super) fn is_parent_interaction(&self) -> bool {
 		match self {
+			Self::Preview(message) => !matches!(
+				message,
+				crate::preview::Message::Loaded(..) | crate::preview::Message::Reveal(..)
+			),
 			Self::Trash(message) => !matches!(
 				message,
 				crate::trash::Message::Loaded(..)
@@ -40,6 +44,20 @@ impl Message {
 			),
 			_ => false,
 		}
+	}
+}
+
+#[cfg(test)]
+mod preview_tests {
+	use super::*;
+
+	#[test]
+	fn preview_completions_continue_through_modals_but_page_actions_do_not() {
+		assert!(
+			!Message::Preview(crate::preview::Message::Loaded(1, Err("failed".into())))
+				.is_parent_interaction()
+		);
+		assert!(Message::Preview(crate::preview::Message::Page(2)).is_parent_interaction());
 	}
 }
 

@@ -16,7 +16,7 @@ clap = { workspace = true, features = ["derive"] }
 config.workspace = true
 futures.workspace = true
 dirs = "6.0.0"
-iced.workspace = true
+iced = { workspace = true, features = ["markdown", "highlighter"] }
 iced_runtime.workspace = true
 iced_exwlshell.workspace = true
 ignore = "0.4.26"
@@ -35,6 +35,8 @@ zbus.workspace = true
 zvariant.workspace = true
 nix = { workspace = true, features = ["fs", "process"] }
 libc = "0.2.191"
+tempfile = "3.27.0"
+roxmltree = "0.20.0"
 
 [lints]
 workspace = true
