@@ -25,6 +25,14 @@ pub const APPEARANCE_INTERFACE: InterfaceName<'_> =
 mod nightlight;
 pub use nightlight::*;
 
+mod battery;
+pub use battery::*;
+
+pub const BATTERY_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Battery");
+pub const BATTERY_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked(BatteryProperties::INTERFACE_NAME);
+
 mod spotify;
 pub use spotify::*;
 

@@ -238,6 +238,6 @@ mod tests {
 		assert!(!layout.editing());
 		assert!(!layout.edit_rows(Vec::new()));
 		layout.reload(&ConfigFile::default());
-		assert!(layout.selected().is_empty());
+		assert_eq!(layout.selected(), &[SystemMenuWidgets::Battery]);
 	}
 }

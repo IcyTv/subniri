@@ -40,6 +40,8 @@ async fn main() -> Result<(), Error> {
 	let (shutdown_tx, _) = watch::channel(false);
 	let discovery = daemon::discovery::DiscoveryService::register(connection.clone()).await?;
 	let discovery_task = tokio::spawn(discovery.run(connection.clone(), shutdown_tx.subscribe()));
+	let battery = daemon::battery::BatteryService::register(connection.clone()).await?;
+	let battery_task = tokio::spawn(battery.run(shutdown_tx.subscribe()));
 	let (nightlight_config_tx, _) = watch::channel(config.nightlight.clone());
 	let mut nightlight_supervisor = Box::pin(supervise_nightlight(
 		connection.clone(),
@@ -135,6 +137,7 @@ async fn main() -> Result<(), Error> {
 
 	let _ = shutdown_tx.send(true);
 	let _ = discovery_task.await;
+	let _ = battery_task.await;
 	tokio::join!(nightlight_supervisor, calendar_supervisor);
 	spotify.unregister().await?;
 	homeassistant.unregister().await?;

@@ -194,7 +194,9 @@
       ])
       ++ [
         (plain "system_menu" (
-          (map (row:
+          if settings.systemMenu.rows != null && settings.systemMenu.widgets != null
+          then throw "subniri: use either systemMenu.rows or systemMenu.widgets, not both"
+          else (map (row:
             plain "row" (map (
                 entry:
                   if entry.gap != null && entry.widget != null
@@ -206,8 +208,8 @@
                   else throw "subniri: row entries need either widget or gap"
               )
               row))
-          settings.systemMenu.rows)
-          ++ lib.optionals (settings.systemMenu.widgets != []) [
+          (if settings.systemMenu.rows == null then [] else settings.systemMenu.rows))
+          ++ lib.optionals (settings.systemMenu.widgets != null) [
             (node "widgets" settings.systemMenu.widgets [])
           ]
         ))
@@ -402,13 +404,14 @@ in {
         };
 
         systemMenu.widgets = mkOption {
-          type = types.listOf types.str;
-          default = [];
-          description = "Legacy widget list, arranged in rows of two. Do not combine with systemMenu.rows. Home Assistant entity IDs are accepted.";
+          type = types.nullOr (types.listOf types.str);
+          default = if cfg.settings.systemMenu.rows == null then ["battery"] else null;
+          defaultText = lib.literalExpression ''if systemMenu.rows == null then ["battery"] else null'';
+          description = "Legacy widget list, arranged in rows of two. Do not combine with systemMenu.rows. Home Assistant entity IDs are accepted. An explicit empty list keeps the menu empty.";
         };
 
         systemMenu.rows = mkOption {
-          type = types.listOf (types.listOf (types.submodule {
+          type = types.nullOr (types.listOf (types.listOf (types.submodule {
             options = {
               widget = mkOption {
                 type = types.nullOr types.str;
@@ -427,9 +430,9 @@ in {
                 default = null;
               };
             };
-          }));
-          default = [];
-          description = "Spatial quick-tile rows. Entries contain widget/width/height or gap. Empty lists preserve empty rows. Tall tiles push obstructed tiles rightwards.";
+          })));
+          default = null;
+          description = "Spatial quick-tile rows. Null uses the default widget list; an explicit empty list keeps the menu empty. Entries contain widget/width/height or gap. Empty lists preserve empty rows. Tall tiles push obstructed tiles rightwards.";
           example = [
             [
               {
@@ -564,7 +567,7 @@ in {
       "Legacy Spotify recovery intervals below 60 seconds are clamped to 60.";
     assertions = [
       {
-        assertion = cfg.settings.systemMenu.rows == [] || cfg.settings.systemMenu.widgets == [];
+        assertion = cfg.settings.systemMenu.rows == null || cfg.settings.systemMenu.widgets == null;
         message = "services.subniri.settings.systemMenu: use either rows or the legacy widgets list, not both.";
       }
       {

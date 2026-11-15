@@ -21,6 +21,7 @@ use neo_widgets::{
 use nix::unistd::{Uid, User};
 use zbus::Connection;
 
+mod battery;
 mod bluetooth;
 mod editor;
 mod homeassistant;
@@ -39,6 +40,7 @@ pub enum Message {
 	Wifi(wifi::Message),
 	Bluetooth(bluetooth::Message),
 	Nightlight(nightlight::Message),
+	Battery(battery::Message),
 	Homeassistant(homeassistant::integration::Message),
 
 	OpenPowerMenu,
@@ -110,6 +112,7 @@ pub struct SystemMenu {
 	wifi: Box<wifi::Wifi>,
 	bluetooth: Box<bluetooth::Bluetooth>,
 	nightlight: Box<nightlight::Nightlight>,
+	battery: battery::Battery,
 	homeassistant: homeassistant::integration::Integration,
 
 	context_menus: Vec<ContextPopup>,
@@ -158,6 +161,7 @@ impl SystemMenu {
 			wifi: Box::new(wifi::Wifi::new()),
 			bluetooth: Box::new(bluetooth::Bluetooth::new()),
 			nightlight: Box::new(nightlight::Nightlight::new(config)),
+			battery: battery::Battery::default(),
 			homeassistant,
 
 			context_menus: Vec::new(),
@@ -195,6 +199,7 @@ impl SystemMenu {
 			wifi::Wifi::subscription().map(Message::Wifi),
 			bluetooth::Bluetooth::subscription().map(Message::Bluetooth),
 			nightlight::Nightlight::subscription().map(Message::Nightlight),
+			battery::Battery::subscription().map(Message::Battery),
 			self.homeassistant
 				.subscription()
 				.map(Message::Homeassistant),
@@ -270,6 +275,7 @@ impl SystemMenu {
 			Message::Nightlight(message) => {
 				return self.nightlight.update(message).map(Message::Nightlight);
 			}
+			Message::Battery(message) => self.battery.update(message),
 
 			Message::ChangeBrightness(brightness) => {
 				return self
@@ -363,11 +369,39 @@ impl SystemMenu {
 	}
 
 	fn visible_tiles(&self) -> Vec<config::PlacedTile> {
-		self.preview.clone().unwrap_or_else(|| self.layout.tiles())
+		if self.layout.editing() {
+			self.preview.clone().unwrap_or_else(|| self.layout.tiles())
+		} else {
+			config::resolve_rows(&self.visible_rows()).tiles
+		}
+	}
+
+	fn visible_rows(&self) -> Vec<config::MenuRow> {
+		let rows = self.layout.edit_baseline_rows();
+		if self.layout.editing() || self.battery.visible() {
+			return rows;
+		}
+
+		// Filter presentation only. Saved selection and editor occurrence indices stay intact.
+		rows.into_iter()
+			.filter_map(|row| {
+				let was_empty = row.0.is_empty();
+				let entries = row
+					.0
+					.into_iter()
+					.filter(|entry| {
+						!matches!(entry,
+							config::MenuEntry::Widget(tile) if tile.widget == SystemMenuWidgets::Battery
+						)
+					})
+					.collect::<Vec<_>>();
+				(was_empty || !entries.is_empty()).then_some(config::MenuRow(entries))
+			})
+			.collect()
 	}
 
 	fn grid_size(&self) -> Size {
-		let rows = self.layout.edit_baseline_rows();
+		let rows = self.visible_rows();
 		let tiles = self.visible_tiles();
 		let size = spatial::extent(&tiles, &rows);
 		Size::new(
@@ -470,7 +504,7 @@ impl SystemMenu {
 			Message::HeaderMeasured,
 		));
 
-		let rows = self.layout.edit_baseline_rows();
+		let rows = self.visible_rows();
 		let baseline = self.layout.tiles();
 		let enabled = self.layout.enabled();
 		let visible = self.visible_tiles();
@@ -620,6 +654,7 @@ impl SystemMenu {
 			SystemMenuWidgets::Bluetooth => (phosphor_icon!("bluetooth"), "Bluetooth".to_owned()),
 			SystemMenuWidgets::Nightlight => (phosphor_icon!("moon"), "Nightlight".to_owned()),
 			SystemMenuWidgets::DarkMode => (phosphor_icon!("moon"), "Dark mode".to_owned()),
+			SystemMenuWidgets::Battery => (phosphor_icon!("battery-full"), "Battery".to_owned()),
 			SystemMenuWidgets::Speaker => (phosphor_icon!("speaker-high"), "Speaker".to_owned()),
 			SystemMenuWidgets::Microphone => {
 				(phosphor_icon!("microphone"), "Microphone".to_owned())
@@ -697,6 +732,7 @@ impl SystemMenu {
 		&'a self, widget: &SystemMenuWidgets, size: Size, colors: Colors,
 	) -> Element<'a, Message> {
 		let button = match widget {
+			SystemMenuWidgets::Battery => self.battery.view_tile(size, colors),
 			SystemMenuWidgets::Wifi => self.wifi.view_tile(size, colors).map(Message::Wifi),
 			SystemMenuWidgets::Bluetooth => self
 				.bluetooth
@@ -918,6 +954,70 @@ mod reliability_tests {
 	use crate::modules::test_bus;
 
 	#[test]
+	fn battery_visibility_never_changes_saved_layout_or_editor_indices() {
+		use super::{Message, battery};
+		use config::{
+			MenuEntry, MenuRow, MenuTile,
+			SystemMenuWidgets::{Battery, Wifi},
+		};
+		let mut config = config::ConfigFile::default();
+		config.system_menu = config::SystemMenu::from_rows(vec![
+			MenuRow(vec![MenuEntry::Widget(MenuTile::new(Battery))]),
+			MenuRow(vec![MenuEntry::Widget(MenuTile::new(Wifi))]),
+		]);
+		let mut menu = SystemMenu::new(&config);
+		let saved = menu.layout.configuration();
+		assert_eq!(menu.visible_tiles().len(), 1);
+		assert_eq!(menu.visible_tiles()[0].tile.widget, Wifi);
+		assert_eq!(menu.visible_tiles()[0].row, 0);
+		assert_eq!(menu.grid_size().height, super::spatial::span(1));
+		assert_eq!(menu.layout.selected(), &[Battery, Wifi]);
+
+		let state = daemon_common::BatteryState {
+			present: true,
+			percentage: 63.0,
+			state: 1,
+		};
+		let _ = menu.update(Message::Battery(battery::Message::State(state)));
+		assert_eq!(menu.visible_tiles().len(), 2);
+		assert_eq!(menu.grid_size().height, super::spatial::span(2));
+		let _ = menu.update(Message::Battery(battery::Message::Disconnected));
+		assert_eq!(menu.visible_tiles().len(), 1);
+		assert_eq!(menu.layout.configuration(), saved);
+
+		let _ = menu.update(Message::EditingChanged(true));
+		assert_eq!(menu.visible_tiles()[0].tile.widget, Battery);
+		assert_eq!(menu.visible_tiles()[1].tile.widget, Wifi);
+		assert_eq!(menu.layout.enabled()[0..2], [true, true]);
+		let _ = menu.update(Message::Battery(battery::Message::State(state)));
+		let _ = menu.update(Message::Battery(battery::Message::Disconnected));
+		assert_eq!(menu.visible_tiles()[0].tile.widget, Battery);
+		assert_eq!(menu.layout.configuration(), saved);
+	}
+
+	#[test]
+	fn battery_catalog_available_even_when_not_selected_and_no_backend() {
+		let mut config = config::ConfigFile::default();
+		config.system_menu = config::SystemMenu::from_widgets(Vec::new());
+		let mut menu = SystemMenu::new(&config);
+		assert!(menu.visible_tiles().is_empty());
+		assert_eq!(menu.grid_size().height, 0.0);
+		assert!(
+			menu.layout
+				.available()
+				.contains(&config::SystemMenuWidgets::Battery)
+		);
+
+		let _ = menu.update(super::Message::EditingChanged(true));
+		assert!(
+			menu.visible_tiles()
+				.iter()
+				.any(|tile| tile.tile.widget == config::SystemMenuWidgets::Battery)
+		);
+		assert!(menu.layout.selected().is_empty());
+	}
+
+	#[test]
 	fn theme_updates_follow_effective_appearance_without_closing_or_changing_layout() {
 		use config::AppearanceMode;
 
@@ -976,7 +1076,9 @@ mod reliability_tests {
 
 	#[test]
 	fn empty_menu_catalog_starts_at_first_row_and_fits_its_grid() {
-		let mut menu = SystemMenu::new(&config::ConfigFile::default());
+		let mut config = config::ConfigFile::default();
+		config.system_menu = config::SystemMenu::from_widgets(Vec::new());
+		let mut menu = SystemMenu::new(&config);
 		let _ = menu.update(super::Message::EditingChanged(true));
 		let tiles_per_row = (menu.minimum_columns() / 2) as usize;
 		let rows = config::SystemMenuWidgets::VARIANTS

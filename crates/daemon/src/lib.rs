@@ -1,6 +1,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 pub mod appearance;
+pub mod battery;
 pub mod calendar;
 pub mod discovery;
 pub mod homeassistant;

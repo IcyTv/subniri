@@ -697,6 +697,7 @@ fn system_menu_widget_name<'a>(widget: &'a SystemMenuWidgets) -> &'a str {
 		SystemMenuWidgets::Vpn => "vpn",
 		SystemMenuWidgets::Nightlight => "nightlight",
 		SystemMenuWidgets::DarkMode => "dark-mode",
+		SystemMenuWidgets::Battery => "battery",
 		SystemMenuWidgets::Homeassistant(entity_id) => entity_id,
 	}
 }
@@ -1059,6 +1060,7 @@ pub enum SystemMenuWidgets {
 	Vpn,
 	Nightlight,
 	DarkMode,
+	Battery,
 	#[config(other)]
 	Homeassistant(String),
 }
@@ -1072,6 +1074,7 @@ impl SystemMenuWidgets {
 		Self::Vpn,
 		Self::Nightlight,
 		Self::DarkMode,
+		Self::Battery,
 	];
 }
 
@@ -1080,12 +1083,18 @@ pub use system_menu::{
 	MenuEntry, MenuRow, MenuTile, PlacedTile, ResolvedMenu, resolve_rows, rows_from_tiles,
 };
 
-#[derive(Debug, Default, Clone, Eq, Validate)]
+#[derive(Debug, Clone, Eq, Validate)]
 #[garde(allow_unvalidated)]
 pub struct SystemMenu {
 	/// Legacy ordered list. Migrated into rows of two medium tiles when edited.
 	pub widgets: Vec<SystemMenuWidgets>,
 	pub rows: Vec<MenuRow>,
+}
+
+impl Default for SystemMenu {
+	fn default() -> Self {
+		Self::from_widgets(vec![SystemMenuWidgets::Battery])
+	}
 }
 
 impl PartialEq for SystemMenu {
@@ -1219,7 +1228,10 @@ mod tests {
 	fn dark_mode_tile_round_trips_without_changing_default_layout() {
 		let (_, defaults) = ConfigFile::parse_validated("").unwrap();
 
-		assert!(defaults.system_menu.widgets.is_empty());
+		assert_eq!(
+			defaults.system_menu.widgets,
+			vec![SystemMenuWidgets::Battery]
+		);
 		assert!(defaults.system_menu.rows.is_empty());
 		assert!(SystemMenuWidgets::VARIANTS.contains(&SystemMenuWidgets::DarkMode));
 

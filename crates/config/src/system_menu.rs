@@ -204,7 +204,8 @@ fn no_arguments(node: &KdlNode) -> Result<(), ConfigError> {
 impl Config for SystemMenu {
 	fn from_kdl_node(node: &KdlNode) -> Result<Self, ConfigError> {
 		no_arguments(node)?;
-		let mut result = Self::default();
+		// A saved layout, including an explicitly empty one, replaces new-install defaults.
+		let mut result = Self::from_widgets(Vec::new());
 		let mut legacy = false;
 		for child in node.children().iter().flat_map(|doc| doc.nodes()) {
 			match child.name().value() {
@@ -354,6 +355,7 @@ impl ConfigSerialize for SystemMenu {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
 	fn parse(text: &str) -> Result<SystemMenu, ConfigError> {
 		let doc: KdlDocument = text.parse()?;
 		SystemMenu::from_kdl_node(
@@ -361,6 +363,40 @@ mod tests {
 				.first()
 				.ok_or_else(|| ConfigError::missing_field("system_menu", None))?,
 		)
+	}
+
+	#[test]
+	fn battery_defaults_never_extend_explicit_layouts() -> Result<(), ConfigError> {
+		assert_eq!(
+			SystemMenu::default().widgets,
+			vec![SystemMenuWidgets::Battery]
+		);
+
+		for text in [
+			"system_menu {}",
+			"system_menu { widgets; }",
+			"system_menu { row {}; }",
+		] {
+			let menu = parse(text)?;
+			assert!(menu.resolve().tiles.is_empty());
+			let mut node = KdlNode::new("system_menu");
+			menu.apply_to_kdl_node(&mut node)?;
+			assert_eq!(SystemMenu::from_kdl_node(&node)?, menu);
+		}
+
+		for text in [
+			"system_menu { widgets wifi; }",
+			"system_menu { row { widget \"wifi\"; }; }",
+		] {
+			let menu = parse(text)?;
+			assert_eq!(menu.resolve().tiles.len(), 1);
+			assert_eq!(menu.resolve().tiles[0].tile.widget, SystemMenuWidgets::Wifi);
+		}
+		assert_eq!(
+			parse("system_menu { widgets battery; }")?,
+			SystemMenu::default()
+		);
+		Ok(())
 	}
 
 	#[test]
