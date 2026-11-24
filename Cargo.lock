@@ -4884,6 +4884,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "lockscreen"
+version = "0.0.1"
+dependencies = [
+ "iced",
+ "iced_exwlshell",
+ "iced_wayland_subscriber",
+ "jiff",
+ "libc",
+ "neo-widgets",
+ "nix 0.31.3",
+ "tempfile",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
 name = "log"
 version = "0.0.1"
 dependencies = [

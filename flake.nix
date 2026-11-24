@@ -255,6 +255,7 @@
           runtimeLibs ? waylandRuntimeLibs,
           wrapArgs ? [],
           extraAttrs ? {},
+          extraPostInstall ? "",
           desktopEntry ? null,
         }: let
           desktopItem = pkgs.makeDesktopItem ({
@@ -292,7 +293,8 @@
                     cp ${desktopItem}/share/applications/*.desktop "$bin/share/applications/"
                     cp -r ${applicationIcon}/share/icons "$bin/share/"
                     cp -r ${applicationIcon}/share/doc "$bin/share/"
-                  '')
+                  ''
+                  + extraPostInstall)
                 drv;
               }
               // lib.optionalAttrs (desktopEntry != null) {
@@ -451,6 +453,16 @@
                 };
               })
               (mkWrappedGuiOverride {
+                name = "lockscreen";
+                binName = "frostguard";
+                buildInputs = guiBuildInputs ++ [pkgs.pam];
+                runtimeLibs = waylandRuntimeLibs ++ [pkgs.pam];
+                extraAttrs.FROSTGUARD_PAM_VENDOR_DIR = "${pkgs.pam}/etc/pam.d";
+                extraPostInstall = ''
+                  install -Dm644 ${./crates/lockscreen/pam/frostguard} "$bin/share/pam.d/frostguard"
+                '';
+              })
+              (mkWrappedGuiOverride {
                 name = "settings";
                 binName = "snowconf";
                 desktopEntry = {
@@ -561,6 +573,10 @@
           {
             name = "iceout";
             package = rustPkgs.workspace.logout {};
+          }
+          {
+            name = "frostguard";
+            package = rustPkgs.workspace.lockscreen {};
           }
           {
             name = "snowconf";
