@@ -1,0 +1,27 @@
+[package]
+name = "lockscreen"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+description = "Manual Wayland session lock for Subniri"
+
+[[bin]]
+name = "frostguard"
+path = "src/main.rs"
+
+[dependencies]
+iced.workspace = true
+iced_exwlshell.workspace = true
+iced_wayland_subscriber.workspace = true
+jiff.workspace = true
+libc = "0.2"
+nix.workspace = true
+neo-widgets.workspace = true
+tokio.workspace = true
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints]
+workspace = true

@@ -20,6 +20,7 @@ args@{
     "indexer/default"
     "indexer-common/default"
     "launcher/default"
+    "lockscreen/default"
     "logout/default"
     "polkit-agent/default"
     "settings/default"
@@ -43,7 +44,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "1679f7d90d6bfe137acd28c5e9faa07a1069dddea537ead8756b6602e49487cc";
+  nixifiedLockHash = "b3b9b57168e4b99b4d783f1971b9a13f109fd384598ab7b1664ebf829fab408c";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -89,6 +90,7 @@ in
     indexer = rustPackages.unknown.indexer."0.0.1";
     indexer-common = rustPackages.unknown.indexer-common."0.0.1";
     launcher = rustPackages.unknown.launcher."0.0.1";
+    lockscreen = rustPackages.unknown.lockscreen."0.0.1";
     logout = rustPackages.unknown.logout."0.0.1";
     polkit-agent = rustPackages.unknown.polkit-agent."0.0.1";
     settings = rustPackages.unknown.settings."0.0.1";
@@ -6914,6 +6916,27 @@ in
     ];
     dependencies = {
       scopeguard = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".scopeguard."1.2.0" { inherit profileName; }).out;
+    };
+  });
+  
+  "unknown".lockscreen."0.0.1" = overridableMkRustCrate (profileName: rec {
+    name = "lockscreen";
+    version = "0.0.1";
+    registry = "unknown";
+    src = fetchCrateLocal workspaceSrc;
+    dependencies = {
+      iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
+      iced_exwlshell = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_exwlshell."0.20.1" { inherit profileName; }).out;
+      iced_wayland_subscriber = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_wayland_subscriber."0.20.1" { inherit profileName; }).out;
+      jiff = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".jiff."0.2.39" { inherit profileName; }).out;
+      libc = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".libc."0.2.191" { inherit profileName; }).out;
+      neo_widgets = (rustPackages."unknown".neo-widgets."0.0.1" { inherit profileName; }).out;
+      nix = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".nix."0.31.3" { inherit profileName; }).out;
+      tokio = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tokio."1.54.1" { inherit profileName; }).out;
+      zeroize = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".zeroize."1.9.1" { inherit profileName; }).out;
+    };
+    devDependencies = {
+      tempfile = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".tempfile."3.27.0" { inherit profileName; }).out;
     };
   });
   

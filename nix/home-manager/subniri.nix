@@ -38,6 +38,10 @@
       package = packages.iceout;
       description = "iceout (logout) application";
     };
+    frostguard = {
+      package = packages.frostguard;
+      description = "manual Subniri session lock application";
+    };
     snowconf = {
       package = packages.snowconf;
       description = "Snowconf settings application";
