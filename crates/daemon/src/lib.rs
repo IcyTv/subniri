@@ -6,7 +6,9 @@ pub mod calendar;
 pub mod discovery;
 pub mod homeassistant;
 pub mod nightlight;
+pub mod notifications;
 pub(crate) mod observed;
+pub mod sound;
 pub mod spotify;
 
 pub use daemon_common::*;

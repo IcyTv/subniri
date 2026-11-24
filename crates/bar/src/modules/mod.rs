@@ -10,6 +10,7 @@ mod clock;
 mod connection;
 mod media_controls;
 mod network;
+pub(crate) mod notifications;
 pub(crate) mod system_menu;
 mod taskbar;
 mod volume;
@@ -22,6 +23,7 @@ mod layout_tests;
 
 #[derive(Debug)]
 pub enum Module {
+	Notifications(notifications::Notifications),
 	SystemMenu(system_menu::SystemMenu),
 	Network(network::integration::Integration),
 	Bluetooth(bluetooth::integration::Integration),
@@ -33,6 +35,7 @@ pub enum Module {
 
 #[derive(Debug, Clone)]
 pub enum ModuleMessage {
+	Notifications(notifications::Message),
 	ConfigUpdated(ConfigFile),
 	AppearanceChanged {
 		theme: config::AppearanceMode,
@@ -85,6 +88,7 @@ impl ModuleMessage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ModuleKind {
+	Notifications,
 	SystemMenu,
 	MediaControls,
 	Volume,
@@ -108,6 +112,10 @@ fn module_label<'a, Message: 'a>(
 }
 
 impl Module {
+	pub fn notifications(config: &ConfigFile) -> Self {
+		Self::Notifications(notifications::Notifications::new(&config.notifications))
+	}
+
 	pub fn clock() -> Self {
 		Self::Clock(clock::Clock::new())
 	}
@@ -143,6 +151,9 @@ impl Module {
 	}
 
 	pub fn popup_opened(&mut self, id: Id, maximum: iced::Size) {
+		if let Self::Notifications(notifications) = self {
+			notifications.opened();
+		}
 		if let Self::SystemMenu(menu) = self {
 			menu.popup_opened(id, maximum);
 		} else {
@@ -190,6 +201,17 @@ impl Module {
 
 	pub fn update(&mut self, message: ModuleMessage) -> Task<ModuleMessage> {
 		match (self, message) {
+			(Self::Notifications(n), ModuleMessage::ConfigUpdated(config)) => {
+				n.configure(&config.notifications);
+			}
+			(Self::Notifications(n), ModuleMessage::PopupClosed) => n.closed(),
+			(
+				Self::Notifications(_),
+				ModuleMessage::Notifications(notifications::Message::Open(bounds)),
+			) => return Task::done(ModuleMessage::OpenPopup(ModuleKind::Notifications, bounds)),
+			(Self::Notifications(n), ModuleMessage::Notifications(message)) => {
+				return n.update(message).map(ModuleMessage::Notifications);
+			}
 			(Self::SystemMenu(menu), ModuleMessage::AppearanceChanged { theme, connected }) => {
 				menu.appearance_changed(theme, connected);
 			}
@@ -308,6 +330,7 @@ impl Module {
 
 	pub fn subscription(&self) -> Subscription<ModuleMessage> {
 		match self {
+			Self::Notifications(n) => n.subscription().map(ModuleMessage::Notifications),
 			Self::Bluetooth(bluetooth) => bluetooth.subscription().map(ModuleMessage::Bluetooth),
 			Self::Volume(Ok(volume)) => volume.subscription().map(ModuleMessage::Volume),
 			Self::Clock(clock) => clock.subscription().map(ModuleMessage::Clock),
@@ -323,6 +346,7 @@ impl Module {
 
 	pub fn view(&self, output_name: Option<&str>, colors: Colors) -> Element<'_, ModuleMessage> {
 		match self {
+			Self::Notifications(n) => n.view(colors).map(ModuleMessage::Notifications),
 			Self::SystemMenu(menu) => menu
 				.view(colors)
 				.map(ModuleMessage::SystemMenu)
@@ -360,6 +384,7 @@ impl Module {
 
 	pub fn view_popup(&self, colors: Colors) -> Element<'_, ModuleMessage> {
 		match self {
+			Self::Notifications(n) => n.view_popup(colors).map(ModuleMessage::Notifications),
 			Self::MediaControls(controls) => controls
 				.view_popup(colors)
 				.map(ModuleMessage::MediaControls),

@@ -88,6 +88,7 @@ struct Bar {
 	right: Vec<Module>,
 
 	popups: popups::Popups,
+	toast_surfaces: HashMap<Id, (String, usize)>,
 	layer_heights: HashMap<Id, u32>,
 	window_output_names: HashMap<Id, String>,
 	output_sizes: HashMap<Id, iced::Size>,
@@ -112,9 +113,11 @@ impl Bar {
 				Module::volume(),
 				Module::network(),
 				Module::bluetooth(),
+				Module::notifications(&config_file),
 				Module::clock(),
 			],
 			popups: popups::Popups::default(),
+			toast_surfaces: HashMap::new(),
 			layer_heights: HashMap::new(),
 			window_output_names: HashMap::new(),
 			output_sizes: HashMap::new(),
@@ -139,6 +142,26 @@ impl Bar {
 
 	#[allow(clippy::too_many_lines)]
 	fn update(&mut self, message: BarMessage) -> Task<BarMessage> {
+		let update = self.update_inner(message);
+		// All bars share one bell state. Choose the lexicographically first live
+		// bar output, independent of center interactions or map iteration order.
+		let bar_output = self
+			.window_output_names
+			.iter()
+			.filter(|(id, _)| {
+				self.layer_heights.contains_key(id)
+					&& !self.toast_surfaces.contains_key(id)
+					&& self.popups.route(**id).is_none()
+			})
+			.map(|(_, name)| name.clone())
+			.min();
+		if let Some(notifications) = self.notifications_mut() {
+			notifications.bar_output(bar_output);
+		}
+		Task::batch([update, self.sync_toasts()])
+	}
+
+	fn update_inner(&mut self, message: BarMessage) -> Task<BarMessage> {
 		match message {
 			BarMessage::Appearance(event) => {
 				self.appearance.update(event);
@@ -165,7 +188,24 @@ impl Bar {
 				self.config_doc = doc;
 				self.config_file = config.clone();
 
-				self.broadcast_module_message(ModuleMessage::ConfigUpdated(config))
+				let disabled = !config.notifications.enabled;
+				let update = self.broadcast_module_message(ModuleMessage::ConfigUpdated(config));
+				if disabled {
+					let notification_popup = self
+						.popups
+						.topmost()
+						.and_then(|id| self.popups.route(id))
+						.is_some_and(|route| {
+							matches!(
+								self.module(route.section, route.index),
+								Some(Module::Notifications(_))
+							)
+						});
+					if notification_popup {
+						return Task::batch([update, self.close_open_popup()]);
+					}
+				}
+				update
 			}
 			BarMessage::Module(_, _, _, ModuleMessage::SaveSystemMenuLayout(layout)) => {
 				self.config_file.system_menu = layout.clone();
@@ -229,6 +269,13 @@ impl Bar {
 				index,
 				ModuleMessage::OpenPopup(kind, bounds),
 			) => {
+				if kind == ModuleKind::Notifications {
+					let output =
+						source_id.and_then(|id| self.window_output_names.get(&id).cloned());
+					if let Some(n) = self.notifications_mut() {
+						n.opened_on(output);
+					}
+				}
 				let id = Id::unique();
 				let change = self
 					.popups
@@ -396,10 +443,38 @@ impl Bar {
 				}
 			}
 			BarMessage::Module(_, _, _, ModuleMessage::ClosePopup) => self.close_open_popup(),
+			BarMessage::ShellEvent(
+				ShellEvent::OutputAdded(info) | ShellEvent::OutputUpdated(info),
+			) => {
+				if let Some(name) = info.name {
+					if let Some(n) = self.notifications_mut() {
+						n.output(name, true);
+					}
+				}
+				Task::none()
+			}
+			BarMessage::ShellEvent(ShellEvent::OutputRemoved(info)) => {
+				if let Some(name) = info.name {
+					if let Some(n) = self.notifications_mut() {
+						n.output(name, false);
+					}
+				}
+				Task::none()
+			}
 			BarMessage::ShellEvent(ShellEvent::Presented {
 				window,
 				content_updated_at,
 			}) => {
+				if let Some((output, height)) = self.toast_surfaces.get(&window).cloned() {
+					let maximum = self.toast_maximum(&output);
+					if let Some(n) = self.notifications_mut() {
+						if n.toast_height(&output, maximum) == Some(height as u32) {
+							if let Some(queue) = n.toasts.get_mut(&output) {
+								queue.presented(content_updated_at);
+							}
+						}
+					}
+				}
 				if let Some(route) = self
 					.popups
 					.route(window)
@@ -493,7 +568,119 @@ impl Bar {
 		}
 	}
 
+	fn notifications_mut(&mut self) -> Option<&mut modules::notifications::Notifications> {
+		self.right.iter_mut().find_map(|m| match m {
+			Module::Notifications(n) => Some(n),
+			_ => None,
+		})
+	}
+
+	fn toast_maximum(&self, output: &str) -> u32 {
+		self.window_output_names
+			.iter()
+			.find_map(|(id, name)| {
+				(name == output)
+					.then(|| self.output_sizes.get(id))
+					.flatten()
+			})
+			.map(|size| (size.height - BAR_HEIGHT as f32 - 12.0).max(1.0) as u32)
+			.unwrap_or(720)
+	}
+
+	fn sync_toasts(&mut self) -> Task<BarMessage> {
+		use iced_exwlshell::reexport::{Layer, NewLayerShellSettings, OutputOption};
+		let maxima: HashMap<String, u32> = self
+			.window_output_names
+			.values()
+			.map(|name| (name.clone(), self.toast_maximum(name)))
+			.collect();
+		if let Some(n) = self.notifications_mut() {
+			n.sync_layouts(|output| maxima.get(output).copied().unwrap_or(720));
+		}
+		let wanted: HashMap<String, usize> = self
+			.right
+			.iter()
+			.find_map(|m| match m {
+				Module::Notifications(n) => Some(
+					n.toasts
+						.iter()
+						.filter_map(|(output, queue)| {
+							(!queue.visible.is_empty()).then(|| {
+								let maximum = self.toast_maximum(output);
+								(
+									output.clone(),
+									n.toast_height(output, maximum).unwrap_or(1) as usize,
+								)
+							})
+						})
+						.collect(),
+				),
+				_ => None,
+			})
+			.unwrap_or_default();
+		let mut tasks = Vec::new();
+		let mut changed_outputs = Vec::new();
+		let stale: Vec<_> = self
+			.toast_surfaces
+			.iter()
+			.filter(|(_, (output, _))| !wanted.contains_key(output))
+			.map(|(id, _)| *id)
+			.collect();
+		for id in stale {
+			self.toast_surfaces.remove(&id);
+			tasks.push(Task::done(BarMessage::RemoveWindow(id)));
+		}
+		for (output, height) in wanted {
+			if let Some((id, (_, previous_height))) = self
+				.toast_surfaces
+				.iter_mut()
+				.find(|(_, (name, _))| name == &output)
+			{
+				if *previous_height != height {
+					*previous_height = height;
+					changed_outputs.push(output.clone());
+					tasks.push(Task::done(BarMessage::LayoutChange {
+						id: *id,
+						anchor: Anchor::Top | Anchor::Right,
+						size: LayerSize::px(modules::notifications::TOAST_WIDTH, height as u32),
+					}));
+				}
+				continue;
+			}
+			let id = Id::unique();
+			changed_outputs.push(output.clone());
+			self.toast_surfaces.insert(id, (output.clone(), height));
+			tasks.push(Task::done(BarMessage::NewLayerShell {
+				id,
+				settings: NewLayerShellSettings {
+					size: LayerSize::px(
+						modules::notifications::TOAST_WIDTH,
+						(height as u32).max(1),
+					),
+					anchor: Anchor::Top | Anchor::Right,
+					layer: Layer::Overlay,
+					exclusive_zone: Some(0),
+					// exclusive_zone 0 already places the surface below the bar's zone.
+					margin: Some((0, 8, 0, 0)),
+					keyboard_interactivity: KeyboardInteractivity::None,
+					output_option: OutputOption::OutputName(output),
+					namespace: Some("polarbar-notifications".into()),
+					..Default::default()
+				},
+			}));
+		}
+		if let Some(n) = self.notifications_mut() {
+			for output in changed_outputs {
+				if let Some(q) = n.toasts.get_mut(&output) {
+					q.surface_changed();
+				}
+			}
+		}
+		Task::batch(tasks)
+	}
+
 	fn window_closed(&mut self, id: Id) -> Task<BarMessage> {
+		self.toast_surfaces.remove(&id);
 		self.layer_heights.remove(&id);
 		self.window_output_names.remove(&id);
 		self.output_sizes.remove(&id);
@@ -549,7 +736,7 @@ impl Bar {
 	}
 
 	fn sync_layer_scale(&mut self, id: Id) -> Task<BarMessage> {
-		if self.popups.route(id).is_some() {
+		if self.popups.route(id).is_some() || self.toast_surfaces.contains_key(&id) {
 			return Task::none();
 		}
 
@@ -571,12 +758,32 @@ impl Bar {
 		])
 	}
 
-	fn scale_factor(&self, _id: Id) -> f32 {
+	fn scale_factor(&self, id: Id) -> f32 {
+		if self.toast_surfaces.contains_key(&id) {
+			return 1.0;
+		}
 		BAR_SCALE
 	}
 
 	fn view(&self, id: iced::window::Id) -> Element<'_, BarMessage> {
 		let colors = self.appearance.colors();
+		if let Some((output, _)) = self.toast_surfaces.get(&id) {
+			if let Some((index, Module::Notifications(n))) = self
+				.right
+				.iter()
+				.enumerate()
+				.find(|(_, m)| matches!(m, Module::Notifications(_)))
+			{
+				return n.view_toasts(output, colors).map(move |message| {
+					BarMessage::Module(
+						Some(id),
+						Section::Right,
+						index,
+						ModuleMessage::Notifications(message),
+					)
+				});
+			}
+		}
 		if let Some(popup) = self.popups.route(id).filter(|route| route.depth.is_some()) {
 			let depth = popup.depth.unwrap_or(0);
 			if let Some(module) = self.module(popup.section, popup.index) {
@@ -636,6 +843,7 @@ impl Bar {
 		modules
 			.iter()
 			.enumerate()
+			.filter(|(_, module)| !matches!(module, Module::Notifications(n) if !n.enabled()))
 			.fold(row![], |row, (index, module)| {
 				row.push(
 					module
@@ -761,13 +969,23 @@ impl Bar {
 		];
 		// Only presentation waiters should turn feedback into model updates;
 		// forwarding every presented frame would create a perpetual redraw loop.
-		let presentation_windows = self
+		let mut presentation_windows = self
 			.left
 			.iter()
 			.chain(&self.center)
 			.chain(&self.right)
 			.filter_map(Module::presentation_window)
 			.collect::<Vec<_>>();
+		presentation_windows.extend(self.toast_surfaces.iter().filter_map(|(id, (output, _))| {
+			self.right.iter().find_map(|module| match module {
+				Module::Notifications(n) => n
+					.toasts
+					.get(output)
+					.filter(|q| q.awaiting_presentation())
+					.map(|_| *id),
+				_ => None,
+			})
+		}));
 		if !presentation_windows.is_empty() {
 			subscriptions.push(
 				self.shell_events
@@ -1037,6 +1255,7 @@ mod tests {
 			center: Vec::new(),
 			right: Vec::new(),
 			popups: popups::Popups::default(),
+			toast_surfaces: HashMap::new(),
 			layer_heights: HashMap::new(),
 			window_output_names: HashMap::new(),
 			output_sizes: HashMap::new(),

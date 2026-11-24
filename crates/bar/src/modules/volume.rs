@@ -54,6 +54,9 @@ use crate::modules::{ICON_HEIGHT, MODULE_HEIGHT, MODULE_RADIUS};
 #[cfg(test)]
 mod tests;
 
+// Used from S2, when the live module moves to libpipewire.
+mod pod;
+
 mod writer;
 
 #[derive(Debug, Clone)]

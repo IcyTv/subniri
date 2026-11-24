@@ -20,6 +20,9 @@ use notify::{
 	event::{CreateKind, ModifyKind, RemoveKind},
 };
 
+pub mod notifications;
+pub use notifications::{NotificationCenterLayout, NotificationToastPlacement, Notifications};
+
 const CONFIG_WATCH_DEBOUNCE: Duration = Duration::from_millis(250);
 const CONFIG_OVERRIDE_ENV: &str = "SUBNIRI_CONFIG_OVERRIDE_FILE";
 
@@ -38,6 +41,10 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub appearance: Appearance,
+	/// Notification bell, center, and toast presentation preferences.
+	#[config(default)]
+	#[garde(dive)]
+	pub notifications: Notifications,
 	/// Configuration for controlling the behavior of the nightlight.
 	/// Temperature controls the color temperature (like with a light bulb) in [K]elvin. Lower means
 	/// more red.

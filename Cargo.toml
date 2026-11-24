@@ -48,6 +48,7 @@ lazy-regex = "3.6.1"
 launcher-common = { path = "./crates/launcher-common" }
 libpulse-binding = { version = "=2.26.0", features = ["pa_v15"] }
 libpulse-tokio = "0.1.1"
+pipewire = "0.10.1"
 librespot-core = { git = "https://github.com/librespot-org/librespot", rev = "99b6088bf3ea028f90192676ac1a337fa4b2ed12", default-features = false, features = ["rustls-tls-native-roots"] }
 log = { path = "./crates/log" }
 lru = "0.18.0"

@@ -37,6 +37,7 @@ neo-widgets.workspace = true
 niri-ipc.workspace = true
 nix.workspace = true
 nmrs.workspace = true
+pipewire.workspace = true
 pipewire-native = "0.1.4"
 pipewire-native-spa = "0.1.4"
 reqwest.workspace = true
@@ -44,6 +45,7 @@ serde_json.workspace = true
 strum = { version = "0.28.0", features = ["derive"] }
 tokio.workspace = true
 url.workspace = true
+usvg = { version = "=0.45.1", default-features = false }
 utilities.workspace = true
 wayland-client.workspace = true
 zbus.workspace = true
@@ -51,6 +53,7 @@ zvariant.workspace = true
 zbus_xml.workspace = true
 serde = { workspace = true, features = ["derive"] }
 chrono = "0.4.45"
+itertools = "0.15.0"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

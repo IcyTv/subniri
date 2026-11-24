@@ -39,6 +39,9 @@ pub use spotify::*;
 mod homeassistant;
 pub use homeassistant::*;
 
+mod notifications;
+pub use notifications::*;
+
 pub const DEFAULT_BUS_NAME: BusName<'_> =
 	BusName::from_static_str_checked("de.icytv.subniri.Daemon");
 
@@ -63,3 +66,8 @@ pub const HOMEASSISTANT_OBJECT_PATH: ObjectPath<'_> =
 	ObjectPath::from_static_str_checked("/de/icytv/subniri/Homeassistant");
 pub const HOMEASSISTANT_INTERFACE: InterfaceName<'_> =
 	InterfaceName::from_static_str_checked("de.icytv.subniri.Homeassistant");
+
+pub const NOTIFICATIONS_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/Notifications");
+pub const NOTIFICATIONS_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked("de.icytv.subniri.Notifications");

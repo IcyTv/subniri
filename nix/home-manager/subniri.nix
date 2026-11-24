@@ -96,6 +96,21 @@
 
   systemdComponentUnits = map (name: "${name}.service") (builtins.attrNames systemdComponents);
 
+  soundThemePackage = cfg.settings.notifications.soundThemePackage;
+
+  # systemd Environment= cannot reference the inherited XDG_DATA_DIRS, so prepend the sound theme
+  # package's share directory in a wrapper while keeping the inherited value (or the XDG default).
+  mkExecStart = name: component: let
+    exe = "${component.package}/bin/${componentDefinitions.${name}.bin}";
+  in
+    if name == "permafrostd" && soundThemePackage != null
+    then
+      toString (pkgs.writeShellScript "permafrostd-with-sound-theme" ''
+        export XDG_DATA_DIRS="${soundThemePackage}/share:''${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
+        exec ${exe} "$@"
+      '')
+    else exe;
+
   mkService = name: component: {
     Unit = {
       Description = componentDefinitions.${name}.description;
@@ -105,7 +120,7 @@
 
     Service =
       {
-        ExecStart = "${component.package}/bin/${componentDefinitions.${name}.bin}";
+        ExecStart = mkExecStart name component;
         Environment =
           lib.optionals cfg.config.enable [
             "SUBNIRI_CONFIG_FILE=${configPath}"
@@ -149,6 +164,15 @@
     serialize.nodes (
       [
         (plain "appearance" [(leaf "theme" settings.appearance.theme)])
+        (plain "notifications" [
+          (leaf "enabled" settings.notifications.enable)
+          (leaf "center_layout" settings.notifications.centerLayout)
+          (leaf "toast_placement" settings.notifications.toastPlacement)
+          (leaf "max_visible" settings.notifications.maxVisible)
+          (leaf "default_timeout_ms" settings.notifications.defaultTimeoutMs)
+          (leaf "sound" settings.notifications.sound)
+          (leaf "sound_theme" settings.notifications.soundTheme)
+        ])
         (plain "nightlight" (
           lib.optionals settings.nightlight.enable [
             (flag "enabled")
@@ -311,6 +335,57 @@ in {
           type = types.enum ["light" "dark"];
           default = "light";
           description = "Shared colour scheme for Subniri interfaces.";
+        };
+
+        notifications = {
+          enable = mkOption {
+            type = types.bool;
+            default = true;
+            description = "Whether to show the notification bell and toast popups. Notification storage remains enabled.";
+          };
+
+          centerLayout = mkOption {
+            type = types.enum ["newest-first" "grouped-by-app"];
+            default = "newest-first";
+            description = "How to arrange notifications in the notification center.";
+          };
+
+          toastPlacement = mkOption {
+            type = types.enum ["focused-output" "bar-output" "all-outputs"];
+            default = "focused-output";
+            description = "Which outputs should display notification toast popups.";
+          };
+
+          maxVisible = mkOption {
+            type = types.ints.between 1 10;
+            default = 3;
+            description = "Maximum number of notification toast popups visible at once.";
+          };
+
+          defaultTimeoutMs = mkOption {
+            type = types.ints.between 1 600000;
+            default = 5000;
+            description = "Toast timeout in milliseconds when the sender requests the default timeout.";
+          };
+
+          sound = mkOption {
+            type = types.bool;
+            default = true;
+            description = "Whether to play notification sounds. Master switch for sound-file hints and themed sounds.";
+          };
+
+          soundTheme = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            description = "XDG sound theme used for themed notification sounds. null auto-detects an installed theme (the user's GTK sound theme, then freedesktop, then any installed theme); a name explicitly overrides detection. Use sound = false to disable playback.";
+          };
+
+          soundThemePackage = mkOption {
+            type = types.nullOr types.package;
+            default = null;
+            example = lib.literalExpression "pkgs.sound-theme-freedesktop";
+            description = "Package providing sound themes under share/sounds. When set, its share directory is prepended to the XDG_DATA_DIRS of the permafrostd user service, so its themes are available to auto-detection and explicit soundTheme names. Requires the systemd integration.";
+          };
         };
 
         nightlight = {
@@ -577,6 +652,23 @@ in {
       {
         assertion = cfg.config.target != cfg.config.overrideTarget;
         message = "services.subniri.config.target and overrideTarget must be different paths.";
+      }
+      {
+        # Mirrors config::notifications::is_valid_sound_component, which is authoritative. This
+        # byte-oriented check cannot reject C1 control characters (U+0080 to U+009F).
+        assertion = let
+          theme = cfg.settings.notifications.soundTheme;
+        in
+          theme
+          == null
+          || (theme
+            != ""
+            && theme != "."
+            && theme != ".."
+            && !lib.hasInfix ".." theme
+            && builtins.stringLength theme <= 255
+            && builtins.match "[^[:cntrl:]/\\\\]*" theme != null);
+        message = "services.subniri.settings.notifications.soundTheme must be null or a non-empty theme name of at most 255 bytes without path separators, \"..\", or control characters.";
       }
       {
         assertion = cfg.settings.nightlight.useLocation -> cfg.settings.nightlight.dawn == null;

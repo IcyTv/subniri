@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use config::ConfigFile;
-use daemon::{calendar, homeassistant, nightlight, spotify};
+use daemon::{calendar, homeassistant, nightlight, notifications, sound, spotify};
 use daemon_common::DEFAULT_BUS_NAME;
 use futures::{StreamExt, pin_mut};
 use sea_orm::{ConnectOptions, Database, DatabaseConnection};
@@ -53,6 +53,14 @@ async fn main() -> Result<(), Error> {
 		db.clone(),
 		shutdown_tx.subscribe(),
 	));
+	let (sound_player, sound_worker) =
+		sound::SoundPlayer::spawn(&config.notifications, shutdown_tx.subscribe());
+	let notifications_state = notifications::NotificationsState::new(sound_player.clone());
+	notifications_state.register(&connection).await?;
+	let mut notifications_supervisor = Box::pin(supervise_notifications(
+		notifications_state.clone(),
+		shutdown_tx.subscribe(),
+	));
 	let mut shutdown_signal = Box::pin(wait_for_shutdown_signal());
 
 	'daemon: loop {
@@ -70,6 +78,13 @@ async fn main() -> Result<(), Error> {
 						log::error!("Nightlight supervisor stopped; restarting it");
 						nightlight_supervisor = Box::pin(supervise_nightlight(
 							connection.clone(), nightlight_config_tx.subscribe(), shutdown_tx.subscribe()
+						));
+						continue;
+					}
+					() = &mut notifications_supervisor => {
+						log::error!("Notifications supervisor stopped; restarting it");
+						notifications_supervisor = Box::pin(supervise_notifications(
+							notifications_state.clone(), shutdown_tx.subscribe()
 						));
 						continue;
 					}
@@ -114,6 +129,9 @@ async fn main() -> Result<(), Error> {
 							if new_config.homeassistant != config.homeassistant {
 								homeassistant.reconfigure(new_config.homeassistant.clone()).await;
 							}
+							if new_config.notifications != config.notifications {
+								sound_player.reconfigure(&new_config.notifications);
+							}
 							config = new_config;
 						}
 						Err(error) => log::error!("Failed to reload config: {error}"),
@@ -123,6 +141,12 @@ async fn main() -> Result<(), Error> {
 					log::error!("Nightlight supervisor stopped; restarting it");
 					nightlight_supervisor = Box::pin(supervise_nightlight(
 						connection.clone(), nightlight_config_tx.subscribe(), shutdown_tx.subscribe()
+					));
+				}
+				() = &mut notifications_supervisor => {
+					log::error!("Notifications supervisor stopped; restarting it");
+					notifications_supervisor = Box::pin(supervise_notifications(
+						notifications_state.clone(), shutdown_tx.subscribe()
 					));
 				}
 				() = &mut calendar_supervisor => {
@@ -138,7 +162,12 @@ async fn main() -> Result<(), Error> {
 	let _ = shutdown_tx.send(true);
 	let _ = discovery_task.await;
 	let _ = battery_task.await;
-	tokio::join!(nightlight_supervisor, calendar_supervisor);
+	tokio::join!(
+		nightlight_supervisor,
+		calendar_supervisor,
+		notifications_supervisor
+	);
+	sound_worker.join().await;
 	spotify.unregister().await?;
 	homeassistant.unregister().await?;
 	db.close().await?;
@@ -247,6 +276,43 @@ async fn supervise_calendar(
 	}
 }
 
+async fn supervise_notifications(
+	state: notifications::NotificationsState, mut shutdown: watch::Receiver<bool>,
+) {
+	let mut backoff = Duration::from_secs(1);
+	loop {
+		if *shutdown.borrow() {
+			return;
+		}
+		let (service_shutdown_tx, service_shutdown_rx) = oneshot::channel();
+		let service = notifications::run(state.clone(), async move {
+			let _ = service_shutdown_rx.await;
+			Ok(())
+		});
+		tokio::pin!(service);
+		tokio::select! {
+			result = &mut service => log_service_result("notifications", result),
+			changed = shutdown.changed() => {
+				let _ = service_shutdown_tx.send(());
+				log_service_cleanup("notifications", service.await);
+				if changed.is_err() || *shutdown.borrow_and_update() {
+					return;
+				}
+			}
+		}
+
+		tokio::select! {
+			() = tokio::time::sleep(backoff) => {}
+			changed = shutdown.changed() => {
+				if changed.is_err() || *shutdown.borrow_and_update() {
+					return;
+				}
+			}
+		}
+		backoff = (backoff * 2).min(Duration::from_secs(30));
+	}
+}
+
 fn log_service_result(name: &str, result: Result<(), impl std::fmt::Display>) {
 	match result {
 		Ok(()) => log::warn!("{name} service stopped unexpectedly"),
@@ -299,4 +365,17 @@ async fn setup_db() -> Result<DatabaseConnection, sea_orm::DbErr> {
 	db.get_schema_registry("daemon::*").sync(&db).await?;
 
 	Ok(db)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[tokio::test]
+	async fn notifications_supervisor_exits_before_connecting_when_shutdown() {
+		let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+		let state = notifications::NotificationsState::default();
+
+		supervise_notifications(state, shutdown_rx).await;
+	}
 }

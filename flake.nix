@@ -379,6 +379,44 @@
                 };
               })
               (mkOverride {
+                name = "libspa-sys";
+
+                overrideAttrs = drv: {
+                  propagatedBuildInputs = appendList "propagatedBuildInputs" [pkgs.pipewire] drv;
+                  nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.pkg-config pkgs.rustPlatform.bindgenHook] drv;
+                };
+              })
+              (mkOverride {
+                name = "pipewire-sys";
+
+                overrideAttrs = drv: {
+                  propagatedBuildInputs = appendList "propagatedBuildInputs" [pkgs.pipewire] drv;
+                  nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.pkg-config pkgs.rustPlatform.bindgenHook] drv;
+                };
+              })
+              (mkOverride {
+                name = "libspa";
+
+                overrideAttrs = drv: {
+                  propagatedBuildInputs = appendList "propagatedBuildInputs" [pkgs.pipewire] drv;
+                  nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.pkg-config] drv;
+                };
+              })
+              (mkOverride {
+                name = "daemon";
+
+                overrideAttrs = drv: {
+                  nativeBuildInputs = appendList "nativeBuildInputs" [pkgs.makeWrapper] drv;
+                  buildInputs = appendList "buildInputs" [pkgs.pipewire] drv;
+                  postInstall =
+                    appendScript "postInstall" ''
+                      wrapProgram $bin/bin/permafrostd \
+                        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath [pkgs.pipewire]}
+                    ''
+                    drv;
+                };
+              })
+              (mkOverride {
                 registry = "git+https://github.com/iced-rs/winit.git";
                 name = "dpi";
 
