@@ -977,6 +977,9 @@ mod reliability_tests {
 			present: true,
 			percentage: 63.0,
 			state: 1,
+			energy_rate: 0.0,
+			time_to_full: 0,
+			time_to_empty: 0,
 		};
 		let _ = menu.update(Message::Battery(battery::Message::State(state)));
 		assert_eq!(menu.visible_tiles().len(), 2);

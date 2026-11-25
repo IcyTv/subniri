@@ -178,6 +178,9 @@ mod tests {
 			present: true,
 			percentage: 42.0,
 			state: 1,
+			energy_rate: 0.0,
+			time_to_full: 0,
+			time_to_empty: 0,
 		};
 		battery.update(Message::State(state));
 		assert!(battery.visible());

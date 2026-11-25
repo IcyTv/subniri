@@ -33,6 +33,22 @@ pub const BATTERY_OBJECT_PATH: ObjectPath<'_> =
 pub const BATTERY_INTERFACE: InterfaceName<'_> =
 	InterfaceName::from_static_str_checked(BatteryProperties::INTERFACE_NAME);
 
+mod power_profile;
+pub use power_profile::*;
+
+pub const POWER_PROFILE_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/PowerProfile");
+pub const POWER_PROFILE_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked(PowerProfileProperties::INTERFACE_NAME);
+
+mod charge_limit;
+pub use charge_limit::*;
+
+pub const CHARGE_LIMIT_OBJECT_PATH: ObjectPath<'_> =
+	ObjectPath::from_static_str_checked("/de/icytv/subniri/ChargeLimit");
+pub const CHARGE_LIMIT_INTERFACE: InterfaceName<'_> =
+	InterfaceName::from_static_str_checked(ChargeLimitProperties::INTERFACE_NAME);
+
 mod spotify;
 pub use spotify::*;
 

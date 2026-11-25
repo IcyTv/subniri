@@ -169,11 +169,35 @@ fn snapshot(values: &HashMap<String, OwnedValue>) -> zbus::Result<BatteryState> 
 		.get("State")
 		.ok_or_else(|| missing("State"))?
 		.downcast_ref::<u32>()?;
+	let energy_rate = optional_finite_f64(values, "EnergyRate");
+	let time_to_full = optional_u64(values, "TimeToFull");
+	let time_to_empty = optional_u64(values, "TimeToEmpty");
 	Ok(BatteryState {
 		present: true,
 		percentage: percentage.clamp(0.0, 100.0),
 		state,
+		energy_rate,
+		time_to_full,
+		time_to_empty,
 	})
+}
+
+/// `EnergyRate` is legitimately absent (or momentarily invalid) on some devices/states;
+/// unlike `Percentage` this must degrade to 0.0 instead of failing the whole snapshot.
+fn optional_finite_f64(values: &HashMap<String, OwnedValue>, name: &str) -> f64 {
+	values
+		.get(name)
+		.and_then(|value| value.downcast_ref::<f64>().ok())
+		.filter(|value| value.is_finite())
+		.unwrap_or(0.0)
+}
+
+fn optional_u64(values: &HashMap<String, OwnedValue>, name: &str) -> u64 {
+	values
+		.get(name)
+		.and_then(|value| value.downcast_ref::<i64>().ok())
+		.filter(|value| *value >= 0)
+		.map_or(0, |value| value as u64)
 }
 
 #[cfg(test)]
@@ -193,7 +217,7 @@ mod tests {
 		}
 	}
 
-	struct DisplayDevice(Arc<Mutex<(bool, u32, f64, u32)>>);
+	struct DisplayDevice(Arc<Mutex<(bool, u32, f64, u32, f64, i64, i64)>>);
 
 	#[zbus::interface(name = "org.freedesktop.UPower.Device")]
 	impl DisplayDevice {
@@ -216,6 +240,21 @@ mod tests {
 		async fn state(&self) -> u32 {
 			self.0.lock().await.3
 		}
+
+		#[zbus(property)]
+		async fn energy_rate(&self) -> f64 {
+			self.0.lock().await.4
+		}
+
+		#[zbus(property)]
+		async fn time_to_full(&self) -> i64 {
+			self.0.lock().await.5
+		}
+
+		#[zbus(property)]
+		async fn time_to_empty(&self) -> i64 {
+			self.0.lock().await.6
+		}
 	}
 
 	struct UPower;
@@ -229,7 +268,9 @@ mod tests {
 		}
 	}
 
-	async fn fake_upower(address: &str, state: Arc<Mutex<(bool, u32, f64, u32)>>) -> Connection {
+	async fn fake_upower(
+		address: &str, state: Arc<Mutex<(bool, u32, f64, u32, f64, i64, i64)>>,
+	) -> Connection {
 		zbus::connection::Builder::address(address)
 			.unwrap()
 			.name(UPOWER_SERVICE)
@@ -289,7 +330,7 @@ mod tests {
 			.await
 			.unwrap();
 		let service = BatteryService::register(connection.clone()).await.unwrap();
-		let device = Arc::new(Mutex::new((true, 2, 51.0, 1)));
+		let device = Arc::new(Mutex::new((true, 2, 51.0, 1, 12.5, 0, 600)));
 		let upower = fake_upower(address, device.clone()).await;
 		let observer = observe_private(service.clone(), connection.clone());
 		wait_for_state(
@@ -298,11 +339,14 @@ mod tests {
 				present: true,
 				percentage: 51.0,
 				state: 1,
+				energy_rate: 12.5,
+				time_to_full: 0,
+				time_to_empty: 600,
 			},
 		)
 		.await;
 
-		*device.lock().await = (true, 2, 52.0, 2);
+		*device.lock().await = (true, 2, 52.0, 2, 8.0, 0, 500);
 		let emitter =
 			SignalEmitter::new(&upower, "/org/freedesktop/UPower/devices/DisplayDevice").unwrap();
 		zbus::fdo::Properties::properties_changed(
@@ -319,6 +363,9 @@ mod tests {
 				present: true,
 				percentage: 52.0,
 				state: 2,
+				energy_rate: 8.0,
+				time_to_full: 0,
+				time_to_empty: 500,
 			},
 		)
 		.await;
@@ -330,7 +377,7 @@ mod tests {
 			.unwrap();
 		assert_eq!(service.state().await, BatteryState::default());
 
-		*device.lock().await = (true, 2, 75.0, 4);
+		*device.lock().await = (true, 2, 75.0, 4, 0.0, 0, 0);
 		let _replacement = fake_upower(address, device).await;
 		let observer = observe_private(service.clone(), connection);
 		wait_for_state(
@@ -339,6 +386,9 @@ mod tests {
 				present: true,
 				percentage: 75.0,
 				state: 4,
+				energy_rate: 0.0,
+				time_to_full: 0,
+				time_to_empty: 0,
 			},
 		)
 		.await;
@@ -379,7 +429,10 @@ mod tests {
 			BatteryState {
 				present: true,
 				percentage: 70.5,
-				state: 1
+				state: 1,
+				energy_rate: 0.0,
+				time_to_full: 0,
+				time_to_empty: 0,
 			}
 		);
 		assert_eq!(
@@ -388,6 +441,22 @@ mod tests {
 		);
 		assert!(snapshot(&values(true, 2, f64::NAN, 1)).is_err());
 		assert!(snapshot(&HashMap::new()).is_err());
+	}
+
+	#[test]
+	fn battery_snapshot_reads_optional_energy_fields_and_tolerates_invalid_ones() {
+		let mut present = values(true, 2, 80.0, 1);
+		present.insert("EnergyRate".into(), 15.25.into());
+		present.insert("TimeToFull".into(), 1200_i64.into());
+		present.insert("TimeToEmpty".into(), (-1_i64).into());
+		let state = snapshot(&present).unwrap();
+		assert_eq!(state.energy_rate, 15.25);
+		assert_eq!(state.time_to_full, 1200);
+		assert_eq!(state.time_to_empty, 0, "a negative TimeToEmpty is invalid");
+
+		let mut invalid = values(true, 2, 80.0, 1);
+		invalid.insert("EnergyRate".into(), f64::NAN.into());
+		assert_eq!(snapshot(&invalid).unwrap().energy_rate, 0.0);
 	}
 
 	#[tokio::test]
@@ -418,17 +487,26 @@ mod tests {
 				present: true,
 				percentage: 65.0,
 				state: 1,
+				energy_rate: 10.0,
+				time_to_full: 300,
+				time_to_empty: 0,
 			},
 			BatteryState {
 				present: true,
 				percentage: 66.0,
 				state: 2,
+				energy_rate: 9.0,
+				time_to_full: 0,
+				time_to_empty: 3600,
 			},
 			BatteryState::default(),
 			BatteryState {
 				present: true,
 				percentage: 67.0,
 				state: 4,
+				energy_rate: 0.0,
+				time_to_full: 0,
+				time_to_empty: 0,
 			},
 		] {
 			service.publish(state).await;

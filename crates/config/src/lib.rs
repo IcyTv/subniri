@@ -89,6 +89,14 @@ pub struct ConfigFile {
 	#[config(default)]
 	#[garde(dive)]
 	pub fileberg: Fileberg,
+	/// Settings for controlling the battery charge-limit control.
+	#[config(default)]
+	#[garde(dive)]
+	pub charge_limit: ChargeLimit,
+	/// Settings for controlling power-profile switching.
+	#[config(default)]
+	#[garde(dive)]
+	pub power_profile: PowerProfile,
 }
 
 pub const FILEBERG_ACTION_IDS: &[&str] = &[
@@ -996,6 +1004,42 @@ pub struct Homeassistant {
 	/// `tracked_devices` key is retained so existing configuration files continue to load.
 	#[config(list_style = children)]
 	pub tracked_devices: Vec<String>,
+}
+
+#[derive(Debug, Config, Clone, PartialEq, ConfigSerialize, Validate)]
+#[garde(allow_unvalidated)]
+pub struct ChargeLimit {
+	/// Whether battery charge-limit control should be enabled. Requires hardware support
+	/// (currently: a `thinkpad_acpi` sysfs charge threshold) and a system-level permission grant.
+	#[config(default = true)]
+	pub enabled: bool,
+	/// Overrides the battery device name (default "BAT0") used to locate the sysfs charge
+	/// threshold files.
+	pub battery_device: Option<String>,
+}
+
+impl Default for ChargeLimit {
+	fn default() -> Self {
+		Self {
+			enabled: true,
+			battery_device: None,
+		}
+	}
+}
+
+#[derive(Debug, Config, Clone, PartialEq, ConfigSerialize, Validate)]
+#[garde(allow_unvalidated)]
+pub struct PowerProfile {
+	/// Whether power-profile switching (performance/balanced/power-saver) should be enabled.
+	/// Requires `power-profiles-daemon` to be running.
+	#[config(default = true)]
+	pub enabled: bool,
+}
+
+impl Default for PowerProfile {
+	fn default() -> Self {
+		Self { enabled: true }
+	}
 }
 
 #[derive(Debug, Clone, PartialEq, Config, ConfigSerialize, Validate)]

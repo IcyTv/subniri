@@ -42,6 +42,23 @@ async fn main() -> Result<(), Error> {
 	let discovery_task = tokio::spawn(discovery.run(connection.clone(), shutdown_tx.subscribe()));
 	let battery = daemon::battery::BatteryService::register(connection.clone()).await?;
 	let battery_task = tokio::spawn(battery.run(shutdown_tx.subscribe()));
+	let power_profile =
+		daemon::power_profile::PowerProfileService::register(connection.clone()).await?;
+	let power_profile_task = config
+		.power_profile
+		.enabled
+		.then(|| tokio::spawn(power_profile.run(shutdown_tx.subscribe())));
+	let charge_limit = daemon::charge_limit::ChargeLimitService::new(
+		config.charge_limit.enabled,
+		config.charge_limit.battery_device.as_deref(),
+	);
+	connection
+		.object_server()
+		.at(
+			daemon_common::CHARGE_LIMIT_OBJECT_PATH,
+			daemon_common::ChargeLimitServer(charge_limit),
+		)
+		.await?;
 	let (nightlight_config_tx, _) = watch::channel(config.nightlight.clone());
 	let mut nightlight_supervisor = Box::pin(supervise_nightlight(
 		connection.clone(),
@@ -162,6 +179,9 @@ async fn main() -> Result<(), Error> {
 	let _ = shutdown_tx.send(true);
 	let _ = discovery_task.await;
 	let _ = battery_task.await;
+	if let Some(power_profile_task) = power_profile_task {
+		let _ = power_profile_task.await;
+	}
 	tokio::join!(
 		nightlight_supervisor,
 		calendar_supervisor,

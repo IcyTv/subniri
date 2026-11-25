@@ -16,6 +16,12 @@ pub struct BatteryState {
 	pub percentage: f64,
 	/// UPower device state: charging=1, discharging=2, empty=3, full=4, pending=5/6.
 	pub state: u32,
+	/// Watts; positive while charging or discharging, 0.0 if unknown.
+	pub energy_rate: f64,
+	/// Seconds until full; 0 if not charging or unknown.
+	pub time_to_full: u64,
+	/// Seconds until empty; 0 if not discharging or unknown.
+	pub time_to_empty: u64,
 }
 
 #[zbus::interface(

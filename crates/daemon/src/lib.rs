@@ -3,11 +3,13 @@
 pub mod appearance;
 pub mod battery;
 pub mod calendar;
+pub mod charge_limit;
 pub mod discovery;
 pub mod homeassistant;
 pub mod nightlight;
 pub mod notifications;
 pub(crate) mod observed;
+pub mod power_profile;
 pub mod sound;
 pub mod spotify;
 

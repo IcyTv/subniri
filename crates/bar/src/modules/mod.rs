@@ -5,6 +5,7 @@ use neo_widgets::{
 	widgets::{neo_button, neo_card, spinner},
 };
 
+mod battery;
 mod bluetooth;
 mod clock;
 mod connection;
@@ -27,6 +28,7 @@ pub enum Module {
 	SystemMenu(system_menu::SystemMenu),
 	Network(network::integration::Integration),
 	Bluetooth(bluetooth::integration::Integration),
+	Battery(battery::integration::Integration),
 	Clock(clock::Clock),
 	Volume(Result<volume::Volume, String>),
 	MediaControls(media_controls::MediaControls),
@@ -70,6 +72,8 @@ pub enum ModuleMessage {
 
 	Bluetooth(bluetooth::integration::Message),
 
+	Battery(battery::integration::Message),
+
 	Volume(volume::Message),
 
 	TaskbarInitialized(Result<taskbar::Taskbar, String>),
@@ -94,6 +98,7 @@ pub enum ModuleKind {
 	Volume,
 	Network,
 	Bluetooth,
+	Battery,
 	Clock,
 }
 
@@ -122,6 +127,10 @@ impl Module {
 
 	pub fn bluetooth() -> Self {
 		Self::Bluetooth(bluetooth::integration::Integration::new())
+	}
+
+	pub fn battery() -> Self {
+		Self::Battery(battery::integration::Integration::new())
 	}
 
 	pub fn volume() -> Self {
@@ -190,6 +199,7 @@ impl Module {
 	pub fn init_task(&self) -> Task<ModuleMessage> {
 		match self {
 			Self::Bluetooth(bluetooth) => bluetooth.init().map(ModuleMessage::Bluetooth),
+			Self::Battery(battery) => battery.init().map(ModuleMessage::Battery),
 			Self::Taskbar(None) => {
 				Task::perform(taskbar::Taskbar::new(), ModuleMessage::TaskbarInitialized)
 			}
@@ -266,6 +276,15 @@ impl Module {
 			(Self::Bluetooth(bluetooth), ModuleMessage::Bluetooth(message)) => {
 				return bluetooth.update(message).map(ModuleMessage::Bluetooth);
 			}
+			(
+				Self::Battery(_),
+				ModuleMessage::Battery(battery::integration::Message::OpenPopup(bounds)),
+			) => {
+				return Task::done(ModuleMessage::OpenPopup(ModuleKind::Battery, bounds));
+			}
+			(Self::Battery(battery), ModuleMessage::Battery(message)) => {
+				return battery.update(message).map(ModuleMessage::Battery);
+			}
 			(Self::Volume(Ok(volume)), ModuleMessage::Volume(message)) => {
 				return volume.update(message).map(ModuleMessage::Volume);
 			}
@@ -340,6 +359,7 @@ impl Module {
 			Self::Taskbar(Some(_)) => taskbar::Taskbar::subscription().map(ModuleMessage::Taskbar),
 			Self::SystemMenu(menu) => menu.subscription().map(ModuleMessage::from_system_menu),
 			Self::Network(network) => network.subscription().map(ModuleMessage::Network),
+			Self::Battery(battery) => battery.subscription().map(ModuleMessage::Battery),
 			_ => Subscription::none(),
 		}
 	}
@@ -370,6 +390,7 @@ impl Module {
 			Self::Volume(Err(_e)) => loading(colors.decorative.yellow, colors),
 			Self::Network(network) => network.view(colors).map(ModuleMessage::Network),
 			Self::Bluetooth(bluetooth) => bluetooth.view(colors).map(ModuleMessage::Bluetooth),
+			Self::Battery(battery) => battery.view(colors).map(ModuleMessage::Battery),
 			Self::Clock(clock) => clock
 				.view(colors)
 				.map(ModuleMessage::Clock)
@@ -391,6 +412,7 @@ impl Module {
 			Self::SystemMenu(menu) => menu.view_popup(colors).map(ModuleMessage::SystemMenu),
 			Self::Volume(Ok(vol)) => vol.view_popup(colors).map(ModuleMessage::Volume),
 			Self::Bluetooth(bt) => bt.view_popup(colors).map(ModuleMessage::Bluetooth),
+			Self::Battery(battery) => battery.view_popup(colors).map(ModuleMessage::Battery),
 			Self::Clock(clock) => clock.view_popup(colors).map(ModuleMessage::Clock),
 			Self::Network(network) => network.view_popup(colors).map(ModuleMessage::Network),
 			_ => neo_card(text("No popup for module").color(colors.on_accent))
@@ -476,6 +498,7 @@ mod tests {
 				Module::media_controls(),
 				Module::network(),
 				Module::bluetooth(),
+				Module::battery(),
 				Module::Volume(Err("Unavailable".into())),
 				Module::Taskbar(None),
 			];
@@ -509,6 +532,7 @@ mod tests {
 				("media", Module::media_controls()),
 				("network-loading", Module::network()),
 				("bluetooth-loading", Module::bluetooth()),
+				("battery-loading", Module::battery()),
 				("audio-unavailable", Module::Volume(Err("Offline".into()))),
 			] {
 				let snapshot = super::layout_tests::capture(

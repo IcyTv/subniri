@@ -113,6 +113,7 @@ impl Bar {
 				Module::volume(),
 				Module::network(),
 				Module::bluetooth(),
+				Module::battery(),
 				Module::notifications(&config_file),
 				Module::clock(),
 			],
@@ -1305,6 +1306,7 @@ mod tests {
 			Module::media_controls(),
 			Module::network(),
 			Module::bluetooth(),
+			Module::battery(),
 		] {
 			let mut bar = empty_bar();
 			bar.left.push(module);
