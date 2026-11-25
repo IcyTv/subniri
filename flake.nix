@@ -332,6 +332,70 @@
           ];
         };
 
+        # Direct local-path dependencies for each workspace member. cargo2nix
+        # links these in via prebuilt `--extern` artifacts rather than by
+        # reading sibling crates off disk, so a member's `src` only needs to
+        # contain its own directory plus the directories of crates listed
+        # here (transitively) - not the whole workspace. Keeping this table
+        # scoped lets a change in one crate avoid invalidating `src` (and
+        # thus triggering a rebuild) for unrelated crates.
+        localCrateDeps = {
+          bar = ["config" "daemon-common" "log" "neo-widgets" "utilities"];
+          cli = ["daemon-common" "launcher-common"];
+          config = ["config-macros" "config-traits"];
+          "config-macros" = [];
+          "config-traits" = [];
+          daemon = ["config" "daemon-common" "log" "secret-store"];
+          "daemon-common" = [];
+          "file-manager" = ["config" "log" "neo-widgets" "utilities"];
+          indexer = ["config" "indexer-common" "log"];
+          "indexer-common" = [];
+          launcher = ["config" "log" "neo-widgets" "utilities"];
+          "launcher-common" = [];
+          lockscreen = ["neo-widgets"];
+          log = [];
+          logout = ["log" "neo-widgets"];
+          "neo-widgets" = ["config" "daemon-common" "log"];
+          "polkit-agent" = ["log" "neo-widgets"];
+          "secret-store" = [];
+          settings = ["config" "daemon-common" "log" "neo-widgets"];
+          utilities = [];
+        };
+
+        localCrateClosure = name: let
+          go = seen: n:
+            if builtins.elem n seen
+            then seen
+            else lib.foldl' go (seen ++ [n]) (localCrateDeps.${n} or []);
+        in
+          go [] name;
+
+        mkLocalCrateSrc = name: extraPaths:
+          pkgs.lib.fileset.toSource {
+            root = ./.;
+            fileset = pkgs.lib.fileset.unions (
+              [./Cargo.toml ./Cargo.lock]
+              ++ map (dir: ./crates + "/${dir}") (localCrateClosure name)
+              ++ extraPaths
+            );
+          };
+
+        # `registry = "unknown"` is required in the matcher: several of
+        # these names (e.g. "log") also exist as crates.io dependencies
+        # elsewhere in the graph, and only local workspace members use the
+        # "unknown" registry.
+        localCrateSrcOverrides =
+          map (
+            name:
+              mkOverride {
+                inherit name;
+                registry = "unknown";
+                overrideAttrs = _drv: {
+                  src = mkLocalCrateSrc name (lib.optionals (name == "bar") [./assets]);
+                };
+              }
+          ) (builtins.attrNames localCrateDeps);
+
         rustPkgs = pkgs.rustBuilder.makePackageSet {
           packageFun = args:
             (import ./Cargo.nix) (
@@ -345,6 +409,7 @@
 
           packageOverrides = pkgs:
             pkgs.rustBuilder.overrides.all
+            ++ localCrateSrcOverrides
             ++ [
               (mkOverride {
                 registry = "unknown";
