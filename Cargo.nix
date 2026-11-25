@@ -44,7 +44,7 @@ args@{
   cargoConfig ? {},
 }:
 let
-  nixifiedLockHash = "b115fa04b2a84140475ffd1d27800fcee46f2bb5dc7bcfbc342b99248bd20889";
+  nixifiedLockHash = "58f0d2b339db23bce96b14a83336d3c52d3aa3211a1fbf4b9a22714899b2808b";
   workspaceSrc = if args.workspaceSrc == null then ./. else args.workspaceSrc;
   currentLockHash = builtins.hashFile "sha256" (workspaceSrc + /Cargo.lock);
   lockHashIgnored = if ignoreLockHash
@@ -7103,6 +7103,8 @@ in
     registry = "unknown";
     src = fetchCrateLocal workspaceSrc;
     dependencies = {
+      clap = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".clap."4.6.7" { inherit profileName; }).out;
+      futures = (rustPackages."registry+https://github.com/rust-lang/crates.io-index".futures."0.3.34" { inherit profileName; }).out;
       iced = (rustPackages."git+https://github.com/IcyTv/iced".iced."0.15.0-dev" { inherit profileName; }).out;
       iced_exwlshell = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_exwlshell."0.20.1" { inherit profileName; }).out;
       iced_wayland_subscriber = (rustPackages."git+https://github.com/IcyTv/exwlshelleventloop".iced_wayland_subscriber."0.20.1" { inherit profileName; }).out;

@@ -6,6 +6,7 @@ use std::{
 };
 
 use nix::unistd::{User, geteuid, getuid};
+use tokio::sync::mpsc::UnboundedSender;
 use zeroize::Zeroize;
 
 use crate::secret::Secret;
@@ -199,25 +200,38 @@ impl Account {
 		Ok(Self { name, service })
 	}
 
-	pub(crate) fn authenticate(&self, password: Secret) -> AuthResult {
+	/// `password` is `None` for a passive fingerprint/Howdy probe: no
+	/// credential to offer, so the conversation declines any prompt that
+	/// asks for one (see `converse`) rather than answering with a blank
+	/// password, which could otherwise unlock a `nullok`-configured account.
+	/// A probe that succeeds without ever supplying a password is exactly
+	/// the point; a submitted attempt that does so is not (see below).
+	pub(crate) fn authenticate(
+		&self, password: Option<Secret>, prompts: UnboundedSender<String>,
+	) -> AuthResult {
 		let result = self
 			.service
-			.run(|service| self.authenticate_once(service, password));
+			.run(|service| self.authenticate_once(service, password, prompts));
 		if let AuthResult::Failure { stage, status } = result {
 			eprintln!("frostguard: PAM stage={stage:?} status={status}");
 		}
 		result
 	}
 
-	fn authenticate_once(&self, service: Service, password: Secret) -> AuthResult {
-		if password.as_bytes().is_empty() {
-			return AuthResult::Rejected;
+	fn authenticate_once(
+		&self, service: Service, password: Option<Secret>, prompts: UnboundedSender<String>,
+	) -> AuthResult {
+		if let Some(password) = &password {
+			if password.as_bytes().is_empty() {
+				return AuthResult::Rejected;
+			}
 		}
 
 		let mut data = Conversation {
 			account: &self.name,
 			password,
 			supplied_password: false,
+			prompts,
 		};
 		let conversation = PamConversation {
 			callback: converse,
@@ -256,7 +270,10 @@ impl Account {
 			stage = Stage::Account;
 			handle.status = unsafe { pam_acct_mgmt(handle.raw, 0) };
 		}
-		if handle.status == SUCCESS && !data.supplied_password {
+		// Only a submitted attempt (a password typed) is required to have
+		// actually consumed one; a probe has none to offer, so a passwordless
+		// success is the whole point, not a flow we don't understand.
+		if handle.status == SUCCESS && data.password.is_some() && !data.supplied_password {
 			eprintln!(
 				"frostguard: unsupported PAM flow: passwordless success; only single-password conversations are supported"
 			);
@@ -283,7 +300,9 @@ impl Account {
 		};
 		let ended = unsafe { pam_end(handle.raw, handle.status) };
 		handle.raw = ptr::null_mut();
-		data.password.clear();
+		if let Some(password) = &mut data.password {
+			password.clear();
+		}
 
 		if ended != SUCCESS {
 			AuthResult::pam_failure(Stage::End, ended)
@@ -309,8 +328,9 @@ impl Drop for Session {
 
 struct Conversation<'a> {
 	account: &'a CStr,
-	password: Secret,
+	password: Option<Secret>,
 	supplied_password: bool,
+	prompts: UnboundedSender<String>,
 }
 
 unsafe extern "C" fn converse(
@@ -343,12 +363,27 @@ unsafe extern "C" fn converse(
 
 		let style = unsafe { (*message).style };
 		let bytes = match style {
+			// A probe has no password to offer: refuse the prompt outright
+			// rather than answer it with nothing, which on a `nullok`
+			// account could otherwise authenticate a blank credential.
+			1 if !conversation.supplied_password && conversation.password.is_none() => {
+				unsafe { free_responses(responses, count as usize) };
+				return CONVERSATION_ERROR;
+			}
 			1 if !conversation.supplied_password => {
 				conversation.supplied_password = true;
-				conversation.password.as_bytes()
+				// Safety: the arm above already returned on `None`.
+				conversation.password.as_ref().unwrap().as_bytes()
 			}
 			2 => conversation.account.to_bytes(),
-			3 | 4 => continue,
+			3 | 4 => {
+				let text_ptr = unsafe { (*message).text };
+				if !text_ptr.is_null() {
+					let text = unsafe { CStr::from_ptr(text_ptr) }.to_string_lossy().into_owned();
+					let _ = conversation.prompts.send(text);
+				}
+				continue;
+			}
 			_ => {
 				eprintln!(
 					"frostguard: unsupported PAM flow: additional secret prompt or unsupported prompt style; only single-password conversations are supported"
@@ -369,7 +404,9 @@ unsafe extern "C" fn converse(
 			(*responses.add(index)).text = text.cast();
 		}
 		if style == 1 {
-			conversation.password.clear();
+			if let Some(password) = &mut conversation.password {
+				password.clear();
+			}
 		}
 	}
 
@@ -604,8 +641,9 @@ mod tests {
 		assert!(password.append("test password"));
 		let mut data = Conversation {
 			account: c"test-user",
-			password,
+			password: Some(password),
 			supplied_password: false,
+			prompts: tokio::sync::mpsc::unbounded_channel().0,
 		};
 		let message = PamMessage {
 			style: 1,
@@ -647,8 +685,9 @@ mod tests {
 	fn conversation_rejects_unsupported_prompt_styles() {
 		let mut data = Conversation {
 			account: c"test-user",
-			password: Secret::default(),
+			password: Some(Secret::default()),
 			supplied_password: false,
+			prompts: tokio::sync::mpsc::unbounded_channel().0,
 		};
 		let message = PamMessage {
 			style: 7,
@@ -668,5 +707,111 @@ mod tests {
 
 		assert_eq!(result, CONVERSATION_ERROR);
 		assert!(output.is_null());
+	}
+
+	#[test]
+	fn probe_conversation_refuses_a_password_prompt_without_answering_it() {
+		let mut data = Conversation {
+			account: c"test-user",
+			password: None,
+			supplied_password: false,
+			prompts: tokio::sync::mpsc::unbounded_channel().0,
+		};
+		let message = PamMessage {
+			style: 1,
+			text: ptr::null(),
+		};
+		let message_pointer = ptr::from_ref(&message);
+		let mut output = ptr::null_mut();
+
+		let result = unsafe {
+			converse(
+				1,
+				&message_pointer,
+				&mut output,
+				ptr::from_mut(&mut data).cast(),
+			)
+		};
+
+		assert_eq!(result, CONVERSATION_ERROR);
+		assert!(output.is_null());
+		assert!(!data.supplied_password);
+	}
+
+	#[test]
+	fn probe_conversation_still_answers_the_harmless_echo_prompt() {
+		// Style 2 never carries a credential (it's answered with the
+		// already-known account name), so a probe answers it exactly like a
+		// submitted attempt would.
+		let mut data = Conversation {
+			account: c"test-user",
+			password: None,
+			supplied_password: false,
+			prompts: tokio::sync::mpsc::unbounded_channel().0,
+		};
+		let message = PamMessage {
+			style: 2,
+			text: ptr::null(),
+		};
+		let message_pointer = ptr::from_ref(&message);
+		let mut output = ptr::null_mut();
+
+		let result = unsafe {
+			converse(
+				1,
+				&message_pointer,
+				&mut output,
+				ptr::from_mut(&mut data).cast(),
+			)
+		};
+
+		assert_eq!(result, SUCCESS);
+		assert_eq!(
+			unsafe { CStr::from_ptr((*output).text) }.to_bytes(),
+			b"test-user"
+		);
+		unsafe { free_responses(output, 1) };
+	}
+
+	#[test]
+	fn conversation_forwards_info_and_error_text_without_answering_it() {
+		let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+		let mut data = Conversation {
+			account: c"test-user",
+			password: Some(Secret::default()),
+			supplied_password: false,
+			prompts: sender,
+		};
+		let info = PamMessage {
+			style: 4,
+			text: c"Place your finger on the reader".as_ptr(),
+		};
+		let error = PamMessage {
+			style: 3,
+			text: c"Finger not recognized".as_ptr(),
+		};
+		let message_pointers = [ptr::from_ref(&info), ptr::from_ref(&error)];
+		let mut output = ptr::null_mut();
+
+		let result = unsafe {
+			converse(
+				2,
+				message_pointers.as_ptr(),
+				&mut output,
+				ptr::from_mut(&mut data).cast(),
+			)
+		};
+
+		assert_eq!(result, SUCCESS);
+		// Neither message expects an answer: both response slots stay empty.
+		assert!(unsafe { (*output).text }.is_null());
+		assert!(unsafe { (*output.add(1)).text }.is_null());
+		unsafe { free_responses(output, 2) };
+
+		assert_eq!(
+			receiver.try_recv().unwrap(),
+			"Place your finger on the reader"
+		);
+		assert_eq!(receiver.try_recv().unwrap(), "Finger not recognized");
 	}
 }

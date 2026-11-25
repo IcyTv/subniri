@@ -15,6 +15,7 @@ use std::{
 };
 
 use clap::Parser;
+use futures::stream::{self, StreamExt};
 use iced::{
 	Alignment, Element, Length, Subscription, Task, keyboard,
 	widget::{column, container, text},
@@ -34,7 +35,14 @@ use neo_widgets::{
 
 use auth::{Account, AuthResult};
 use secret::Secret;
-use state::LockState;
+use state::{LockState, Origin};
+
+// How often a background fingerprint/Howdy probe retries while the screen
+// sits locked and idle. Cheap even when nobody's enrolled: the PAM-side gate
+// (icy.internal.pamSecurity.lockscreenGraceMinutes in pam-security.nix,
+// defaulting to an hour) rejects a stale probe in a single fast pam_exec
+// check, well before it would ever reach the fingerprint reader or camera.
+const PROBE_INTERVAL: Duration = Duration::from_secs(3);
 
 #[derive(Parser)]
 struct Args {
@@ -112,6 +120,10 @@ struct Lockscreen {
 	caret_reset: Instant,
 	surfaces: HashSet<iced::window::Id>,
 	status: &'static str,
+	// Live PAM conversation text (e.g. "Place your finger on the reader")
+	// for whichever attempt, probe or submitted, is currently in flight.
+	prompt: Option<String>,
+	next_probe: Instant,
 	clock: String,
 	date: String,
 }
@@ -123,7 +135,12 @@ enum Message {
 	Edit(window::Id, Edit),
 	Submit(window::Id),
 	Focus(window::Id, bool),
-	Authenticated { attempt: u64, result: AuthResult },
+	Prompt(u64, String),
+	Authenticated {
+		attempt: u64,
+		origin: Origin,
+		result: AuthResult,
+	},
 	Appearance(AppearanceEvent),
 	Shell(ShellEvent),
 	Tick,
@@ -139,6 +156,7 @@ impl fmt::Debug for Message {
 			Self::Edit(..) => "Edit(<redacted>)",
 			Self::Submit(_) => "Submit",
 			Self::Focus(..) => "Focus",
+			Self::Prompt(..) => "Prompt",
 			Self::Authenticated { .. } => "Authenticated",
 			Self::Appearance(_) => "Appearance",
 			Self::Shell(_) => "Shell",
@@ -209,6 +227,10 @@ impl Lockscreen {
 			caret_reset: now,
 			surfaces: HashSet::new(),
 			status: "Locking…",
+			prompt: None,
+			// Fires on the very first Tick once the lock is confirmed: can_edit()
+			// stays false until then, so nothing probes before a surface exists.
+			next_probe: now,
 			clock: String::new(),
 			date: String::new(),
 		};
@@ -285,23 +307,23 @@ impl Lockscreen {
 				};
 
 				let password = std::mem::take(&mut self.password);
-				let account = self.account.clone();
+				self.prompt = None;
 				self.status = "Authenticating…";
 
-				return Task::perform(
-					async move {
-						tokio::task::spawn_blocking(move || account.authenticate(password))
-							.await
-							.unwrap_or_else(|_| {
-								eprintln!("frostguard: authentication worker failed");
-								AuthResult::WorkerFailure
-							})
-					},
-					move |result| Message::Authenticated { attempt, result },
-				);
+				return run_attempt(self.account.clone(), Some(password), attempt, Origin::Submit);
 			}
-			Message::Authenticated { attempt, result } => {
+			Message::Prompt(attempt, text) => {
+				if self.state.current_attempt() == Some(attempt) {
+					self.prompt = Some(text);
+				}
+			}
+			Message::Authenticated {
+				attempt,
+				origin,
+				result,
+			} => {
 				self.password.clear();
+				self.prompt = None;
 				if self
 					.state
 					.complete(attempt, result.accepted() && !self.surfaces.is_empty(), now)
@@ -311,7 +333,11 @@ impl Lockscreen {
 					// request that can release an acquired session lock.
 					return iced::exit();
 				}
-				self.status = result.status();
+				// A failed probe found no finger/face, which is routine, not an
+				// error -- only a submitted attempt's rejection is worth saying.
+				if origin == Origin::Submit {
+					self.status = result.status();
+				}
 			}
 			Message::Shell(ShellEvent::Locked) => {
 				self.state.locked();
@@ -346,6 +372,13 @@ impl Lockscreen {
 					self.state.fail();
 					self.password.clear();
 					fail_closed("Lock startup did not complete; the session may remain locked.");
+				}
+				if self.can_edit() && now >= self.next_probe {
+					self.next_probe = now + PROBE_INTERVAL;
+					if let Some(attempt) = self.state.begin_probe(now) {
+						self.prompt = None;
+						return run_attempt(self.account.clone(), None, attempt, Origin::Probe);
+					}
 				}
 			}
 			_ => {}
@@ -410,7 +443,7 @@ impl Lockscreen {
 			}
 
 			let status = if self.state.authenticating() {
-				"Authenticating…"
+				self.prompt.as_deref().unwrap_or("Authenticating…")
 			} else {
 				self.status
 			};
@@ -455,6 +488,38 @@ impl Lockscreen {
 			})
 			.into()
 	}
+}
+
+enum Progress {
+	Prompt(String),
+	Done(AuthResult),
+}
+
+/// Runs one PAM attempt (a submitted password, or a passwordless probe) on
+/// the blocking worker pool, streaming any live conversation text back as
+/// `Message::Prompt` before the final `Message::Authenticated`.
+fn run_attempt(
+	account: Arc<Account>, password: Option<Secret>, attempt: u64, origin: Origin,
+) -> Task<Message> {
+	let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel::<String>();
+	let handle = tokio::task::spawn_blocking(move || account.authenticate(password, sender));
+
+	let prompts = stream::poll_fn(move |cx| receiver.poll_recv(cx)).map(Progress::Prompt);
+	let done = stream::once(async move {
+		Progress::Done(handle.await.unwrap_or_else(|_| {
+			eprintln!("frostguard: authentication worker failed");
+			AuthResult::WorkerFailure
+		}))
+	});
+
+	Task::run(prompts.chain(done), move |progress| match progress {
+		Progress::Prompt(text) => Message::Prompt(attempt, text),
+		Progress::Done(result) => Message::Authenticated {
+			attempt,
+			origin,
+			result,
+		},
+	})
 }
 
 // Return whether the last lock surface was removed.
@@ -646,8 +711,10 @@ mod tests {
 			Message::Focus(window, true),
 			Message::Authenticated {
 				attempt: 1,
+				origin: Origin::Submit,
 				result: AuthResult::WorkerFailure,
 			},
+			Message::Prompt(1, "Place your finger on the reader".to_string()),
 			Message::Shell(ShellEvent::Locked),
 			Message::Shell(ShellEvent::LockDenied),
 		];

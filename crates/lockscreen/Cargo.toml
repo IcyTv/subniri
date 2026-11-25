@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+futures.workspace = true
 iced.workspace = true
 iced_exwlshell.workspace = true
 iced_wayland_subscriber.workspace = true

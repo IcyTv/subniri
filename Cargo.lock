@@ -5012,6 +5012,7 @@ name = "lockscreen"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "futures",
  "iced",
  "iced_exwlshell",
  "iced_wayland_subscriber",

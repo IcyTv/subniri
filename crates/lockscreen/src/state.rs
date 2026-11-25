@@ -4,9 +4,19 @@ use std::time::{Duration, Instant};
 enum Phase {
 	Acquiring,
 	Locked,
-	Authenticating(u64),
+	Authenticating(u64, Origin),
 	Authorized,
 	Failed,
+}
+
+/// Distinguishes a user-submitted attempt from a background fingerprint/Howdy
+/// probe (see [`LockState::begin_probe`]). Only submitted attempts rate-limit
+/// on failure or report rejection text; a probe that finds no finger/face is
+/// expected, not an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Origin {
+	Probe,
+	Submit,
 }
 
 pub(crate) struct LockState {
@@ -66,14 +76,36 @@ impl LockState {
 			return None;
 		}
 
+		self.start(Origin::Submit)
+	}
+
+	/// Starts a background fingerprint/Howdy probe. Unlike [`Self::begin`],
+	/// this ignores the password-retry cooldown: a probe is a separate,
+	/// silent channel from a submitted guess and shouldn't be rate-limited
+	/// alongside it. It still refuses to start alongside any other
+	/// in-flight attempt (probe or submit), since only one PAM conversation
+	/// may run at a time.
+	pub(crate) fn begin_probe(&mut self, now: Instant) -> Option<u64> {
+		self.refresh(now);
+		if !self.can_edit() {
+			return None;
+		}
+
+		self.start(Origin::Probe)
+	}
+
+	fn start(&mut self, origin: Origin) -> Option<u64> {
 		self.next_attempt = self.next_attempt.checked_add(1)?;
 		self.invalidated = false;
-		self.phase = Phase::Authenticating(self.next_attempt);
+		self.phase = Phase::Authenticating(self.next_attempt, origin);
 		Some(self.next_attempt)
 	}
 
 	pub(crate) fn complete(&mut self, attempt: u64, accepted: bool, now: Instant) -> bool {
-		if self.phase != Phase::Authenticating(attempt) {
+		let Phase::Authenticating(current, origin) = self.phase else {
+			return false;
+		};
+		if current != attempt {
 			return false;
 		}
 
@@ -82,13 +114,17 @@ impl LockState {
 			true
 		} else {
 			self.phase = Phase::Locked;
-			self.retry_after = Some(now + Duration::from_secs(2));
+			// A probe finding no finger/face is expected, not a guess to
+			// rate-limit; only a submitted attempt pays the cooldown.
+			if origin == Origin::Submit {
+				self.retry_after = Some(now + Duration::from_secs(2));
+			}
 			false
 		}
 	}
 
 	pub(crate) fn cancel_attempt(&mut self) {
-		if matches!(self.phase, Phase::Authenticating(_)) {
+		if matches!(self.phase, Phase::Authenticating(..)) {
 			// Keep the worker slot occupied until PAM returns. Hotplug must not
 			// allow overlapping conversations or revive an old successful attempt.
 			self.invalidated = true;
@@ -100,7 +136,17 @@ impl LockState {
 	}
 
 	pub(crate) fn authenticating(&self) -> bool {
-		matches!(self.phase, Phase::Authenticating(_))
+		matches!(self.phase, Phase::Authenticating(..))
+	}
+
+	/// The attempt id currently in flight, if any. Lets a caller tag
+	/// transient progress text (PAM conversation messages) to the attempt
+	/// that produced it, and discard it once stale.
+	pub(crate) fn current_attempt(&self) -> Option<u64> {
+		match self.phase {
+			Phase::Authenticating(attempt, _) => Some(attempt),
+			_ => None,
+		}
 	}
 }
 
@@ -258,5 +304,62 @@ mod tests {
 		state.locked();
 		assert_eq!(state.begin(later), None);
 		Ok(())
+	}
+
+	#[test]
+	fn probe_failure_never_sets_the_submit_cooldown() -> Result<(), &'static str> {
+		let now = Instant::now();
+		let mut state = LockState::new(now);
+		state.locked();
+		let attempt = state
+			.begin_probe(now)
+			.ok_or("confirmed lock must allow a probe")?;
+
+		assert!(!state.complete(attempt, false, now));
+		assert!(!state.cooling_down());
+		assert!(state.can_submit());
+		Ok(())
+	}
+
+	#[test]
+	fn probe_success_authorizes_unlock_same_as_a_submitted_attempt() -> Result<(), &'static str> {
+		let now = Instant::now();
+		let mut state = LockState::new(now);
+		state.locked();
+		let attempt = state
+			.begin_probe(now)
+			.ok_or("confirmed lock must allow a probe")?;
+
+		assert!(state.complete(attempt, true, now));
+		Ok(())
+	}
+
+	#[test]
+	fn probe_ignores_an_active_submit_cooldown_but_not_a_live_attempt() -> Result<(), &'static str>
+	{
+		let now = Instant::now();
+		let mut state = LockState::new(now);
+		state.locked();
+		let attempt = state
+			.begin(now)
+			.ok_or("confirmed lock must allow an attempt")?;
+
+		// A probe can't start alongside an attempt already in flight.
+		assert_eq!(state.begin_probe(now), None);
+		assert!(!state.complete(attempt, false, now));
+
+		// But once that submit's cooldown kicks in, a probe is unaffected.
+		assert!(state.cooling_down());
+		assert!(!state.can_submit());
+		assert!(state.begin_probe(now).is_some());
+		Ok(())
+	}
+
+	#[test]
+	fn probe_refuses_to_start_before_the_lock_is_confirmed() {
+		let now = Instant::now();
+		let mut state = LockState::new(now);
+
+		assert_eq!(state.begin_probe(now), None);
 	}
 }
