@@ -135,22 +135,23 @@ impl Network {
 				self.connectivity_icon(true, colors)
 					.width(Length::Shrink)
 					.height(ICON_HEIGHT),
-				super::module_label(
-					text(self.active_name())
-						.font(Font {
-							weight: font::Weight::Bold,
-							..Font::DEFAULT
-						})
-						.color(colors.on_accent)
-						.size(18)
-						.align_y(Vertical::Center)
-				)
+				// super::module_label(
+				// 	text(self.active_name())
+				// 		.font(Font {
+				// 			weight: font::Weight::Bold,
+				// 			..Font::DEFAULT
+				// 		})
+				// 		.color(colors.on_accent)
+				// 		.size(18)
+				// 		.align_y(Vertical::Center)
+				// )
 			]
 			.spacing(5.)
 			.align_y(Vertical::Center),
 		)
 		.with_colors(colors)
 		.height(MODULE_HEIGHT)
+		.width(MODULE_HEIGHT)
 		.radius(MODULE_RADIUS)
 		.background(colors.decorative.green)
 	}
