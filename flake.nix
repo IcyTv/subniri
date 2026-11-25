@@ -350,7 +350,7 @@
           "file-manager" = ["config" "log" "neo-widgets" "utilities"];
           indexer = ["config" "indexer-common" "log"];
           "indexer-common" = [];
-          launcher = ["config" "log" "neo-widgets" "utilities"];
+          launcher = ["config" "indexer-common" "launcher-common" "log" "neo-widgets" "utilities"];
           "launcher-common" = [];
           lockscreen = ["neo-widgets"];
           log = [];
