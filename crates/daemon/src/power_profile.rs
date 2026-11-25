@@ -112,6 +112,10 @@ impl PowerProfileService {
 		.await?;
 		let mut owners = root.receive_owner_changed().await?;
 		let bus = zbus::fdo::DBusProxy::new(connection).await?;
+		// power-profiles-daemon is D-Bus-activated: GetNameOwner alone never starts it,
+		// only an outgoing method call does. Request activation explicitly first.
+		bus.start_service_by_name(POWER_PROFILES_SERVICE.try_into()?, 0)
+			.await?;
 		let owner = bus
 			.get_name_owner(POWER_PROFILES_SERVICE.try_into()?)
 			.await?;
@@ -160,6 +164,13 @@ impl PowerProfile for PowerProfileService {
 
 		let connection = Connection::system().await.map_err(failed)?;
 		let bus = zbus::fdo::DBusProxy::new(&connection).await.map_err(failed)?;
+		// See observe(): GetNameOwner alone never activates a D-Bus-activated service.
+		let activation_name = POWER_PROFILES_SERVICE
+			.try_into()
+			.map_err(|error: zbus::names::Error| zbus::fdo::Error::Failed(error.to_string()))?;
+		bus.start_service_by_name(activation_name, 0)
+			.await
+			.map_err(|error| zbus::fdo::Error::Failed(error.to_string()))?;
 		let service_name = POWER_PROFILES_SERVICE
 			.try_into()
 			.map_err(|error: zbus::names::Error| zbus::fdo::Error::Failed(error.to_string()))?;
