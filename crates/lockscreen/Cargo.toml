@@ -10,12 +10,13 @@ name = "frostguard"
 path = "src/main.rs"
 
 [dependencies]
+clap.workspace = true
 iced.workspace = true
 iced_exwlshell.workspace = true
 iced_wayland_subscriber.workspace = true
 jiff.workspace = true
 libc = "0.2"
-nix.workspace = true
+nix = { workspace = true, features = ["fs", "process"] }
 neo-widgets.workspace = true
 tokio.workspace = true
 zeroize = "1.8"

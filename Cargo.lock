@@ -5011,6 +5011,7 @@ dependencies = [
 name = "lockscreen"
 version = "0.0.1"
 dependencies = [
+ "clap",
  "iced",
  "iced_exwlshell",
  "iced_wayland_subscriber",

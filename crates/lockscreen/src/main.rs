@@ -1,4 +1,5 @@
 mod auth;
+mod daemonize;
 mod masked_field;
 mod secret;
 mod state;
@@ -13,6 +14,7 @@ use std::{
 	time::{Duration, Instant},
 };
 
+use clap::Parser;
 use iced::{
 	Alignment, Element, Length, Subscription, Task, keyboard,
 	widget::{column, container, text},
@@ -34,7 +36,26 @@ use auth::{Account, AuthResult};
 use secret::Secret;
 use state::LockState;
 
+#[derive(Parser)]
+struct Args {
+	/// Detach from the controlling terminal once the screen is locked.
+	///
+	/// For swayidle's before-sleep/lock hooks, which must return promptly:
+	/// mirrors `swaylock --daemonize`.
+	#[clap(long)]
+	daemonize: bool,
+}
+
 fn main() {
+	let args = Args::parse();
+
+	// Must happen before anything else: forking after Wayland, iced, or
+	// tokio have set up connections or threads would hand the child a
+	// half-initialized copy of them.
+	if args.daemonize {
+		daemonize::daemonize();
+	}
+
 	let account = match Account::current() {
 		Ok(account) => Arc::new(account),
 		Err(message) => fail_closed(message),
@@ -73,6 +94,7 @@ fn main() {
 
 fn fail_closed(message: &'static str) -> ! {
 	eprintln!("frostguard: {message}");
+	daemonize::signal_ready(false);
 	// Normal backend teardown releases the session lock. A fatal path must
 	// disconnect instead, leaving an acquired lock under compositor control.
 	std::process::exit(1)
@@ -294,6 +316,7 @@ impl Lockscreen {
 			Message::Shell(ShellEvent::Locked) => {
 				self.state.locked();
 				self.status = "Enter your password to unlock";
+				daemonize::signal_ready(true);
 			}
 			Message::Shell(ShellEvent::NewShell(info)) if info.shell == ShellType::SessionLock => {
 				if self.surfaces.is_empty() && self.state.can_edit() {
