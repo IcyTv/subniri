@@ -181,6 +181,9 @@ mod tests {
 			energy_rate: 0.0,
 			time_to_full: 0,
 			time_to_empty: 0,
+			energy_full: 0.0,
+			energy_full_design: 0.0,
+			cycle_count: 0,
 		};
 		battery.update(Message::State(state));
 		assert!(battery.visible());

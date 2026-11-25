@@ -22,6 +22,14 @@ pub struct BatteryState {
 	pub time_to_full: u64,
 	/// Seconds until empty; 0 if not discharging or unknown.
 	pub time_to_empty: u64,
+	/// Wh; current full-charge capacity of the physical battery, 0.0 if unknown.
+	pub energy_full: f64,
+	/// Wh; design capacity when new, 0.0 if unknown. `energy_full / energy_full_design`
+	/// is the battery health ratio; UPower's synthetic DisplayDevice never reports this,
+	/// so it is sourced from the underlying physical battery device instead.
+	pub energy_full_design: f64,
+	/// Charge cycles reported by firmware, 0 if unknown.
+	pub cycle_count: u32,
 }
 
 #[zbus::interface(

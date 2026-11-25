@@ -980,6 +980,9 @@ mod reliability_tests {
 			energy_rate: 0.0,
 			time_to_full: 0,
 			time_to_empty: 0,
+			energy_full: 0.0,
+			energy_full_design: 0.0,
+			cycle_count: 0,
 		};
 		let _ = menu.update(Message::Battery(battery::Message::State(state)));
 		assert_eq!(menu.visible_tiles().len(), 2);

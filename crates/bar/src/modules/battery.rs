@@ -188,7 +188,13 @@ impl Battery {
 			|line| text(line).color(colors.secondary).size(14).into(),
 		);
 
-		let mut content = column![top_row, detail_widget].spacing(16.0);
+		let health = battery_health_line(self.state);
+		let health_widget: Element<'_, Message> = health.map_or_else(
+			|| space().height(0).into(),
+			|line| text(line).color(colors.secondary).size(14).into(),
+		);
+
+		let mut content = column![top_row, detail_widget, health_widget].spacing(16.0);
 
 		if self.profile.available {
 			content = content.push(profile_selector(&self.profile, colors));
@@ -294,6 +300,23 @@ fn power_detail_line(state: BatteryState) -> Option<String> {
 		Some(format!("{:.1} W", state.energy_rate))
 	} else {
 		None
+	}
+}
+
+/// UPower's synthetic DisplayDevice never reports `energy_full_design`; treat it as
+/// "no health data available" rather than showing a bogus 0%.
+fn battery_health_line(state: BatteryState) -> Option<String> {
+	if state.energy_full_design <= 0.0 {
+		return None;
+	}
+	let health = (state.energy_full / state.energy_full_design * 100.0).clamp(0.0, 100.0);
+	if state.cycle_count > 0 {
+		Some(format!(
+			"Health {health:.0}% · {} cycles",
+			state.cycle_count
+		))
+	} else {
+		Some(format!("Health {health:.0}%"))
 	}
 }
 

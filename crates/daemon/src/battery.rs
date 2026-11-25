@@ -107,7 +107,7 @@ impl BatteryService {
 		let path: zbus::zvariant::OwnedObjectPath = root.call("GetDisplayDevice", &()).await?;
 		let properties = zbus::fdo::PropertiesProxy::builder(connection)
 			.destination(owner.clone())?
-			.path(path)?
+			.path(path.clone())?
 			.build()
 			.await?;
 		let mut changes = properties
@@ -115,9 +115,38 @@ impl BatteryService {
 			.await?;
 		let mut messages = zbus::MessageStream::from(connection);
 
+		// Health (EnergyFullDesign/ChargeCycles) is never carried by UPower's synthetic
+		// DisplayDevice; a lookup failure here must not take down the primary percentage feed.
+		let health_properties =
+			match find_health_device(connection, &owner, &root, &path).await {
+				Ok(Some(device)) => zbus::fdo::PropertiesProxy::builder(connection)
+					.destination(owner.clone())?
+					.path(device)?
+					.build()
+					.await
+					.ok(),
+				Ok(None) => None,
+				Err(error) => {
+					log::debug!("Battery health device lookup failed: {error}");
+					None
+				}
+			};
+
 		loop {
 			let values = properties.get_all(DEVICE_INTERFACE.try_into()?).await?;
-			self.publish(snapshot(&values)?).await;
+			let health = match &health_properties {
+				Some(health_properties) => {
+					match health_properties.get_all(DEVICE_INTERFACE.try_into()?).await {
+						Ok(values) => Some(values),
+						Err(error) => {
+							log::debug!("Battery health property refresh failed: {error}");
+							None
+						}
+					}
+				}
+				None => None,
+			};
+			self.publish(snapshot(&values, health.as_ref())?).await;
 			*backoff = Duration::from_secs(1);
 
 			loop {
@@ -144,7 +173,9 @@ impl Battery for BatteryService {
 	}
 }
 
-fn snapshot(values: &HashMap<String, OwnedValue>) -> zbus::Result<BatteryState> {
+fn snapshot(
+	values: &HashMap<String, OwnedValue>, health: Option<&HashMap<String, OwnedValue>>,
+) -> zbus::Result<BatteryState> {
 	let missing = |name| zbus::Error::Failure(format!("missing UPower property {name}"));
 	let present = values
 		.get("IsPresent")
@@ -172,6 +203,16 @@ fn snapshot(values: &HashMap<String, OwnedValue>) -> zbus::Result<BatteryState> 
 	let energy_rate = optional_finite_f64(values, "EnergyRate");
 	let time_to_full = optional_u64(values, "TimeToFull");
 	let time_to_empty = optional_u64(values, "TimeToEmpty");
+	let (energy_full, energy_full_design, cycle_count) = health.map_or(
+		(0.0, 0.0, 0),
+		|health| {
+			(
+				optional_finite_f64(health, "EnergyFull"),
+				optional_finite_f64(health, "EnergyFullDesign"),
+				optional_cycle_count(health),
+			)
+		},
+	);
 	Ok(BatteryState {
 		present: true,
 		percentage: percentage.clamp(0.0, 100.0),
@@ -179,7 +220,37 @@ fn snapshot(values: &HashMap<String, OwnedValue>) -> zbus::Result<BatteryState> 
 		energy_rate,
 		time_to_full,
 		time_to_empty,
+		energy_full,
+		energy_full_design,
+		cycle_count,
 	})
+}
+
+/// Finds the physical battery device (`Type == 2`) backing UPower's synthetic DisplayDevice,
+/// which never reports `EnergyFullDesign`/`ChargeCycles` itself.
+async fn find_health_device(
+	connection: &Connection, owner: &zbus::names::OwnedUniqueName, root: &zbus::Proxy<'_>,
+	display_path: &zbus::zvariant::OwnedObjectPath,
+) -> zbus::Result<Option<zbus::zvariant::OwnedObjectPath>> {
+	let devices: Vec<zbus::zvariant::OwnedObjectPath> = root.call("EnumerateDevices", &()).await?;
+	for device in devices {
+		if device == *display_path {
+			continue;
+		}
+		let properties = zbus::fdo::PropertiesProxy::builder(connection)
+			.destination(owner.clone())?
+			.path(device.clone())?
+			.build()
+			.await?;
+		let values = properties.get_all(DEVICE_INTERFACE.try_into()?).await?;
+		let kind = values
+			.get("Type")
+			.and_then(|value| value.downcast_ref::<u32>().ok());
+		if kind == Some(2) {
+			return Ok(Some(device));
+		}
+	}
+	Ok(None)
 }
 
 /// `EnergyRate` is legitimately absent (or momentarily invalid) on some devices/states;
@@ -190,6 +261,15 @@ fn optional_finite_f64(values: &HashMap<String, OwnedValue>, name: &str) -> f64 
 		.and_then(|value| value.downcast_ref::<f64>().ok())
 		.filter(|value| value.is_finite())
 		.unwrap_or(0.0)
+}
+
+/// `ChargeCycles` is `i32` and reports -1 when the firmware doesn't expose it.
+fn optional_cycle_count(values: &HashMap<String, OwnedValue>) -> u32 {
+	values
+		.get("ChargeCycles")
+		.and_then(|value| value.downcast_ref::<i32>().ok())
+		.filter(|value| *value >= 0)
+		.map_or(0, |value| value as u32)
 }
 
 fn optional_u64(values: &HashMap<String, OwnedValue>, name: &str) -> u64 {
@@ -342,6 +422,9 @@ mod tests {
 				energy_rate: 12.5,
 				time_to_full: 0,
 				time_to_empty: 600,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 		)
 		.await;
@@ -366,6 +449,9 @@ mod tests {
 				energy_rate: 8.0,
 				time_to_full: 0,
 				time_to_empty: 500,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 		)
 		.await;
@@ -389,6 +475,9 @@ mod tests {
 				energy_rate: 0.0,
 				time_to_full: 0,
 				time_to_empty: 0,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 		)
 		.await;
@@ -416,16 +505,16 @@ mod tests {
 	fn battery_snapshot_uses_only_present_system_battery_without_power_supply() {
 		for kind in [0, 1, 3, 5, 8] {
 			assert_eq!(
-				snapshot(&values(true, kind, 70.0, 1)).unwrap(),
+				snapshot(&values(true, kind, 70.0, 1), None).unwrap(),
 				BatteryState::default()
 			);
 		}
 		assert_eq!(
-			snapshot(&values(false, 2, 70.0, 1)).unwrap(),
+			snapshot(&values(false, 2, 70.0, 1), None).unwrap(),
 			BatteryState::default()
 		);
 		assert_eq!(
-			snapshot(&values(true, 2, 70.5, 1)).unwrap(),
+			snapshot(&values(true, 2, 70.5, 1), None).unwrap(),
 			BatteryState {
 				present: true,
 				percentage: 70.5,
@@ -433,14 +522,17 @@ mod tests {
 				energy_rate: 0.0,
 				time_to_full: 0,
 				time_to_empty: 0,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			}
 		);
 		assert_eq!(
-			snapshot(&values(true, 2, 120.0, 4)).unwrap().percentage,
+			snapshot(&values(true, 2, 120.0, 4), None).unwrap().percentage,
 			100.0
 		);
-		assert!(snapshot(&values(true, 2, f64::NAN, 1)).is_err());
-		assert!(snapshot(&HashMap::new()).is_err());
+		assert!(snapshot(&values(true, 2, f64::NAN, 1), None).is_err());
+		assert!(snapshot(&HashMap::new(), None).is_err());
 	}
 
 	#[test]
@@ -449,14 +541,51 @@ mod tests {
 		present.insert("EnergyRate".into(), 15.25.into());
 		present.insert("TimeToFull".into(), 1200_i64.into());
 		present.insert("TimeToEmpty".into(), (-1_i64).into());
-		let state = snapshot(&present).unwrap();
+		let state = snapshot(&present, None).unwrap();
 		assert_eq!(state.energy_rate, 15.25);
 		assert_eq!(state.time_to_full, 1200);
 		assert_eq!(state.time_to_empty, 0, "a negative TimeToEmpty is invalid");
 
 		let mut invalid = values(true, 2, 80.0, 1);
 		invalid.insert("EnergyRate".into(), f64::NAN.into());
-		assert_eq!(snapshot(&invalid).unwrap().energy_rate, 0.0);
+		assert_eq!(snapshot(&invalid, None).unwrap().energy_rate, 0.0);
+	}
+
+	#[test]
+	fn battery_snapshot_reads_health_from_the_physical_device_and_tolerates_unknown_cycles() {
+		let present = values(true, 2, 80.0, 1);
+		let mut health = HashMap::new();
+		health.insert("EnergyFull".into(), 75.76.into());
+		health.insert("EnergyFullDesign".into(), 75.0.into());
+		health.insert("ChargeCycles".into(), 1_i32.into());
+		let state = snapshot(&present, Some(&health)).unwrap();
+		assert_eq!(state.energy_full, 75.76);
+		assert_eq!(state.energy_full_design, 75.0);
+		assert_eq!(state.cycle_count, 1);
+
+		let mut unknown_cycles = health.clone();
+		unknown_cycles.insert("ChargeCycles".into(), (-1_i32).into());
+		assert_eq!(
+			snapshot(&present, Some(&unknown_cycles)).unwrap().cycle_count,
+			0,
+			"a negative ChargeCycles means the firmware doesn't report it"
+		);
+
+		assert_eq!(
+			snapshot(&present, None).unwrap(),
+			BatteryState {
+				present: true,
+				percentage: 80.0,
+				state: 1,
+				energy_rate: 0.0,
+				time_to_full: 0,
+				time_to_empty: 0,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
+			},
+			"a missing health device must degrade to unknown health, not fail the snapshot"
+		);
 	}
 
 	#[tokio::test]
@@ -490,6 +619,9 @@ mod tests {
 				energy_rate: 10.0,
 				time_to_full: 300,
 				time_to_empty: 0,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 			BatteryState {
 				present: true,
@@ -498,6 +630,9 @@ mod tests {
 				energy_rate: 9.0,
 				time_to_full: 0,
 				time_to_empty: 3600,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 			BatteryState::default(),
 			BatteryState {
@@ -507,6 +642,9 @@ mod tests {
 				energy_rate: 0.0,
 				time_to_full: 0,
 				time_to_empty: 0,
+				energy_full: 0.0,
+				energy_full_design: 0.0,
+				cycle_count: 0,
 			},
 		] {
 			service.publish(state).await;
