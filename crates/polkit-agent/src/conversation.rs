@@ -7,6 +7,14 @@ use crate::{
 	model::{Command, Event, Identity, Request, Secret},
 };
 
+// A PAM_TEXT_INFO sent by pam_echo.so immediately after Howdy's own
+// `sufficient` line, right before the stack reports Success. Signals "this
+// particular success had no deliberate user action behind it" -- unlike a
+// fingerprint touch, a face match needs nothing from the user at all, so it
+// gets an explicit confirmation step instead of silently authorizing.
+// Must match pam-security.nix's howdyConfirmMarker exactly.
+const HOWDY_CONFIRM_MARKER: &str = "subniri:howdy";
+
 enum Outcome {
 	Success,
 	Failed,
@@ -79,7 +87,7 @@ pub async fn run(
 							}
 						}
 						Ok(Command::Cancel) | Err(_) => return false,
-						Ok(Command::Respond { .. }) => {}
+						Ok(Command::Respond { .. } | Command::Confirm) => {}
 					}
 				}
 			}
@@ -120,6 +128,7 @@ async fn attempt(
 	};
 
 	let mut pending_prompt = None;
+	let mut needs_confirmation = false;
 
 	loop {
 		tokio::select! {
@@ -131,8 +140,15 @@ async fn attempt(
 						id: request.id, generation: *generation, text, secret,
 					}).await;
 				}
+				// Internal signal only: never shown as status text.
+				Ok(Record::Info { text, error: false }) if text == HOWDY_CONFIRM_MARKER => {
+					needs_confirmation = true;
+				}
 				Ok(Record::Info { text, error }) => {
 					let _ = events.send(Event::Info { id: request.id, text, error }).await;
+				}
+				Ok(Record::Success) if needs_confirmation => {
+					return confirm(request, commands, events).await;
 				}
 				Ok(Record::Success) => return Outcome::Success,
 				Ok(Record::Failure) => return Outcome::Failed,
@@ -178,6 +194,24 @@ async fn attempt(
 	}
 }
 
+// PAM already said yes with no deliberate action behind it; hold the result
+// here until the user explicitly presses through, or cancels outright.
+async fn confirm(
+	request: &Request, commands: &async_channel::Receiver<Command>, events: &async_channel::Sender<Event>,
+) -> Outcome {
+	let _ = events.send(Event::ConfirmRequired { id: request.id }).await;
+
+	loop {
+		let command = commands.recv().await.ok();
+		if matches!(command, Some(Command::Confirm)) {
+			return Outcome::Success;
+		}
+		if let Some(outcome) = interrupt(command, request) {
+			return outcome;
+		}
+	}
+}
+
 fn interrupt(command: Option<Command>, request: &Request) -> Option<Outcome> {
 	match command {
 		None | Some(Command::Cancel) => Some(Outcome::Cancelled),
@@ -187,6 +221,6 @@ fn interrupt(command: Option<Command>, request: &Request) -> Option<Outcome> {
 			.find(|identity| identity.uid == uid)
 			.cloned()
 			.map(Outcome::Identity),
-		Some(Command::Respond { .. } | Command::Retry) => None,
+		Some(Command::Respond { .. } | Command::Retry | Command::Confirm) => None,
 	}
 }

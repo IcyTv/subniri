@@ -1,5 +1,6 @@
 //! Synthetic UI preview: never registers with polkit or opens its helper socket.
-//! Pass --smoke to close automatically after a few seconds.
+//! Pass --smoke to close automatically after a few seconds, or --howdy to
+//! preview the passive-auth confirmation step instead of a password prompt.
 
 use std::{
 	collections::HashMap,
@@ -25,6 +26,7 @@ fn main() -> iced::Result {
 	let multiple = std::env::args().any(|argument| argument == "--multiple-identities");
 	let long = std::env::args().any(|argument| argument == "--long-operation");
 	let structured = std::env::args().any(|argument| argument == "--structured-details");
+	let howdy = std::env::args().any(|argument| argument == "--howdy");
 	let uid = nix::unistd::getuid().as_raw();
 	let mut identities = vec![model::Identity {
 		uid,
@@ -77,14 +79,20 @@ fn main() -> iced::Result {
 	events
 		.try_send(model::Event::Started(request, commands))
 		.unwrap();
-	events
-		.try_send(model::Event::Prompt {
-			id: 1,
-			generation: 1,
-			text: "Password: ".into(),
-			secret: true,
-		})
-		.unwrap();
+	if howdy {
+		events
+			.try_send(model::Event::ConfirmRequired { id: 1 })
+			.unwrap();
+	} else {
+		events
+			.try_send(model::Event::Prompt {
+				id: 1,
+				generation: 1,
+				text: "Password: ".into(),
+				secret: true,
+			})
+			.unwrap();
+	}
 
 	std::thread::spawn(move || {
 		let mut generation = 1;
@@ -137,6 +145,12 @@ fn main() -> iced::Result {
 							text: "Password: ".into(),
 							secret: true,
 						});
+					}
+					model::Command::Confirm => {
+						if let Some(trace) = &mut trace {
+							let _ = writeln!(trace, "confirmed");
+						}
+						break;
 					}
 				}
 			}

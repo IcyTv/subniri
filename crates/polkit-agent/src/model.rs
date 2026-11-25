@@ -63,6 +63,9 @@ pub enum Command {
 	Respond { generation: u64, response: Secret },
 	SelectIdentity(u32),
 	Retry,
+	// Explicit, deliberate assent to an already-successful passive auth
+	// (Howdy) before it's reported back to polkit. See Event::ConfirmRequired.
+	Confirm,
 	Cancel,
 }
 
@@ -79,6 +82,12 @@ pub enum Event {
 		id: RequestId,
 		text: String,
 		error: bool,
+	},
+	// PAM already reported success through a passive method (Howdy) with no
+	// deliberate user action behind it, unlike a fingerprint touch. Held
+	// here, not yet reported to polkit, until Command::Confirm arrives.
+	ConfirmRequired {
+		id: RequestId,
 	},
 	Retry {
 		id: RequestId,

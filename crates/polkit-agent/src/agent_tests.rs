@@ -131,11 +131,7 @@ impl Fixture {
 		(request.id, commands)
 	}
 
-	async fn prompt(&self, id: u64, cookie: &str) -> (BufReader<UnixStream>, u64) {
-		assert!(
-			matches!(self.events.recv().await.unwrap(), Event::Reset { id: actual, uid }
-			if actual == id && uid == nix::unistd::getuid().as_raw())
-		);
+	async fn connect_helper(&self, cookie: &str) -> BufReader<UnixStream> {
 		let (stream, _) = self.listener.accept().await.unwrap();
 		let mut stream = BufReader::new(stream);
 
@@ -144,6 +140,16 @@ impl Fixture {
 			.unwrap();
 		assert_eq!(line(&mut stream).await, format!("{}\n", user.name));
 		assert_eq!(line(&mut stream).await, format!("{cookie}\n"));
+
+		stream
+	}
+
+	async fn prompt(&self, id: u64, cookie: &str) -> (BufReader<UnixStream>, u64) {
+		assert!(
+			matches!(self.events.recv().await.unwrap(), Event::Reset { id: actual, uid }
+			if actual == id && uid == nix::unistd::getuid().as_raw())
+		);
+		let mut stream = self.connect_helper(cookie).await;
 
 		stream
 			.get_mut()
@@ -323,6 +329,44 @@ async fn admission_sender_validation_and_cookie_cancellation() {
 	})
 	.await
 	.expect("isolated D-Bus cancellation test timed out");
+}
+
+#[tokio::test]
+async fn passive_success_is_held_until_explicitly_confirmed() {
+	timeout(LIMIT, async {
+		let mut fixture = Fixture::new().await;
+		let mut call = fixture.begin("howdy-cookie");
+		let (id, commands) = fixture.started().await;
+		assert!(
+			matches!(fixture.events.recv().await.unwrap(), Event::Reset { id: actual, uid }
+			if actual == id && uid == nix::unistd::getuid().as_raw())
+		);
+		let mut helper = fixture.connect_helper("howdy-cookie").await;
+
+		// pam_echo's marker, then success with no password ever requested --
+		// the same shape a passive (Howdy) auth takes in production.
+		helper
+			.get_mut()
+			.write_all(b"PAM_TEXT_INFO subniri:howdy\n")
+			.await
+			.unwrap();
+		helper.get_mut().write_all(b"SUCCESS\n").await.unwrap();
+
+		assert!(
+			matches!(fixture.events.recv().await.unwrap(), Event::ConfirmRequired { id: actual } if actual == id)
+		);
+		// The helper's own session is already done regardless of what the UI
+		// does next; only polkit's own authorization grant is still pending.
+		closed(&mut helper).await;
+		pending(&mut call).await;
+
+		commands.send(Command::Confirm).await.unwrap();
+		call.await.unwrap().unwrap();
+		fixture.finished(id).await;
+		fixture.stop().await;
+	})
+	.await
+	.expect("isolated D-Bus passive-confirmation test timed out");
 }
 
 #[tokio::test]

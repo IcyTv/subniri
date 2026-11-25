@@ -21,6 +21,7 @@ pub enum Message {
 	Submit(u64),
 	Identity(Identity),
 	Retry,
+	Confirm,
 	Cancel,
 	ToggleDetails,
 }
@@ -34,6 +35,9 @@ pub struct Dialog {
 	status: String,
 	error: bool,
 	retry: bool,
+	// A passive method (Howdy) already succeeded with no deliberate action
+	// behind it; require an explicit press before it's reported to polkit.
+	confirming: bool,
 	details_open: bool,
 	status_loading: bool,
 }
@@ -56,6 +60,7 @@ impl Dialog {
 			status: "Starting authentication…".into(),
 			error: false,
 			retry: false,
+			confirming: false,
 			details_open: false,
 			status_loading: true,
 		})
@@ -106,11 +111,15 @@ impl Dialog {
 				self.clear_conversation();
 				Some(Command::Retry)
 			}
+			Message::Confirm if self.confirming => {
+				self.confirming = false;
+				Some(Command::Confirm)
+			}
 			Message::Cancel => {
 				self.clear_conversation();
 				Some(Command::Cancel)
 			}
-			Message::Retry => None,
+			Message::Retry | Message::Confirm => None,
 			Message::ToggleDetails => {
 				self.details_open = !self.details_open;
 				None
@@ -138,6 +147,15 @@ impl Dialog {
 			Event::Info { id, text, error } if id == self.request.id => {
 				self.status = text;
 				self.error = error;
+				self.status_loading = false;
+				false
+			}
+			Event::ConfirmRequired { id } if id == self.request.id => {
+				self.prompt = None;
+				self.response = Secret::new(String::new());
+				self.status = "Face recognized. Confirm to continue.".into();
+				self.error = false;
+				self.confirming = true;
 				self.status_loading = false;
 				false
 			}
@@ -221,6 +239,15 @@ impl Dialog {
 					.background(colors.decorative.green90)
 					.focus_color(colors.decorative.green90)
 					.on_press(Message::Submit(generation)),
+			);
+		} else if self.confirming {
+			buttons = buttons.push(
+				neo_button(text("Authorize").size(15))
+					.with_colors(colors)
+					.padding([6, 10])
+					.background(colors.decorative.green90)
+					.focus_color(colors.decorative.green90)
+					.on_press(Message::Confirm),
 			);
 		} else if self.retry {
 			buttons = buttons.push(
@@ -397,6 +424,7 @@ impl Dialog {
 		self.response = Secret::new(String::new());
 		self.prompt = None;
 		self.retry = false;
+		self.confirming = false;
 		self.status = "Starting authentication…".into();
 		self.error = false;
 		self.status_loading = true;
@@ -433,6 +461,39 @@ mod tests {
 		};
 
 		Dialog::new(request, commands).unwrap()
+	}
+
+	#[test]
+	fn confirm_is_a_no_op_until_requested_then_fires_exactly_once() {
+		let mut dialog = dialog();
+
+		// Not requested yet: a stray press must be a no-op.
+		assert!(dialog.update(Message::Confirm).is_none());
+
+		assert!(!dialog.apply(Event::ConfirmRequired { id: 1 }));
+		assert!(dialog.confirming);
+		assert!(dialog.prompt.is_none());
+
+		assert!(matches!(
+			dialog.update(Message::Confirm),
+			Some(Command::Confirm)
+		));
+		assert!(!dialog.confirming);
+		// Only the first press actually confirms.
+		assert!(dialog.update(Message::Confirm).is_none());
+	}
+
+	#[test]
+	fn stale_confirm_required_is_ignored_and_a_live_one_discards_the_response() {
+		let mut dialog = dialog();
+		dialog.response = Secret::new("leftover".into());
+
+		assert!(!dialog.apply(Event::ConfirmRequired { id: 9 }));
+		assert!(!dialog.confirming);
+
+		dialog.apply(Event::ConfirmRequired { id: 1 });
+		assert!(dialog.confirming);
+		assert!(dialog.response.as_str().is_empty());
 	}
 
 	#[test]
