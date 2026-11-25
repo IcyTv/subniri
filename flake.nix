@@ -39,7 +39,25 @@
     overlay = final: _prev: let
       inherit (final.stdenv.hostPlatform) system;
     in {
-      inherit (self.packages.${system}) subniri-shell;
+      # Static keys, not `self.packages.${system}` wholesale: that would
+      # force `system` just to produce this set's own shape, which recurses
+      # back into the very fixed point still being built (confirmed via
+      # infinite recursion in stdenv bootstrap). Each inherited name here is
+      # its own lazy thunk, so `system` is only resolved on demand, once
+      # `final` has long since finished building and reading it is safe.
+      inherit
+        (self.packages.${system})
+        subniri-cli
+        polarbar
+        permafrostd
+        avalaunch
+        iceout
+        frostguard
+        snowconf
+        fileberg
+        icepickd
+        thawth
+        ;
     };
 
     systems = flake-utils.lib.eachDefaultSystem (
