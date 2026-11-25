@@ -1,6 +1,7 @@
 use std::{
 	ffi::{CStr, CString, c_char, c_int, c_void},
 	fs, io,
+	os::unix::fs::PermissionsExt,
 	path::Path,
 	ptr,
 };
@@ -198,6 +199,26 @@ impl Account {
 		);
 
 		Ok(Self { name, service })
+	}
+
+	/// Refreshes frostguard's own fingerprint/Howdy grace stamp, so the next
+	/// lock's probe stays eligible without needing a fresh password every
+	/// time. Call this on every successful unlock, password or biometric --
+	/// this gate is separate from sudo/polkit-1's (see `lockscreenGateDir` in
+	/// pam-security.nix) specifically because it must *not* be closed by
+	/// merely locking the screen, unlike theirs.
+	///
+	/// Best-effort: a failure here only costs the next lock its fast path,
+	/// never correctness, so it's never worth treating as fatal.
+	pub(crate) fn refresh_unlock_gate(&self) {
+		const GATE_DIR: &str = "/run/lockscreen-gate";
+		let Ok(name) = self.name.to_str() else {
+			return;
+		};
+		let path = Path::new(GATE_DIR).join(name);
+		if fs::File::create(&path).is_ok() {
+			let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o666));
+		}
 	}
 
 	/// `password` is `None` for a passive fingerprint/Howdy probe: no

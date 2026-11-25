@@ -322,13 +322,19 @@ impl Lockscreen {
 				origin,
 				result,
 			} => {
-				self.password.clear();
 				self.prompt = None;
+				// A probe never touched the typed password; clearing it here
+				// wiped out whatever the user was still mid-typing every time
+				// a background probe completed (every few seconds).
+				if origin == Origin::Submit {
+					self.password.clear();
+				}
 				if self
 					.state
 					.complete(attempt, result.accepted() && !self.surfaces.is_empty(), now)
 				{
 					self.authorized.store(true, Ordering::Release);
+					self.account.refresh_unlock_gate();
 					// This is the only normal-exit path, hence the only application
 					// request that can release an acquired session lock.
 					return iced::exit();
