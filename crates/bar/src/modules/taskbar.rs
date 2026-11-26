@@ -6,7 +6,7 @@ use futures::{
 };
 use iced::{
 	Element, Length, Subscription,
-	widget::{column, container, image, row, space, svg},
+	widget::{column, container, image, row, space, svg, text},
 };
 use neo_widgets::{
 	icons::{ResolvedIcon, background::resolve_from_window},
@@ -224,11 +224,10 @@ fn workspace_btn<'a>(
 		let windows = windows
 			.iter()
 			.filter(|w| w.workspace_id == Some(workspace.id))
-			.take(4)
 			.collect::<Vec<_>>();
 
 		let inset = NeoContentSurfaceStyle::with_colors(colors).inset();
-		workspace_preview(&windows, MODULE_HEIGHT - inset.height)
+		workspace_preview(&windows, MODULE_HEIGHT - inset.height, colors)
 	};
 
 	neo_button(content)
@@ -245,53 +244,72 @@ fn workspace_btn<'a>(
 		.into()
 }
 
-fn workspace_preview<'a>(windows: &[&'a Window], preview_size: f32) -> Element<'a, Message> {
+fn workspace_preview<'a>(
+	windows: &[&'a Window], preview_size: f32, colors: Colors,
+) -> Element<'a, Message> {
 	let icon_size = workspace_preview_icon_size(windows.len(), preview_size);
 
-	let preview: Element<_> = match windows {
-		[] => space()
-			.width(Length::Fixed(preview_size))
-			.height(Length::Fixed(preview_size))
-			.into(),
-		[window] => container(workspace_preview_icon(window, icon_size))
-			.width(Length::Fixed(preview_size))
-			.height(Length::Fixed(preview_size))
-			.center_x(Length::Fill)
-			.center_y(Length::Fill)
-			.into(),
-		[window_a, window_b] => row![
-			workspace_preview_icon(window_a, icon_size),
-			workspace_preview_icon(window_b, icon_size)
-		]
-		.spacing(WORKSPACE_PREVIEW_GAP)
-		.into(),
-		[window_a, window_b, window_c] => column![
+	let preview: Element<_> = if windows.len() >= 5 {
+		column![
 			row![
-				workspace_preview_icon(window_a, icon_size),
-				workspace_preview_icon(window_b, icon_size)
+				workspace_preview_icon(windows[0], icon_size),
+				workspace_preview_icon(windows[1], icon_size)
 			]
 			.spacing(WORKSPACE_PREVIEW_GAP),
-			container(workspace_preview_icon(window_c, icon_size))
+			row![
+				workspace_preview_icon(windows[2], icon_size),
+				workspace_preview_overflow(windows.len() - 3, icon_size, colors)
+			]
+			.spacing(WORKSPACE_PREVIEW_GAP),
+		]
+		.spacing(WORKSPACE_PREVIEW_GAP)
+		.into()
+	} else {
+		match windows {
+			[] => space()
 				.width(Length::Fixed(preview_size))
-				.center_x(Length::Fill),
-		]
-		.spacing(WORKSPACE_PREVIEW_GAP)
-		.into(),
-		[window_a, window_b, window_c, window_d] => column![
-			row![
+				.height(Length::Fixed(preview_size))
+				.into(),
+			[window] => container(workspace_preview_icon(window, icon_size))
+				.width(Length::Fixed(preview_size))
+				.height(Length::Fixed(preview_size))
+				.center_x(Length::Fill)
+				.center_y(Length::Fill)
+				.into(),
+			[window_a, window_b] => row![
 				workspace_preview_icon(window_a, icon_size),
 				workspace_preview_icon(window_b, icon_size)
 			]
-			.spacing(WORKSPACE_PREVIEW_GAP),
-			row![
-				workspace_preview_icon(window_c, icon_size),
-				workspace_preview_icon(window_d, icon_size)
+			.spacing(WORKSPACE_PREVIEW_GAP)
+			.into(),
+			[window_a, window_b, window_c] => column![
+				row![
+					workspace_preview_icon(window_a, icon_size),
+					workspace_preview_icon(window_b, icon_size)
+				]
+				.spacing(WORKSPACE_PREVIEW_GAP),
+				container(workspace_preview_icon(window_c, icon_size))
+					.width(Length::Fixed(preview_size))
+					.center_x(Length::Fill),
 			]
-			.spacing(WORKSPACE_PREVIEW_GAP),
-		]
-		.spacing(WORKSPACE_PREVIEW_GAP)
-		.into(),
-		_ => unreachable!(),
+			.spacing(WORKSPACE_PREVIEW_GAP)
+			.into(),
+			[window_a, window_b, window_c, window_d] => column![
+				row![
+					workspace_preview_icon(window_a, icon_size),
+					workspace_preview_icon(window_b, icon_size)
+				]
+				.spacing(WORKSPACE_PREVIEW_GAP),
+				row![
+					workspace_preview_icon(window_c, icon_size),
+					workspace_preview_icon(window_d, icon_size)
+				]
+				.spacing(WORKSPACE_PREVIEW_GAP),
+			]
+			.spacing(WORKSPACE_PREVIEW_GAP)
+			.into(),
+			_ => unreachable!(),
+		}
 	};
 
 	container(preview)
@@ -303,11 +321,25 @@ fn workspace_preview<'a>(windows: &[&'a Window], preview_size: f32) -> Element<'
 }
 
 fn workspace_preview_icon_size(count: usize, preview_size: f32) -> f32 {
-	if count <= 1 {
+	if count == 0 {
 		preview_size
 	} else {
 		(preview_size - WORKSPACE_PREVIEW_GAP) / 2.0
 	}
+}
+
+fn workspace_preview_overflow<'a>(count: usize, size: f32, colors: Colors) -> Element<'a, Message> {
+	container(
+		text(format!("{count}"))
+			.size(size * 0.8)
+			.color(colors.secondary)
+			.width(Length::Fill)
+			.height(Length::Fill)
+			.center(),
+	)
+	.width(Length::Fixed(size))
+	.height(Length::Fixed(size))
+	.into()
 }
 
 fn workspace_preview_icon(window: &Window, size: f32) -> Element<'_, Message> {
@@ -442,8 +474,7 @@ mod tests {
 			let available =
 				MODULE_HEIGHT - NeoContentSurfaceStyle::with_colors(colors).inset().height;
 
-			assert_eq!(workspace_preview_icon_size(1, available), available);
-			for count in 2..=4 {
+			for count in 1..=4 {
 				let size = workspace_preview_icon_size(count, available);
 
 				assert_eq!(size * 2.0 + WORKSPACE_PREVIEW_GAP, available);
@@ -453,6 +484,71 @@ mod tests {
 				);
 			}
 		}
+	}
+
+	fn mock_window(id: u64, workspace_id: u64) -> Result<Window, serde_json::Error> {
+		serde_json::from_value(serde_json::json!({
+			"id": id,
+			"workspace_id": workspace_id,
+			"is_focused": false,
+			"is_floating": false,
+			"is_urgent": false,
+			"layout": {
+				"tile_size": [800.0, 600.0],
+				"window_size": [800, 600],
+				"window_offset_in_tile": [0.0, 0.0]
+			}
+		}))
+	}
+
+	#[tokio::test]
+	async fn workspace_preview_shows_overflow_badge_for_five_or_more_windows()
+	-> Result<(), Box<dyn std::error::Error>> {
+		use crate::modules::layout_tests;
+
+		let mut renderer = layout_tests::renderer().await?;
+		for (theme, colors) in [
+			("light", neo_widgets::style::LIGHT),
+			("dark", neo_widgets::style::DARK),
+		] {
+			for count in [1usize, 2, 3, 4, 5, 6, 9, 14] {
+				let windows = (0..count)
+					.map(|i| mock_window(i as u64, 1))
+					.collect::<Result<Vec<_>, _>>()?;
+				let workspace = Workspace {
+					id: 1,
+					idx: 1,
+					name: None,
+					output: None,
+					is_urgent: false,
+					is_active: false,
+					is_focused: false,
+					active_window_id: None,
+				};
+
+				let button = workspace_btn(&workspace, &windows, colors);
+				let snapshot = layout_tests::capture(
+					button,
+					&mut renderer,
+					colors,
+					&format!("taskbar-overflow-{count}-{theme}"),
+				)?;
+
+				if count >= 5 {
+					let badge = format!("{}", count - 3);
+					assert!(
+						snapshot.texts.contains_key(&badge),
+						"expected overflow badge {badge:?} for {count} windows"
+					);
+				} else {
+					assert!(
+						snapshot.texts.is_empty(),
+						"unexpected overflow badge for only {count} windows"
+					);
+				}
+			}
+		}
+		Ok(())
 	}
 
 	#[test]
