@@ -31,6 +31,7 @@ pub enum Message {
 
 	SetProfile(String),
 	SetChargeLimit(u32),
+	ToggleProfileDropdown,
 
 	Disconnected(String),
 }
@@ -50,6 +51,7 @@ pub struct Battery {
 	state: BatteryState,
 	profile: PowerProfileState,
 	limit: ChargeLimitState,
+	profile_dropdown_open: bool,
 }
 
 impl Battery {
@@ -58,7 +60,9 @@ impl Battery {
 	}
 
 	pub async fn new() -> Result<Self, String> {
-		let connection = Connection::session().await.map_err(|error| error.to_string())?;
+		let connection = Connection::session()
+			.await
+			.map_err(|error| error.to_string())?;
 		let battery = BatteryProxy::new(&connection)
 			.await
 			.map_err(|error| error.to_string())?;
@@ -83,6 +87,7 @@ impl Battery {
 			state,
 			profile,
 			limit,
+			profile_dropdown_open: false,
 		})
 	}
 
@@ -98,6 +103,7 @@ impl Battery {
 			Message::ProfileChanged(profile) => self.profile = profile,
 			Message::ChargeLimitChanged(limit) => self.limit = limit,
 			Message::SetProfile(profile) => {
+				self.profile_dropdown_open = false;
 				let power_profile = self.resources.power_profile.clone();
 				return Task::future(async move {
 					match request(async {
@@ -124,6 +130,9 @@ impl Battery {
 						Err(error) => Message::Disconnected(error),
 					}
 				});
+			}
+			Message::ToggleProfileDropdown => {
+				self.profile_dropdown_open = !self.profile_dropdown_open;
 			}
 			Message::Disconnected(_) => (), // Handled by the module's connection lifecycle.
 		}
@@ -169,9 +178,12 @@ impl Battery {
 	pub fn view_popup(&self, colors: Colors) -> Element<'_, Message> {
 		let (icon, _) = status_icon(self.state);
 		let top_row = row![
-			svg(icon).style(move |_, _| svg::Style {
-				color: Some(colors.text)
-			}).width(24).height(24),
+			svg(icon)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				})
+				.width(24)
+				.height(24),
 			text(format!("{:.0}%", self.state.percentage))
 				.color(colors.text)
 				.size(20)
@@ -197,7 +209,11 @@ impl Battery {
 		let mut content = column![top_row, detail_widget, health_widget].spacing(16.0);
 
 		if self.profile.available {
-			content = content.push(profile_selector(&self.profile, colors));
+			content = content.push(profile_selector(
+				&self.profile,
+				self.profile_dropdown_open,
+				colors,
+			));
 		}
 
 		if self.limit.available {
@@ -237,12 +253,73 @@ fn profile_label(profile: &str) -> &str {
 	}
 }
 
-fn profile_selector(profile: &PowerProfileState, colors: Colors) -> Element<'_, Message> {
-	column![
+fn profile_icon(profile: &str) -> iced::widget::svg::Handle {
+	match profile {
+		"power-saver" => phosphor_icon!("leaf"),
+		"performance" => phosphor_icon!("rocket-launch"),
+		_ => phosphor_icon!("gauge"),
+	}
+}
+
+fn profile_selector(
+	profile: &PowerProfileState, open: bool, colors: Colors,
+) -> Element<'_, Message> {
+	let caret = if open {
+		phosphor_icon!("caret-up")
+	} else {
+		phosphor_icon!("caret-down")
+	};
+
+	let header = neo_button(
+		row![
+			svg(profile_icon(&profile.active))
+				.width(16)
+				.height(16)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.text)
+				}),
+			text(profile_label(&profile.active))
+				.color(colors.text)
+				.width(Length::Fill),
+			svg(caret)
+				.width(14)
+				.height(14)
+				.style(move |_, _| svg::Style {
+					color: Some(colors.secondary)
+				}),
+		]
+		.spacing(8.0)
+		.align_y(Alignment::Center),
+	)
+	.with_colors(colors)
+	.width(Length::Fill)
+	.on_press(Message::ToggleProfileDropdown);
+
+	let mut content = column![
 		text("Power profile").color(colors.secondary).size(14),
-		row(PROFILES.iter().map(|candidate| {
-			let selected = profile.active == *candidate;
-			neo_button(text(profile_label(candidate)).color(colors.text))
+		header
+	]
+	.spacing(8.0);
+
+	if open {
+		content = content.push(
+			column(PROFILES.iter().map(|candidate| {
+				let selected = profile.active == *candidate;
+				neo_button(
+					row![
+						svg(profile_icon(candidate))
+							.width(16)
+							.height(16)
+							.style(move |_, _| {
+								svg::Style {
+									color: Some(colors.text),
+								}
+							}),
+						text(profile_label(candidate)).color(colors.text),
+					]
+					.spacing(8.0)
+					.align_y(Alignment::Center),
+				)
 				.with_colors(colors)
 				.background(if selected {
 					colors.raised
@@ -252,11 +329,12 @@ fn profile_selector(profile: &PowerProfileState, colors: Colors) -> Element<'_, 
 				.width(Length::Fill)
 				.on_press(Message::SetProfile((*candidate).to_string()))
 				.into()
-		}))
-		.spacing(8.0),
-	]
-	.spacing(8.0)
-	.into()
+			}))
+			.spacing(4.0),
+		);
+	}
+
+	content.into()
 }
 
 fn status_icon(state: BatteryState) -> (iced::widget::svg::Handle, bool) {
